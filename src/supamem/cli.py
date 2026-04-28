@@ -162,7 +162,9 @@ def cmd_install(
     dry_run: bool = typer.Option(False, "--dry-run", help="Show planned config patches without applying."),
 ) -> None:
     """Patch a client config to point at supamem."""
-    _stub("install")
+    from supamem.install import install as do_install
+
+    raise typer.Exit(do_install(client=client.value if client else None, dry_run=dry_run))
 
 
 @app.command("uninstall")
@@ -170,7 +172,9 @@ def cmd_uninstall(
     client: Optional[Client] = typer.Option(None, "--client", help="Target client (claude-code, cursor, opencode)."),
 ) -> None:
     """Reverse `supamem install` on a client."""
-    _stub("uninstall")
+    from supamem.install import uninstall as do_uninstall
+
+    raise typer.Exit(do_uninstall(client=client.value if client else None))
 
 
 @app.command("doctor")
