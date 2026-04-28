@@ -103,7 +103,14 @@ def cmd_hook(
     file_path: Optional[str] = typer.Option(None, "--file-path", help="Path being edited (for edit-time hooks)."),
 ) -> None:
     """Per-client session/edit hooks."""
-    _stub("hook")
+    from pathlib import Path
+
+    from supamem.config import load_config
+    from supamem.hooks import dispatch
+
+    cfg, _chain = load_config()
+    fp = Path(file_path) if file_path else None
+    raise typer.Exit(dispatch(client=client, file_path=fp, config=cfg))
 
 
 class StatsWindow(str, Enum):
