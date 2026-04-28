@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "supamem"
+version = "0.1.0"
+description = "Project-agnostic dual-memory tooling for Claude Code, Cursor, and opencode"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.12"
+authors = [{ name = "dzmitrys-dev" }]
+dependencies = [
+  "typer>=0.15,<0.26",
+  "mcp>=1.13",
+  "qdrant-client>=1.13",
+  "fastembed>=0.5",
+  "pydantic>=2.5",
+  "tomli-w>=1.0",
+  "langchain-text-splitters>=0.3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.6", "pytest-asyncio>=0.24"]
+
+[project.scripts]
+supamem = "supamem.cli:main"
+
+[project.entry-points."supamem.retrieval"]
+# populated in plan 04 (tuned_hybrid, dense, bm25)
+
+[project.entry-points."supamem.embedder"]
+# populated in plan 04 (bm25, minilm)
+
+[project.entry-points."supamem.chunker"]
+# populated in plan 04 (markdown_header)
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/supamem"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
