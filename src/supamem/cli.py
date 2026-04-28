@@ -180,9 +180,17 @@ def cmd_doctor() -> None:
 
 
 @app.command("init")
-def cmd_init() -> None:
+def cmd_init(
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompts."),
+    force: bool = typer.Option(False, "--force", help="Overwrite existing config / collection."),
+    qdrant_url: Optional[str] = typer.Option(None, "--qdrant-url", help="Qdrant URL (defaults to QDRANT_URL env or http://localhost:6333)."),
+) -> None:
     """Greenfield bootstrap on a new project."""
-    _stub("init")
+    from pathlib import Path
+
+    from supamem.init import run_init
+
+    raise typer.Exit(run_init(cwd=Path.cwd(), yes=yes, qdrant_url=qdrant_url, force=force))
 
 
 @app.command("migrate")
