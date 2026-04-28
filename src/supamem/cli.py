@@ -81,9 +81,20 @@ def cmd_index(
 def cmd_mcp_server(
     transport: Transport = typer.Option(Transport.stdio, "--transport", help="MCP transport: stdio or http."),
     port: int = typer.Option(8765, "--port", help="HTTP port (only used when --transport http)."),
+    host: str = typer.Option("127.0.0.1", "--host", help="HTTP bind host (only used when --transport http)."),
 ) -> None:
     """Run the dual-memory MCP server."""
-    _stub("mcp-server")
+    from supamem.config import load_config
+    from supamem.mcp_server import run_http, run_stdio
+
+    cfg, _chain = load_config()
+    if transport is Transport.stdio:
+        run_stdio(cfg)
+    elif transport is Transport.http:
+        run_http(cfg, port=port, host=host)
+    else:
+        err_console.print(f"[supamem.err]✗[/supamem.err] unknown transport: {transport}")
+        raise typer.Exit(2)
 
 
 @app.command("hook")
