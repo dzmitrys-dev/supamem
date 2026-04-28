@@ -134,7 +134,9 @@ def test_run_index_chunks_and_upserts_hybrid_target(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Locked D-25 schema: every PointStruct must carry both `dense` and `sparse` vectors."""
-    body = "# Header\nfirst body chunk content here\n## Sub\nsecond body chunk content here"
+    # Each chunk must pass CHUNK_MIN_TOKENS=20 — pad with enough words.
+    para = " ".join(["lorem"] * 30)
+    body = f"# Header\n{para}\n## Sub\n{para}\n"
     src = _make_md(tmp_path, "doc.md", body)
     cache_dir = tmp_path / "cache"
 

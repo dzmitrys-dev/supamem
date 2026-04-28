@@ -68,7 +68,13 @@ def cmd_index(
     snapshot: Optional[str] = typer.Option(None, "--snapshot", help="Path to snapshot artifact (e.g. cursor)."),
 ) -> None:
     """Embed dev memories into Qdrant using the locked tuned-hybrid pipeline."""
-    _stub("index")
+    from supamem.config import load_config
+    from supamem.console import info
+    from supamem.indexer import run_index
+
+    cfg, _chain = load_config()
+    info(f"indexing → {cfg.collection} (target={target}, force={force})")
+    raise typer.Exit(run_index(target=target, force=force, sources=cfg.sources, config=cfg))
 
 
 @app.command("mcp-server")

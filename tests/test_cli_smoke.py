@@ -51,11 +51,12 @@ def test_install_help_lists_client_and_dry_run() -> None:
         assert client in result.stdout, f"expected client {client!r} in install --help"
 
 
-def test_index_stub_exits_2_with_stderr_message() -> None:
-    """Test 5: invoking `supamem index` prints stub message on stderr and exits 2."""
+def test_index_runs_failsoft_with_no_sources() -> None:
+    """Test 5: `supamem index` is now wired to run_index — empty sources → exit 0."""
     result = _run("index")
-    assert result.returncode == 2, f"expected exit 2, got {result.returncode}: {result.stderr!r}"
-    assert "not yet implemented" in result.stderr
+    assert result.returncode == 0, (
+        f"expected fail-soft exit 0, got {result.returncode}: stderr={result.stderr!r}"
+    )
 
 
 def test_version_prints_010() -> None:
