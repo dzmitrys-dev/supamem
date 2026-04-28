@@ -106,10 +106,32 @@ def cmd_hook(
     _stub("hook")
 
 
+class StatsWindow(str, Enum):
+    today = "today"
+    week = "week"
+    all_ = "all"
+
+
+class StatsFormat(str, Enum):
+    table = "table"
+    json = "json"
+
+
 @app.command("stats")
-def cmd_stats() -> None:
+def cmd_stats(
+    show: StatsWindow = typer.Option(StatsWindow.today, "--show", help="Time window."),
+    fmt: StatsFormat = typer.Option(StatsFormat.table, "--format", help="Output format."),
+) -> None:
     """Render Welford schema-v2 usage counters."""
-    _stub("stats")
+    from supamem.stats import render
+
+    out = render(show=show.value, format=fmt.value)
+    if fmt is StatsFormat.table:
+        console.print(f"[supamem.brand]{out.splitlines()[0]}[/supamem.brand]")
+        for line in out.splitlines()[1:]:
+            console.print(line)
+    else:
+        console.print_json(out)
 
 
 @app.command("eval")
