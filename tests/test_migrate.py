@@ -106,8 +106,12 @@ def test_run_migrate_adopt_as_is_no_writes() -> None:
 
 def test_run_migrate_idempotent_target_exists() -> None:
     """Pre-existing target with matching schema → no destructive ops."""
-    client = _fake_client(target_exists=True)
-    # Make get_collection return the same compatible schema for both queries.
+    client = MagicMock()
+    src_col = MagicMock()
+    src_col.name = "src"
+    tgt_col = MagicMock()
+    tgt_col.name = "supamem-tgt"
+    client.get_collections.return_value = MagicMock(collections=[src_col, tgt_col])
     client.get_collection.return_value = _fake_collection_info()
 
     rc = run_migrate(client, "src", "supamem-tgt", path="coexist")

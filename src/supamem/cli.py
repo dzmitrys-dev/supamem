@@ -193,12 +193,40 @@ def cmd_init(
     raise typer.Exit(run_init(cwd=Path.cwd(), yes=yes, qdrant_url=qdrant_url, force=force))
 
 
+class MigratePath(str, Enum):
+    coexist = "coexist"
+    migrate = "migrate"
+    adopt_as_is = "adopt-as-is"
+
+
 @app.command("migrate")
 def cmd_migrate(
+    source: str = typer.Option(..., "--source", help="Existing collection name to migrate from."),
+    target: Optional[str] = typer.Option(None, "--target", help="Target collection (defaults to supamem-<cwd-slug>)."),
+    path: MigratePath = typer.Option(MigratePath.coexist, "--path", help="Migration strategy."),
     yes: bool = typer.Option(False, "--yes", help="Confirm destructive migration paths."),
 ) -> None:
     """Brownfield migration from a pre-existing dev_memory collection."""
-    _stub("migrate")
+    from pathlib import Path
+
+    from supamem.config import load_config
+    from supamem.console import info
+    from supamem.init import _slugify
+    from supamem.migrate import run_migrate
+
+    cfg, _chain = load_config()
+    tgt = target or f"supamem-{_slugify(Path.cwd().name)}"
+    info(f"migrate {source!r} → {tgt!r} (path={path.value}, yes={yes})")
+
+    from qdrant_client import QdrantClient
+
+    client = QdrantClient(
+        url=cfg.qdrant_url,
+        api_key=cfg.qdrant_api_key or None,
+        check_compatibility=False,
+        timeout=60,
+    )
+    raise typer.Exit(run_migrate(client, source, tgt, path=path.value, yes=yes))
 
 
 def main() -> None:
