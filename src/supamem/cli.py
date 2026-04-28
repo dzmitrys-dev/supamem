@@ -73,6 +73,12 @@ def cmd_index(
     from supamem.indexer import run_index
 
     cfg, _chain = load_config()
+    if snapshot == "cursor":
+        from supamem.hooks.cursor import run_snapshot
+
+        info(f"snapshot → cursor ({cfg.collection})")
+        raise typer.Exit(run_snapshot(config=cfg))
+
     info(f"indexing → {cfg.collection} (target={target}, force={force})")
     raise typer.Exit(run_index(target=target, force=force, sources=cfg.sources, config=cfg))
 
