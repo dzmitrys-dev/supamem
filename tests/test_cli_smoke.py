@@ -59,7 +59,12 @@ def test_index_stub_exits_2_with_stderr_message() -> None:
 
 
 def test_version_prints_010() -> None:
-    """Test 6: --version prints 0.1.0."""
+    """Test 6: --version prints styled banner containing 0.1.0 and credit line."""
     result = _run("--version")
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "0.1.0", f"expected '0.1.0', got: {result.stdout!r}"
+    out = result.stdout
+    assert "0.1.0" in out, f"expected version in output, got: {out!r}"
+    assert "supamem" in out
+    # Credit line is part of the banner — verifies the SoftChat / SoftSkillz attribution.
+    assert "SoftChat" in out
+    assert "SoftSkillz" in out

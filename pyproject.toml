@@ -12,6 +12,7 @@ requires-python = ">=3.12"
 authors = [{ name = "dzmitrys-dev" }]
 dependencies = [
   "typer>=0.15,<0.26",
+  "rich>=13.7",
   "mcp>=1.13",
   "qdrant-client>=1.13",
   "fastembed>=0.5",
@@ -19,6 +20,12 @@ dependencies = [
   "tomli-w>=1.0",
   "langchain-text-splitters>=0.3",
 ]
+
+[project.urls]
+Homepage = "https://app.softchat.ru"
+Sponsor = "https://softskillz.ai"
+Source = "https://github.com/dzmitrys-dev/supamem"
+Issues = "https://github.com/dzmitrys-dev/supamem/issues"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "ruff>=0.6", "pytest-asyncio>=0.24"]

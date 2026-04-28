@@ -7,18 +7,24 @@ from typing import Optional
 import typer
 
 from supamem import __version__
+from supamem.console import CREDIT_LINE, console, err_console
 
 app = typer.Typer(
     name="supamem",
     no_args_is_help=True,
     add_completion=False,
+    rich_markup_mode="rich",
     help="Project-agnostic dual-memory tooling for Claude Code, Cursor, and opencode.",
 )
 
 
 def _version_callback(value: bool) -> None:
     if value:
-        typer.echo(__version__)
+        console.print(
+            f"[supamem.brand]supamem[/supamem.brand] "
+            f"[supamem.accent]v{__version__}[/supamem.accent]"
+        )
+        console.print(CREDIT_LINE)
         raise typer.Exit(0)
 
 
@@ -37,7 +43,10 @@ def _root(
 
 
 def _stub(name: str) -> None:
-    typer.echo(f"supamem {name}: not yet implemented", err=True)
+    err_console.print(
+        f"[supamem.warn]⚠[/supamem.warn] [supamem.accent]supamem {name}[/supamem.accent] "
+        f"[supamem.muted]is not yet implemented (lands in a later 80.6 plan)[/supamem.muted]"
+    )
     raise typer.Exit(2)
 
 

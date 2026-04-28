@@ -1,0 +1,51 @@
+# supamem
+
+> Qdrant-backed dual-memory tooling for AI coding agents (Claude Code, Cursor, OpenCode).
+> Provides a CLI to bootstrap, index, run an MCP server, install per-client hooks, and run
+> retrieval evals — all backed by a locked tuned-hybrid (BM25 + MiniLM) Qdrant pipeline.
+> Extracted from the SoftChat (https://app.softchat.ru) production memory stack so any
+> team can run on the same battle-tested foundation.
+
+`supamem` packages a hybrid sparse+dense semantic memory layer (Qdrant), a Model Context
+Protocol server, and per-client session/edit hooks as a single Python distribution. Once
+installed, AI coding assistants gain persistent semantic memory across projects.
+
+## Core docs
+
+- [README](README.md): Hero, quickstart, prerequisites, install matrix, CLI reference, client wiring
+- [MIGRATION](MIGRATION.md): Migrating from an in-tree `dev_memory` setup to supamem
+- [LICENSE](LICENSE): MIT
+
+## CLI commands
+
+- [supamem init](README.md#cli-surface): Greenfield bootstrap — probes Qdrant, creates collection, writes `.supamem/config.toml`
+- [supamem install](README.md#wiring-into-your-client): Patch a client config (claude-code, cursor, opencode) — atomic with backup
+- [supamem index](README.md#cli-surface): Embed dev memories into Qdrant using the locked tuned-hybrid pipeline (D-25)
+- [supamem mcp-server](README.md#cli-surface): Run the MCP server over stdio (default) or HTTP
+- [supamem hook](README.md#cli-surface): Per-client session/edit hooks called by the client itself
+- [supamem doctor](README.md#cli-surface): Probe Qdrant, resolve config chain, report version drift
+- [supamem stats](README.md#cli-surface): Welford schema-v2 usage counters
+- [supamem migrate](README.md#cli-surface): Brownfield migration from an existing `dev_memory` collection
+- [supamem eval](README.md#cli-surface): Run the regression harness against the bundled 33-query golden corpus
+- [supamem uninstall](README.md#cli-surface): Reverse `supamem install` cleanly
+
+## Architecture
+
+- [How it works](README.md#how-it-works): MCP server topology, hybrid retrieval, hook flow
+- [Hybrid retrieval](README.md#features): Tuned BM25 + MiniLM fusion, locked schema D-25
+- [Markdown chunker](README.md#features): Header-aware T-1 chunker, 200-token target / 250 soft max
+
+## Prerequisites
+
+- [Python 3.12+](README.md#prerequisites): macOS / Linux / Windows install commands
+- [Qdrant 1.10+](README.md#prerequisites): Docker, docker compose, or Qdrant Cloud
+- [MCP-compatible client](README.md#prerequisites): Claude Code, Cursor, or OpenCode
+
+## Optional
+
+- [Contributing](README.md#contributing): Local dev setup with uv + pytest + ruff
+- [SoftChat](https://app.softchat.ru): Russian-language AI chat platform — origin project
+- [SoftSkillz](https://softskillz.ai): AI-first product engineering team
+- [Qdrant docs](https://qdrant.tech/documentation/): Vector database upstream
+- [Model Context Protocol](https://modelcontextprotocol.io/): MCP spec
+- [uv](https://docs.astral.sh/uv/): Recommended Python package manager
