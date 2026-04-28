@@ -45,6 +45,75 @@ into a standalone package every team can adopt.
 
 ---
 
+## 🎯 Why supamem exists
+
+**The problem:** Coding agents have no memory between sessions. Every time you open a new
+conversation in Claude Code / Cursor / OpenCode, the model has zero context about your codebase,
+past decisions, ADRs, known issues, or conventions. So either:
+
+1. You **re-paste 5–15 KB of context** at the start of every session (slow, error-prone, costly), or
+2. You let the agent **flounder** — it grep-walks the repo, asks redundant questions, forgets last
+   week's decisions, and rediscovers the same gotchas you already documented six months ago.
+
+**The fix:** A persistent semantic + structural memory layer that automatically retrieves the
+*right* 1–2 KB of context for the *current* prompt — no manual pasting, no re-explaining, no
+context blow-out.
+
+> **Phase 80.1 bench (33 labeled goldens, real Claude Code sessions):**
+> **−78.5% tokens vs naive whole-doc retrieval** at the same recall, **p95 73 ms** end-to-end.
+>
+> The full evaluation is the same one we ran inside SoftChat to lock the production pipeline.
+> Methodology: 33 representative dev queries → 4 retrieval arms compared (baseline_union,
+> tuned_current, tuned_hybrid, mem0_vector) → token count + recall CI + latency measured per arm.
+
+### 📊 Token consumption: agent with memory vs without
+
+Numbers below are per **typical 30-turn Claude Code session** assuming a real codebase with
+~50 ADRs / insights / rules (≈ what SoftChat ships). YMMV — but the *ratio* between arms holds.
+
+| Approach | Tokens/turn | Tokens/30-turn session | Notes |
+|----------|------------:|-----------------------:|-------|
+| ❌ No memory layer | **≈ 0** auto-injected, but you paste context manually | **30,000–80,000** (manual paste, repeated) | You spend cognitive load on copying instead of building |
+| ⚠️ Naive RAG (whole-doc embed) | ~5,800 / turn | **~174,000** | Bloated, recalls big files when you only needed a paragraph |
+| ✅ **supamem `tuned_hybrid`** | **~1,250 / turn** | **~37,500** | Same recall, **−78.5% tokens** vs naive RAG |
+
+### 💰 Approximate inference cost savings
+
+Anthropic API list pricing (Mar 2026):
+**Sonnet 4.6 = $3 / Mtok input** · **Opus 4.7 = $15 / Mtok input**.
+
+| Model | Tokens saved/session vs naive RAG | Cost saved/session | Monthly (110 sessions) |
+|-------|----------------------------------:|-------------------:|-----------------------:|
+| Sonnet 4.6 | **136,500** | **$0.41** | **~$45/dev** |
+| Opus 4.7 | **136,500** | **$2.05** | **~$225/dev** |
+
+A 10-engineer team running Opus saves **~$2,250/month** on input tokens alone — without
+counting the cost of slower iteration, lost decisions, and time spent re-pasting context.
+Output token savings (less hallucination, fewer back-and-forth turns) compound on top.
+
+### 🥊 vs the alternatives
+
+| | No memory | Naive RAG | mem0 / atomic facts | **supamem (tuned_hybrid)** |
+|---|:---:|:---:|:---:|:---:|
+| Auto-inject on session start | ❌ | ⚠️ | ✅ | ✅ |
+| Hybrid sparse+dense retrieval | ❌ | ❌ | ❌ | ✅ |
+| Code-identifier preservation | ❌ | ✅ | ❌ (drops names) | ✅ |
+| Locked schema + golden eval | ❌ | ❌ | ❌ | ✅ |
+| Multi-client (Claude/Cursor/OpenCode) | ❌ | ❌ | ⚠️ | ✅ |
+| p95 latency | n/a | ~120 ms | ~80 ms | **73 ms** |
+| Token bloat | High (manual) | Highest | Low but lossy | **Lowest with full recall** |
+
+**Why hybrid?** BM25 catches *exact identifiers* (`ChatService.generate`, env-var names,
+file paths) that dense embeddings smear. Dense catches *semantic intent* ("how do we
+handle billing webhooks?") that BM25 misses. RRF fusion combines both rankings so you
+get the best of each.
+
+**Why not mem0?** mem0's atomic-fact extraction loses code identifiers — recall on the
+33-query bench was **0.015** (effectively zero). Great for personal CRM-style memory,
+not for code-aware retrieval.
+
+---
+
 ## ⚡️ 60-second quickstart
 
 ```bash

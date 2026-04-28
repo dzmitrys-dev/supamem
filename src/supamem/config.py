@@ -46,6 +46,7 @@ class ResolvedConfig:
     drop_tokens: list[str] = field(default_factory=list)
     goldens_path: str = ""
     cache_dir: str = ""
+    allow_legacy_collection: bool = False
 
 
 @dataclass

@@ -34,13 +34,16 @@ dev = ["pytest>=8.0", "ruff>=0.6", "pytest-asyncio>=0.24"]
 supamem = "supamem.cli:main"
 
 [project.entry-points."supamem.retrieval"]
-# populated in plan 04 (tuned_hybrid, dense, bm25)
+tuned_hybrid = "supamem.retrieval.tuned_hybrid:TunedHybridBackend"
+dense = "supamem.retrieval.dense:DenseBackend"
+bm25 = "supamem.retrieval.bm25:BM25Backend"
 
 [project.entry-points."supamem.embedder"]
-# populated in plan 04 (bm25, minilm)
+minilm = "supamem.embedders.minilm:MiniLMEmbedder"
+bm25 = "supamem.embedders.bm25:BM25Embedder"
 
 [project.entry-points."supamem.chunker"]
-# populated in plan 04 (markdown_header)
+markdown_header = "supamem.indexer.chunker:chunk_markdown"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/supamem"]
