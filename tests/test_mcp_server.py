@@ -55,6 +55,37 @@ def test_search_tool_returns_searchresult_with_chunks(
     assert out.chunks[0].text == "alpha body"
     assert out.total_tokens > 0
     assert out.latency_ms >= 0
+    # Brand polish: summary_md is populated and contains the supamem brand line.
+    assert "supamem" in out.summary_md
+    assert "chunks" in out.summary_md or "matches" in out.summary_md
+
+
+def test_search_tool_summary_md_no_match_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When the backend returns zero hits, summary_md says 'no matches'."""
+    import asyncio
+
+    import supamem.mcp_server as mod
+
+    fake_backend = MagicMock()
+    fake_backend.query.return_value = []
+    monkeypatch.setattr(mod, "_get_backend", lambda cfg: fake_backend)
+
+    out = asyncio.run(mod.dual_memory_search(query="missing", top_k=5, config=_cfg()))
+    assert "no matches" in out.summary_md
+    assert "supamem" in out.summary_md
+
+
+def test_tool_registered_with_title_and_description(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Forward-compat brand polish: the registered tool has a human-readable title."""
+    from supamem.mcp_server import build_app
+
+    app = build_app(_cfg())
+    tool = app._tool_manager._tools["dual_memory_search"]  # type: ignore[attr-defined]
+    # The Tool object exposes title (spec ≥ 2025-03-26) and description.
+    title = getattr(tool, "title", None) or ""
+    description = getattr(tool, "description", None) or ""
+    assert "supamem" in title.lower() or "memory" in title.lower()
+    assert len(description) > 20
 
 
 def test_search_tool_sanitizes_qdrant_url_in_errors(

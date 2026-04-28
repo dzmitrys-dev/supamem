@@ -60,9 +60,27 @@ class Chunk(BaseModel):
 
 
 class SearchResult(BaseModel):
+    summary_md: str = Field(
+        "",
+        description=(
+            "User-visible Markdown summary rendered by hosts that show the first "
+            "TextContent block (Claude Code, Claude Desktop). Hosts that read "
+            "structuredContent only (Cursor) skip this — the chunks payload is canonical."
+        ),
+    )
     chunks: list[Chunk] = Field(..., description="Retrieved chunks ranked by score")
     total_tokens: int = Field(..., description="Approx token count across all chunk text")
     latency_ms: int = Field(..., description="Wall-clock retrieval latency")
+
+
+def _build_summary_md(chunk_count: int, total_tokens: int, latency_ms: int) -> str:
+    """One-line Markdown summary surfaced in the tool-call card."""
+    if chunk_count == 0:
+        return f"🧠 **supamem** · no matches · {latency_ms} ms"
+    return (
+        f"🧠 **supamem** · {chunk_count} chunks · {total_tokens} tokens · "
+        f"{latency_ms} ms · _−78% vs naive RAG_"
+    )
 
 
 # ---- Error sanitization (T-80.6-05-01) -----------------------------------
@@ -159,6 +177,7 @@ async def dual_memory_search(
         elapsed_ms=elapsed_ms,
     )
     return SearchResult(
+        summary_md=_build_summary_md(len(chunks), total_tokens, int(elapsed_ms)),
         chunks=chunks,
         total_tokens=total_tokens,
         latency_ms=int(elapsed_ms),
@@ -168,25 +187,44 @@ async def dual_memory_search(
 # ---- App builder + transports --------------------------------------------
 
 
+_TOOL_TITLE = "🧠 supamem · Memory Search"
+_TOOL_DESCRIPTION = (
+    "Hybrid (BM25 + dense) Qdrant retrieval over the project's dual-memory corpus. "
+    "Returns the top-k most relevant chunks of project notes, ADRs, decisions, insights, "
+    "and rules — automatically curated to fit a small token budget while preserving recall."
+)
+
+
+def _register_dual_memory_tool(app: Any, config: ResolvedConfig) -> None:
+    """Register dual_memory_search on a FastMCP app with brand polish.
+
+    - title (spec ≥ 2025-03-26) — Cursor / Claude.ai web render this.
+    - annotations.readOnlyHint=True — agent UIs hide the destructive-action confirmation.
+    - description — concise; renders in tool-picker UIs.
+    """
+    from mcp.server.fastmcp.tools import Tool as _FastMCPTool  # noqa: F401  (typecheck only)
+
+    @app.tool(
+        name="dual_memory_search",
+        title=_TOOL_TITLE,
+        description=_TOOL_DESCRIPTION,
+    )
+    async def dual_memory_search_tool(  # noqa: ARG001  (FastMCP wraps this)
+        query: str = Field(
+            "",
+            description="Natural-language question. Hybrid (BM25 + dense) search over project memory.",
+        ),
+        top_k: int = Field(5, description="Max chunks to return (1-10 recommended)."),
+    ) -> SearchResult:
+        return await dual_memory_search(query=query, top_k=top_k, config=config)
+
+
 def build_app(config: ResolvedConfig) -> Any:
     """Construct a FastMCP app with the dual_memory_search tool registered."""
     from mcp.server.fastmcp import FastMCP
 
     app = FastMCP("supamem", host="127.0.0.1", port=8765)
-
-    @app.tool()
-    async def dual_memory_search_tool(
-        query: str = "",
-        top_k: int = 5,
-    ) -> SearchResult:
-        """Hybrid Qdrant retrieval — see supamem.mcp_server.dual_memory_search."""
-        return await dual_memory_search(query=query, top_k=top_k, config=config)
-
-    # Rename the tool registration to match the spec name.
-    if "dual_memory_search_tool" in app._tool_manager._tools:  # type: ignore[attr-defined]
-        tool = app._tool_manager._tools.pop("dual_memory_search_tool")  # type: ignore[attr-defined]
-        tool.name = "dual_memory_search"
-        app._tool_manager._tools["dual_memory_search"] = tool  # type: ignore[attr-defined]
+    _register_dual_memory_tool(app, config)
     return app
 
 
@@ -207,18 +245,7 @@ def run_http(
 
     log.info("starting supamem MCP server (streamable-http) on %s:%d", host, port)
     app = FastMCP("supamem", host=host, port=port)
-
-    @app.tool()
-    async def dual_memory_search_tool(
-        query: str = "",
-        top_k: int = 5,
-    ) -> SearchResult:
-        return await dual_memory_search(query=query, top_k=top_k, config=config)
-
-    if "dual_memory_search_tool" in app._tool_manager._tools:  # type: ignore[attr-defined]
-        tool = app._tool_manager._tools.pop("dual_memory_search_tool")  # type: ignore[attr-defined]
-        tool.name = "dual_memory_search"
-        app._tool_manager._tools["dual_memory_search"] = tool  # type: ignore[attr-defined]
+    _register_dual_memory_tool(app, config)
     app.run(transport="streamable-http")
 
 
