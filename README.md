@@ -17,6 +17,18 @@
 
 ---
 
+> ### 👋 Built by [**Dzmitry Sukhau**](https://www.linkedin.com/in/dzmitrys/) — AI-native Solution / Software Architect / CTO
+>
+> Available for **consulting** on AI products, **integrating AI into existing products**, and **business-process automation**.
+>
+> If you're shipping LLM features, evaluating retrieval pipelines, hardening agentic systems, or building an AI-first product from scratch — let's talk.
+>
+> [![LinkedIn — Dzmitry Sukhau](https://img.shields.io/badge/LinkedIn-Dzmitry%20Sukhau-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/dzmitrys/)
+> &nbsp;&nbsp;
+> [![Open to Consulting](https://img.shields.io/badge/Open%20to-Consulting%20%26%20Architecture-22C55E?style=for-the-badge&logo=anthropic&logoColor=white)](https://www.linkedin.com/in/dzmitrys/)
+
+---
+
 ## ✨ What is supamem?
 
 `supamem` is a single-binary CLI that wires up a **production-grade memory layer** for any AI coding
