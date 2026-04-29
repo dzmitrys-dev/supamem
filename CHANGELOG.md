@@ -2,6 +2,51 @@
 
 All notable changes to `supamem` will be documented in this file.
 
+## v0.1.3 — 2026-04-29
+
+Adds the missing **write path** so supamem can serve as the *only* memory
+layer per project (no need to keep upstream `mcp-server-qdrant` alongside
+for the `qdrant-store` workflow).
+
+### Added
+
+- New `dual_memory_write` MCP tool: agents persist insights/research
+  findings mid-session. Writes a deterministic Markdown file with YAML
+  frontmatter to `<project>/.claude/insights/_agent/<slug>.md` and
+  immediately upserts it into the project's tuned-hybrid Qdrant collection
+  with `wait=True` so the very next `dual_memory_search` sees it.
+- Idempotent on `topic`: same topic → same `slugify()` slug → same on-disk
+  path → same `UUIDv5(NAMESPACE_AGENT_WRITE, slug)` Qdrant point id.
+  Re-saving overwrites in place.
+- Backward-compat aliases for upstream `mcp-server-qdrant` users:
+  `qdrant_find` (alias of `dual_memory_search`) and `qdrant_store` (alias
+  of `dual_memory_write`). Default-on; disable with
+  `SUPAMEM_QDRANT_ALIASES=0`. Lets existing prose / agent instructions
+  ("save with qdrant-store", "query qdrant-find") keep working without
+  rewrites.
+- New `supamem.memory_writer` public module: `write_memory()` for non-MCP
+  callers (CLI plugins, scripts).
+
+### Fixed
+
+- Partial-failure semantics: if Qdrant indexing fails after the on-disk
+  write succeeded, return `indexed: false` with the error message instead
+  of leaving the file unwritten — the file is still valuable and the next
+  `supamem index --target tuned` run will pick it up.
+
+### Security
+
+- Path-traversal hardened: target path resolution refuses anything that
+  doesn't `is_relative_to(project_root)`.
+- Size limits enforced: `topic <= 120`, `content <= 64K`, `description
+  <= 300`, `tags <= 10` items × 32 chars each.
+
+### Added (deps)
+
+- `PyYAML>=6.0` promoted from transitive to direct dependency
+  (`memory_writer` writes YAML frontmatter; explicit dep avoids surprise
+  removal if a transitive provider drops it).
+
 ## v0.1.2 — 2026-04-29
 
 Project-tunable regress baselines and config-resolved goldens path. Unblocks

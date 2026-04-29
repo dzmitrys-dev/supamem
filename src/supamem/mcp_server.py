@@ -196,14 +196,19 @@ _TOOL_DESCRIPTION = (
 
 
 def _register_dual_memory_tool(app: Any, config: ResolvedConfig) -> None:
-    """Register dual_memory_search on a FastMCP app with brand polish.
+    """Register dual_memory_search + dual_memory_write (and aliases) on a FastMCP app.
 
     - title (spec ≥ 2025-03-26) — Cursor / Claude.ai web render this.
-    - annotations.readOnlyHint=True — agent UIs hide the destructive-action confirmation.
     - description — concise; renders in tool-picker UIs.
+    - Aliases ``qdrant_find`` / ``qdrant_store`` are registered by default for
+      backward compat with the upstream ``mcp-server-qdrant`` tool names.
+      Disable with ``SUPAMEM_QDRANT_ALIASES=0``.
     """
     from mcp.server.fastmcp.tools import Tool as _FastMCPTool  # noqa: F401  (typecheck only)
 
+    aliases_enabled = os.environ.get("SUPAMEM_QDRANT_ALIASES", "1").strip() not in ("0", "false", "")
+
+    # ── Read: dual_memory_search (canonical) ────────────────────────────────
     @app.tool(
         name="dual_memory_search",
         title=_TOOL_TITLE,
@@ -217,6 +222,115 @@ def _register_dual_memory_tool(app: Any, config: ResolvedConfig) -> None:
         top_k: int = Field(5, description="Max chunks to return (1-10 recommended)."),
     ) -> SearchResult:
         return await dual_memory_search(query=query, top_k=top_k, config=config)
+
+    # ── Write: dual_memory_write (canonical) ────────────────────────────────
+    @app.tool(
+        name="dual_memory_write",
+        title="🧠 supamem · Memory Save",
+        description=(
+            "Persist an insight, research finding, or note into the project's "
+            "dual-memory corpus. Writes a Markdown file under "
+            "<project>/.claude/insights/_agent/<slug>.md AND immediately indexes "
+            "it into Qdrant so the very next dual_memory_search sees it. "
+            "Idempotent on topic — re-saving the same topic overwrites in place."
+        ),
+    )
+    async def dual_memory_write_tool(  # noqa: ARG001
+        topic: str = Field(
+            ...,
+            description="Short topic (used as deterministic slug; max 120 chars).",
+        ),
+        content: str = Field(
+            ...,
+            description="Markdown body of the memory (max 64K chars).",
+        ),
+        description: Optional[str] = Field(
+            None,
+            description="Optional one-line description for the YAML frontmatter (max 300 chars).",
+        ),
+        tags: Optional[list[str]] = Field(
+            None,
+            description="Optional tags (max 10, each max 32 chars).",
+        ),
+    ) -> dict:
+        from supamem.memory_writer import write_memory
+
+        try:
+            res = await asyncio.to_thread(
+                write_memory,
+                topic=topic,
+                content=content,
+                description=description,
+                tags=tags,
+                config=config,
+            )
+        except ValueError as exc:
+            raise RuntimeError(f"dual_memory_write: {exc}") from None
+        return {
+            "summary": res.summary,
+            "path": res.path,
+            "topic": res.topic,
+            "slug": res.slug,
+            "indexed": res.indexed,
+            "points_added": res.points_added,
+            "error": res.error,
+        }
+
+    # ── Backward-compat aliases for upstream `mcp-server-qdrant` users ──────
+    if aliases_enabled:
+
+        @app.tool(
+            name="qdrant_find",
+            title="🧠 supamem · qdrant-find (alias)",
+            description=(
+                "Backward-compat alias for dual_memory_search. Identical behavior; "
+                "kept so prose referencing the upstream `qdrant-find` tool name "
+                "still routes correctly. Disable with SUPAMEM_QDRANT_ALIASES=0."
+            ),
+        )
+        async def qdrant_find_alias(  # noqa: ARG001
+            query: str = Field("", description="Search query (alias of dual_memory_search)."),
+            top_k: int = Field(5, description="Max chunks to return."),
+        ) -> SearchResult:
+            return await dual_memory_search(query=query, top_k=top_k, config=config)
+
+        @app.tool(
+            name="qdrant_store",
+            title="🧠 supamem · qdrant-store (alias)",
+            description=(
+                "Backward-compat alias for dual_memory_write. Identical behavior; "
+                "kept so prose referencing the upstream `qdrant-store` tool name "
+                "still routes correctly. Disable with SUPAMEM_QDRANT_ALIASES=0."
+            ),
+        )
+        async def qdrant_store_alias(  # noqa: ARG001
+            topic: str = Field(..., description="Topic (alias of dual_memory_write)."),
+            content: str = Field(..., description="Markdown body."),
+            description: Optional[str] = Field(None, description="Optional description."),
+            tags: Optional[list[str]] = Field(None, description="Optional tags."),
+        ) -> dict:
+            from supamem.memory_writer import write_memory
+
+            try:
+                res = await asyncio.to_thread(
+                    write_memory,
+                    topic=topic,
+                    content=content,
+                    description=description,
+                    tags=tags,
+                    config=config,
+                )
+            except ValueError as exc:
+                raise RuntimeError(f"qdrant_store: {exc}") from None
+            return {
+                "summary": res.summary,
+                "path": res.path,
+                "topic": res.topic,
+                "slug": res.slug,
+                "indexed": res.indexed,
+                "points_added": res.points_added,
+                "error": res.error,
+            }
 
 
 def build_app(config: ResolvedConfig) -> Any:
