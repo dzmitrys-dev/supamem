@@ -2,6 +2,30 @@
 
 All notable changes to `supamem` will be documented in this file.
 
+## v0.1.5 — 2026-04-29
+
+`supamem install --client claude-code` now wires the **SessionStart banner**
+hook automatically — closes the v0.1.4 gap where the new `supamem hook
+session-start` command shipped but no installer registered it.
+
+### Changed
+
+- `supamem.install.claude_code` adds a `SessionStart` hook entry to
+  `~/.claude/settings.json` that runs `supamem hook session-start` on
+  every Claude Code session open. Idempotent — reinstalling on top of a
+  v0.1.4 user-home that already has the entry is a no-op.
+
+### Notes
+
+- Cursor SessionStart already wires `supamem index --snapshot cursor` via
+  `.cursor/hooks.json` — the v0.1.4 banner is not appended there because
+  Cursor's `sessionStart` hook fires shell commands (not MCP-context
+  injection); the `supamem live` dashboard remains the visibility surface
+  for Cursor users.
+- OpenCode SessionStart hook contract is still upstream-pending, so the
+  OpenCode installer leaves SessionStart wiring as a no-op until the
+  feature lands. Tracked at github.com/anomalyco/opencode#5409.
+
 ## v0.1.4 — 2026-04-29
 
 Visibility round: gives users observable evidence that supamem is alive

@@ -55,7 +55,21 @@ HOOKS_OVERLAY: dict[str, Any] = {
                     }
                 ],
             }
-        ]
+        ],
+        # SessionStart banner (v0.1.5+) — one-line status injected at session
+        # open. Gives users visible evidence supamem is alive without polluting
+        # per-edit flow. Honors SUPAMEM_BANNER_DISABLE=1 if a user opts out.
+        "SessionStart": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "supamem hook session-start",
+                        "timeout": 10,
+                    }
+                ],
+            }
+        ],
     }
 }
 
@@ -70,21 +84,37 @@ def _read_json(path: Path) -> dict[str, Any]:
     return raw if isinstance(raw, dict) else {}
 
 
-def _hook_already_present(settings: dict[str, Any]) -> bool:
-    for entry in settings.get("hooks", {}).get("PreToolUse", []) or []:
+def _hook_present(settings: dict[str, Any], event: str, needle: str) -> bool:
+    """Idempotency check — does any hook under ``event`` already invoke ``needle``?"""
+    for entry in settings.get("hooks", {}).get(event, []) or []:
         for h in entry.get("hooks", []) or []:
-            cmd = str(h.get("command", ""))
-            if "supamem hook claude-code" in cmd:
+            if needle in str(h.get("command", "")):
                 return True
     return False
 
 
+def _hook_already_present(settings: dict[str, Any]) -> bool:
+    """Legacy alias preserved for tests — checks the PreToolUse Edit/Write hook."""
+    return _hook_present(settings, "PreToolUse", "supamem hook claude-code")
+
+
 def _settings_with_hook(existing: dict[str, Any]) -> dict[str, Any]:
-    if _hook_already_present(existing):
-        return existing
+    """Add PreToolUse + SessionStart hooks if absent. Idempotent per event."""
     merged = json.loads(json.dumps(existing))
-    pre = merged.setdefault("hooks", {}).setdefault("PreToolUse", [])
-    pre.extend(HOOKS_OVERLAY["hooks"]["PreToolUse"])
+    hooks_root = merged.setdefault("hooks", {})
+
+    if not _hook_present(merged, "PreToolUse", "supamem hook claude-code"):
+        hooks_root.setdefault("PreToolUse", []).extend(
+            HOOKS_OVERLAY["hooks"]["PreToolUse"]
+        )
+
+    # SessionStart banner (v0.1.5+). Skip if any supamem session-start entry
+    # already exists (covers users who installed v0.1.4 by hand earlier).
+    if not _hook_present(merged, "SessionStart", "supamem hook session-start"):
+        hooks_root.setdefault("SessionStart", []).extend(
+            HOOKS_OVERLAY["hooks"]["SessionStart"]
+        )
+
     return merged
 
 
