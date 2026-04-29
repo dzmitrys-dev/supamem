@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "supamem"
-version = "0.1.3"
+version = "0.1.4"
 description = "Project-agnostic dual-memory tooling for Claude Code, Cursor, and opencode"
 readme = "README.md"
 license = "MIT"
@@ -22,6 +22,7 @@ dependencies = [
   "platformdirs>=4.2",
   "packaging>=23.0",
   "PyYAML>=6.0",
+  "watchfiles>=0.24",
 ]
 
 [project.urls]

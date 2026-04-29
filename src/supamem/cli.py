@@ -130,6 +130,27 @@ class StatsFormat(str, Enum):
     json = "json"
 
 
+@app.command("live")
+def cmd_live(
+    audit_path: Optional[str] = typer.Option(
+        None,
+        "--audit-path",
+        help="Override audit JSONL path (default: $XDG_CACHE_HOME/supamem/audit.jsonl).",
+    ),
+) -> None:
+    """🧠 Live dashboard tailing the audit JSONL — watch every retrieval call.
+
+    Run this in a side terminal alongside Claude Code / Cursor / OpenCode
+    for real-time visibility into the silent PreToolUse-hook injections.
+    Pipe-safe: prints plain JSONL when stdout is not a TTY.
+    """
+    from pathlib import Path
+
+    from supamem.live import run_live
+
+    raise typer.Exit(run_live(Path(audit_path) if audit_path else None))
+
+
 @app.command("stats")
 def cmd_stats(
     show: StatsWindow = typer.Option(StatsWindow.today, "--show", help="Time window."),

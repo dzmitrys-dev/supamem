@@ -1,9 +1,9 @@
 """Per-client hooks for supamem.
 
-The dispatcher routes ``supamem hook <client>`` to the right module:
-- ``claude-code`` → :mod:`supamem.hooks.claude_code`
-- ``opencode``    → :mod:`supamem.hooks.opencode`
-- ``cursor``      → snapshot regen lives in :mod:`supamem.hooks.cursor`
+The dispatcher routes ``supamem hook <name>`` to the right module:
+- ``claude-code`` / ``opencode``    → PreToolUse(Edit|Write) memory injection
+- ``cursor``                        → snapshot regen
+- ``session-start`` (v0.1.4+)       → cross-client SessionStart banner
 """
 from __future__ import annotations
 
@@ -28,4 +28,8 @@ def dispatch(
         from supamem.hooks.opencode import run
 
         return run(file_path or Path("."), config)
+    if client == "session-start":
+        from supamem.hooks.session_start import run
+
+        return run(client=None, config=config)
     raise ValueError(f"supamem: unknown hook client: {client!r}")

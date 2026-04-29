@@ -2,6 +2,43 @@
 
 All notable changes to `supamem` will be documented in this file.
 
+## v0.1.4 — 2026-04-29
+
+Visibility round: gives users observable evidence that supamem is alive
+and working. Three additions; no behavior change to retrieval.
+
+### Added
+
+- **SessionStart banner** (`supamem hook session-start`): one-line plain-text
+  status injected at session start in Claude Code / Cursor / OpenCode via
+  `additionalContext`. Format:
+  `🧠 supamem v0.1.4 · <collection> · <N> chunks · audit <path>`
+  Cross-client portability via dual JSON keys (`hookSpecificOutput.additionalContext`
+  + snake-case `additional_context`). Auto-detects calling client from env
+  vars (`CLAUDECODE`, `OPENCODE`, `CURSOR_AGENT`) when `--client` is omitted.
+  Fail-soft per hook discipline — never raises, never blocks session start.
+- **`supamem live` CLI**: Rich-Live terminal dashboard tailing the audit
+  JSONL in real time. Run in a side terminal alongside Claude Code /
+  Cursor / OpenCode for instant visibility into the silent PreToolUse-hook
+  injections (which save tokens by NOT showing UI). Uses
+  `watchfiles.awatch` for OS-native file change notifications; falls back
+  to polling if `watchfiles` isn't available. Pipe-safe: prints plain JSONL
+  when stdout isn't a TTY. Handles file rotation, terminal resize, and
+  Ctrl-C cleanly.
+
+### Added (deps)
+
+- `watchfiles>=0.24` — Rust-backed async file watcher for `supamem live`.
+  Has manylinux + macOS arm64 wheels, no source build required at install.
+
+### Design notes
+
+- A per-injection footer in PreToolUse `additionalContext` was considered
+  but **dropped**: chat hosts don't render Markdown `<details>`, so the
+  "collapsible" pattern is fiction. A footer would just add ~80 tokens to
+  every Edit (+20%) for no UI benefit. The banner + dashboard provide
+  visibility without the per-Edit token tax.
+
 ## v0.1.3 — 2026-04-29
 
 Adds the missing **write path** so supamem can serve as the *only* memory
