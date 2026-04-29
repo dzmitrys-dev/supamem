@@ -47,10 +47,13 @@ markdown_header = "supamem.indexer.chunker:chunk_markdown"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/supamem"]
-
-[tool.hatch.build.targets.wheel.force-include]
-"src/supamem/share" = "supamem/share"
-"src/supamem/eval/goldens" = "supamem/eval/goldens"
+include = [
+  "src/supamem/**/*.md",
+  "src/supamem/**/*.mdc",
+  "src/supamem/**/*.sh",
+  "src/supamem/**/*.jsonl",
+  "src/supamem/**/*.toml",
+]
 
 [tool.ruff]
 line-length = 100
