@@ -1,6 +1,6 @@
 **Языки:** [English](README.md) · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [日本語](README.ja.md) · [Русский](README.ru.md)
 
-<!-- synced-with: README.md @ 17db78c -->
+<!-- synced-with: README.md @ bc60222 -->
 
 > Перевод выполнен с помощью ИИ. Корректировки от носителей языка приветствуются — открывайте PR.
 
