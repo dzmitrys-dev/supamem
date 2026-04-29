@@ -178,9 +178,15 @@ def cmd_uninstall(
 
 
 @app.command("doctor")
-def cmd_doctor() -> None:
+def cmd_doctor(
+    show_secrets: bool = typer.Option(
+        False, "--show-secrets", help="Show qdrant_api_key in plain text (DANGEROUS)."
+    ),
+) -> None:
     """Probe Qdrant, print resolved config chain, report version drift."""
-    _stub("doctor")
+    from supamem.doctor import run_doctor
+
+    raise typer.Exit(run_doctor(redact_secrets=not show_secrets))
 
 
 @app.command("init")
