@@ -7,3 +7,19 @@ build/
 *.egg-info/
 .venv/
 .coverage
+
+# GSD (https://github.com/gsd-build/get-shit-done) — local planning artifacts
+# When supamem itself is developed via GSD workflows, these dirs hold
+# project-private phases/plans/intel that should NOT ship in the package
+# repo. Keep README/AGENTS/CLAUDE/llms.txt etc. canonical in git.
+.planning/
+.gsd/
+.gsd-state.json
+.continue-here.md
+HANDOFF-*.md
+
+# supamem agent-write outputs (transient per-project agent memory; the
+# package itself never produces these in its own tree, but if a developer
+# runs supamem locally on this repo they shouldn't leak into the package)
+.supamem/
+.claude/insights/_agent/

@@ -23,7 +23,7 @@
 
 ---
 
-> ### 👋 Создано [**Дмитрием Сухау**](https://www.linkedin.com/in/dzmitrys/) — AI-native Solution / Software Architect / CTO
+> ### 👋 Создано [**Дмитрием Суховым**](https://www.linkedin.com/in/dzmitrys/) — AI-native Solution / Software Architect / CTO
 >
 > Доступен для **консалтинга** по AI-продуктам, **интеграции AI в существующие продукты** и **автоматизации бизнес-процессов**.
 >

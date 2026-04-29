@@ -100,6 +100,27 @@ PyPI tags are immutable: never re-use a published version number.
 
 A daemon thread probes GitHub Releases on every CLI invocation, caches result for 24h in `platformdirs.user_cache_dir("supamem")/update_check.json`, and prints a stderr footer on the *next* invocation if a newer version is available. Suppress with `SUPAMEM_NO_UPDATE_CHECK=1`, `CI=1`, or `NO_UPDATE_NOTIFIER=1`. Never blocks; never raises.
 
+## llms.txt is MANDATORY
+
+The repo ships `llms.txt` (https://llmstxt.org/) — a curated, LLM-friendly index of the package's docs, CLI surface, MCP tools, and external links. It is the canonical source LLM consumers use to understand supamem WITHOUT crawling the full README.
+
+**You MUST update `llms.txt` whenever ANY of these change**:
+
+- README.md content reorganized or new sections added
+- A CLI subcommand is added/removed/renamed
+- An MCP tool is added/removed/renamed (including aliases)
+- A new public env var, config key, or major version is shipped
+- An external link reference (PyPI, CHANGELOG, MIGRATION, docs site) moves
+- Translations are added or removed (the "## Translations" section)
+
+Treat `llms.txt` like a public API doc: drift between code and llms.txt is a documentation bug, not "out of date but harmless". Verify after every release with: `grep -n "v0\." llms.txt` to catch stale version mentions.
+
+## GSD planning artifacts (local-only)
+
+When you use GSD (https://github.com/gsd-build/get-shit-done) workflows to plan supamem work, the resulting `.planning/`, `.gsd/`, `.continue-here.md`, `HANDOFF-*.md` files are LOCAL planning state. They are gitignored and MUST NOT be committed to the package repo — supamem ships as a clean Python package, not as a planning workspace. Same applies to `.supamem/` and `.claude/insights/_agent/` if a developer runs the tool against the supamem repo itself.
+
+If you need durable design records, use `docs/adr/`, `CHANGELOG.md`, or commit messages — these are intended for the public.
+
 ## README Translations (v0.1.3+)
 
 The repo ships **5 READMEs**: `README.md` (canonical English) + `README.zh-CN.md`, `README.es.md`, `README.ja.md`, `README.ru.md`. PyPI renders only the English file (`readme = "README.md"` in pyproject); translations are GitHub-only.

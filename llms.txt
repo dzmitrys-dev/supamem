@@ -16,6 +16,19 @@ installed, AI coding assistants gain persistent semantic memory across projects.
 - [MIGRATION](MIGRATION.md): Migrating from an in-tree `dev_memory` setup to supamem
 - [LICENSE](LICENSE): MIT
 
+## Distribution
+
+- [PyPI](https://pypi.org/project/supamem/): Released via Trusted Publisher OIDC; `pip install supamem` or `uv tool install supamem`. Current version: v0.1.3.
+- [CHANGELOG](CHANGELOG.md): Per-version release notes (v0.1.0 initial, v0.1.1 update-check + AGENTS.md, v0.1.2 project-tunable regress baselines, v0.1.3 dual_memory_write + qdrant aliases)
+
+## Translations
+
+- [README (English, canonical)](README.md): The one PyPI renders
+- [README zh-CN](README.zh-CN.md): Simplified Chinese
+- [README es](README.es.md): Spanish
+- [README ja](README.ja.md): Japanese
+- [README ru](README.ru.md): Russian (project author native)
+
 ## CLI commands
 
 - [supamem init](README.md#cli-surface): Greenfield bootstrap — probes Qdrant, creates collection, writes `.supamem/config.toml`
@@ -23,11 +36,25 @@ installed, AI coding assistants gain persistent semantic memory across projects.
 - [supamem index](README.md#cli-surface): Embed dev memories into Qdrant using the locked tuned-hybrid pipeline (D-25)
 - [supamem mcp-server](README.md#cli-surface): Run the MCP server over stdio (default) or HTTP
 - [supamem hook](README.md#cli-surface): Per-client session/edit hooks called by the client itself
-- [supamem doctor](README.md#cli-surface): Probe Qdrant, resolve config chain, report version drift
+- [supamem doctor](README.md#cli-surface): Probe Qdrant, resolve config chain, report version drift, surface update-check status
 - [supamem stats](README.md#cli-surface): Welford schema-v2 usage counters
 - [supamem migrate](README.md#cli-surface): Brownfield migration from an existing `dev_memory` collection
-- [supamem eval](README.md#cli-surface): Run the regression harness against the bundled 33-query golden corpus
+- [supamem eval](README.md#cli-surface): Run the regression harness; project-tunable baselines via `[supamem.eval]` config (v0.1.2+)
 - [supamem uninstall](README.md#cli-surface): Reverse `supamem install` cleanly
+
+## MCP tools (v0.1.3)
+
+- `dual_memory_search`: Hybrid (BM25+dense, RRF) retrieval over the project's Qdrant collection. Top-k, latency, summary
+- `dual_memory_write`: Persist agent-authored memory — writes Markdown to `<project>/.claude/insights/_agent/<slug>.md` with YAML frontmatter, immediately upserts into Qdrant (wait=True), idempotent on topic via UUIDv5
+- `qdrant_find` (alias of dual_memory_search): Backward-compat for users coming from upstream `mcp-server-qdrant`
+- `qdrant_store` (alias of dual_memory_write): Same compat shim. Disable both aliases with `SUPAMEM_QDRANT_ALIASES=0`
+
+## Update-check (v0.1.1+)
+
+- Daemon-thread GitHub Releases probe; 24h TTL cache at `platformdirs.user_cache_dir("supamem")/update_check.json`
+- Stderr footer on next invocation when newer release available; never blocks
+- Suppress with `SUPAMEM_NO_UPDATE_CHECK=1`, `NO_UPDATE_NOTIFIER=1`, or `CI=1`
+- Visible in `supamem doctor` (current vs cached-latest, last-check timestamp, suppression env)
 
 ## Architecture
 

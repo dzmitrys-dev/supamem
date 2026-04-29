@@ -21,6 +21,8 @@ Claude Code instructions for the supamem repository.
 - NEVER suppress errors in indexing/retrieval paths — surface via `err_console`
 - Update-check is the ONLY code path where blanket `except Exception: pass` is acceptable
 - NEVER edit `README.md` without also updating the 4 translations (`README.zh-CN.md`, `README.es.md`, `README.ja.md`, `README.ru.md`) AND bumping the `synced-with` SHA marker on line 2 of each. See AGENTS.md → "README Translations" for the one-liner.
+- ALWAYS update `llms.txt` when CLI subcommands, MCP tools, env vars, version, or major doc structure changes. Drift between code and `llms.txt` is a documentation bug — see AGENTS.md → "llms.txt is MANDATORY".
+- NEVER commit GSD planning artifacts (`.planning/`, `.gsd/`, `.continue-here.md`, `HANDOFF-*.md`) to the supamem repo — they are gitignored and meant to stay local. supamem ships as a clean Python package, not a planning workspace. Use `docs/adr/`, `CHANGELOG.md`, or commit messages for durable public design records.
 
 ## Definition Of Done
 
