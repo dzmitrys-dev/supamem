@@ -2,6 +2,29 @@
 
 All notable changes to `supamem` will be documented in this file.
 
+## v0.1.2 — 2026-04-29
+
+Project-tunable regress baselines and config-resolved goldens path. Unblocks
+brownfield projects (e.g. SoftChat, Plan 80.6-14) where the bundled Phase
+80.1 thresholds — calibrated against the supamem-internal corpus — don't fit
+the project's corpus size.
+
+### Added
+
+- `[supamem.eval]` config block accepts `baseline_recall_at_5`,
+  `baseline_total_tokens`, `baseline_p95_latency_ms` to override the bundled
+  D-19 defaults per project.
+- Env-var overrides (highest precedence): `SUPAMEM_BASELINE_RECALL_AT_5`,
+  `SUPAMEM_BASELINE_TOTAL_TOKENS`, `SUPAMEM_BASELINE_P95_LATENCY_MS`.
+- `cfg.goldens_path` now used as fallback when `--goldens` flag is omitted —
+  previously the config field existed but was ignored by the eval runner.
+
+### Fixed
+
+- `supamem eval --regress` no longer fails projects with healthy retrieval
+  but corpus sizes outside Phase 80.1's calibration window. Default behavior
+  is unchanged for callers that don't set overrides.
+
 ## v0.1.1 — 2026-04-29
 
 First PyPI release. Hardens v0.1.0 with CI fixes, agent guides, an update-check

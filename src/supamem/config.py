@@ -47,6 +47,11 @@ class ResolvedConfig:
     goldens_path: str = ""
     cache_dir: str = ""
     allow_legacy_collection: bool = False
+    # Regress baselines — Phase 80.1 D-19 defaults; project-tunable for
+    # corpora outside the supamem-internal calibration set (added v0.1.2).
+    regress_baseline_recall_at_5: float = 0.60
+    regress_baseline_total_tokens: int = 4000
+    regress_baseline_p95_latency_ms: int = 500
 
 
 @dataclass
@@ -62,6 +67,9 @@ class ConfigChain:
     drop_tokens: Source = "default"
     goldens_path: Source = "default"
     cache_dir: Source = "default"
+    regress_baseline_recall_at_5: Source = "default"
+    regress_baseline_total_tokens: Source = "default"
+    regress_baseline_p95_latency_ms: Source = "default"
 
 
 _LEGACY_ENV: dict[str, str] = {
@@ -73,7 +81,15 @@ _LEGACY_ENV: dict[str, str] = {
 
 _NESTED_TABLES: list[tuple[str, dict[str, str]]] = [
     ("hook", {"drop_tokens": "drop_tokens"}),
-    ("eval", {"goldens_path": "goldens_path"}),
+    (
+        "eval",
+        {
+            "goldens_path": "goldens_path",
+            "baseline_recall_at_5": "regress_baseline_recall_at_5",
+            "baseline_total_tokens": "regress_baseline_total_tokens",
+            "baseline_p95_latency_ms": "regress_baseline_p95_latency_ms",
+        },
+    ),
     ("cache", {"cache_dir": "cache_dir"}),
 ]
 

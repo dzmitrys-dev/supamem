@@ -134,3 +134,163 @@ def test_derive_required_substrings_is_deterministic() -> None:
 
 def test_bundled_goldens_constant() -> None:
     assert BUNDLED_GOLDENS.endswith(".jsonl")
+
+
+# ── v0.1.2: project-tunable regress baselines ────────────────────────────────
+
+
+def test_resolve_baseline_uses_config_defaults() -> None:
+    from supamem.eval.runner import _resolve_baseline
+
+    cfg = ResolvedConfig()
+    out = _resolve_baseline(cfg)
+    assert out["mean_recall_at_5"] == 0.60
+    assert out["total_tokens"] == 4000
+    assert out["p95_latency_ms"] == 500
+
+
+def test_resolve_baseline_config_override() -> None:
+    from supamem.eval.runner import _resolve_baseline
+
+    cfg = ResolvedConfig(
+        regress_baseline_recall_at_5=0.5,
+        regress_baseline_total_tokens=20000,
+        regress_baseline_p95_latency_ms=1000,
+    )
+    out = _resolve_baseline(cfg)
+    assert out["mean_recall_at_5"] == 0.5
+    assert out["total_tokens"] == 20000
+    assert out["p95_latency_ms"] == 1000
+
+
+def test_resolve_baseline_env_override_beats_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    from supamem.eval.runner import _resolve_baseline
+
+    cfg = ResolvedConfig(regress_baseline_total_tokens=10000)
+    monkeypatch.setenv("SUPAMEM_BASELINE_TOTAL_TOKENS", "25000")
+    monkeypatch.setenv("SUPAMEM_BASELINE_RECALL_AT_5", "0.40")
+    out = _resolve_baseline(cfg)
+    assert out["total_tokens"] == 25000
+    assert out["mean_recall_at_5"] == 0.40
+
+
+def test_resolve_baseline_malformed_env_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from supamem.eval.runner import _resolve_baseline
+
+    monkeypatch.setenv("SUPAMEM_BASELINE_TOTAL_TOKENS", "not-a-number")
+    out = _resolve_baseline(ResolvedConfig())
+    assert out["total_tokens"] == 4000  # config default preserved
+
+
+def test_run_bench_regress_uses_overridden_baseline(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Custom baseline: token usage that would breach default passes a higher cap."""
+    p = tmp_path / "g.jsonl"
+    p.write_text(
+        json.dumps({"id": "c1", "query": "x", "required_substrings": ["chunk"]}) + "\n",
+        encoding="utf-8",
+    )
+
+    big_chunk = "chunk " + ("a" * 20_000)  # 5000+ tokens single hit
+    fake = MagicMock()
+    fake.query.return_value = [_hit(big_chunk)]
+
+    import supamem.eval.runner as mod
+
+    monkeypatch.setattr(mod, "_build_backend", lambda cfg: fake)
+
+    # Default baseline (4000 tokens) would breach
+    rc_default = run_bench(regress=True, goldens_path=str(p), config=_cfg())
+    assert rc_default == 1
+    assert "REGRESSION" in capsys.readouterr().out
+
+    # Project-tunable baseline raises the cap → passes
+    cfg_high = _cfg(regress_baseline_total_tokens=100_000)
+    rc_override = run_bench(regress=True, goldens_path=str(p), config=cfg_high)
+    assert rc_override == 0
+    assert "regress: PASS" in capsys.readouterr().out
+
+
+def test_run_bench_uses_config_goldens_path_when_flag_omitted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """cfg.goldens_path is used as fallback when --goldens flag not passed (v0.1.2)."""
+    p = tmp_path / "g.jsonl"
+    p.write_text(
+        json.dumps({"id": "c1", "query": "hello", "required_substrings": ["world"]}) + "\n",
+        encoding="utf-8",
+    )
+
+    fake = MagicMock()
+    fake.query.return_value = [_hit("hello world")]
+
+    import supamem.eval.runner as mod
+
+    monkeypatch.setattr(mod, "_build_backend", lambda cfg: fake)
+
+    cfg = _cfg(goldens_path=str(p))
+    rc = run_bench(regress=False, goldens_path=None, config=cfg)
+    assert rc == 0
+    fake.query.assert_called_once()
+
+
+def test_run_bench_cli_flag_beats_config_goldens_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Explicit --goldens still wins over cfg.goldens_path."""
+    cfg_path = tmp_path / "from-config.jsonl"
+    cfg_path.write_text(
+        json.dumps({"id": "from-config", "query": "ignored", "required_substrings": ["x"]})
+        + "\n",
+        encoding="utf-8",
+    )
+    cli_path = tmp_path / "from-flag.jsonl"
+    cli_path.write_text(
+        json.dumps({"id": "from-flag", "query": "actually-used", "required_substrings": ["x"]})
+        + "\n",
+        encoding="utf-8",
+    )
+
+    seen_queries: list[str] = []
+
+    def query(q: str, **_: Any) -> list[Any]:
+        seen_queries.append(q)
+        return [_hit("x")]
+
+    fake = MagicMock()
+    fake.query.side_effect = query
+
+    import supamem.eval.runner as mod
+
+    monkeypatch.setattr(mod, "_build_backend", lambda cfg: fake)
+
+    cfg = _cfg(goldens_path=str(cfg_path))
+    run_bench(regress=False, goldens_path=str(cli_path), config=cfg)
+    assert seen_queries == ["actually-used"]
+
+
+def test_eval_nested_table_loads_baseline_overrides(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """[supamem.eval] baseline_* keys land in ResolvedConfig fields."""
+    from supamem.config import load_config
+
+    (tmp_path / ".supamem").mkdir()
+    (tmp_path / ".supamem" / "config.toml").write_text(
+        '[supamem]\ncollection = "x"\n[supamem.eval]\n'
+        'baseline_recall_at_5 = 0.55\n'
+        'baseline_total_tokens = 18000\n'
+        'baseline_p95_latency_ms = 750\n',
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("SUPAMEM_CONFIG", raising=False)
+    cfg, chain = load_config(cwd=tmp_path)
+    assert cfg.regress_baseline_recall_at_5 == 0.55
+    assert cfg.regress_baseline_total_tokens == 18000
+    assert cfg.regress_baseline_p95_latency_ms == 750
+    assert chain.regress_baseline_recall_at_5 == "supamem_toml"

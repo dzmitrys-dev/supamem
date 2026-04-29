@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from importlib import resources
 from pathlib import Path
@@ -22,7 +23,9 @@ from supamem.retrieval.types import RetrievedChunk
 
 log = logging.getLogger("supamem.eval.runner")
 
-# Phase 80.1 locked thresholds (D-19).
+# Phase 80.1 locked thresholds (D-19) — defaults; project-tunable since v0.1.2
+# via [supamem.eval] baseline_* keys in .supamem/config.toml or env vars
+# SUPAMEM_BASELINE_{RECALL_AT_5,TOTAL_TOKENS,P95_LATENCY_MS}.
 BASELINE = {
     "mean_recall_at_5": 0.60,
     "total_tokens": 4000,
@@ -30,6 +33,34 @@ BASELINE = {
 }
 
 BUNDLED_GOLDENS = "phase_80_1_tuned_hybrid.jsonl"
+
+
+def _resolve_baseline(cfg: ResolvedConfig) -> dict[str, float]:
+    """Merge BASELINE defaults ← config ← env-var overrides.
+
+    Env vars (highest precedence): ``SUPAMEM_BASELINE_RECALL_AT_5``,
+    ``SUPAMEM_BASELINE_TOTAL_TOKENS``, ``SUPAMEM_BASELINE_P95_LATENCY_MS``.
+    Malformed values are logged and fall back to the config value.
+    """
+    out = {
+        "mean_recall_at_5": float(cfg.regress_baseline_recall_at_5),
+        "total_tokens": int(cfg.regress_baseline_total_tokens),
+        "p95_latency_ms": float(cfg.regress_baseline_p95_latency_ms),
+    }
+    overrides = (
+        ("SUPAMEM_BASELINE_RECALL_AT_5", "mean_recall_at_5", float),
+        ("SUPAMEM_BASELINE_TOTAL_TOKENS", "total_tokens", int),
+        ("SUPAMEM_BASELINE_P95_LATENCY_MS", "p95_latency_ms", float),
+    )
+    for env_var, key, caster in overrides:
+        raw = os.environ.get(env_var, "").strip()
+        if not raw:
+            continue
+        try:
+            out[key] = caster(raw)
+        except ValueError:
+            log.warning("supamem eval: ignoring malformed %s=%r", env_var, raw)
+    return out
 
 
 def _load_goldens(path: str | None) -> list[dict[str, Any]]:
@@ -79,8 +110,10 @@ def run_bench(
 ) -> int:
     """Run the bench. Returns 0 on pass, 1 on regression / fatal."""
     cfg = config or ResolvedConfig()
+    # CLI flag wins over config; both win over bundled goldens (path=None).
+    resolved_goldens = goldens_path or (cfg.goldens_path or None)
     try:
-        records = _load_goldens(goldens_path)
+        records = _load_goldens(resolved_goldens)
     except (FileNotFoundError, OSError) as exc:
         log.error("supamem eval: failed to load goldens: %s", exc)
         return 1
@@ -130,18 +163,19 @@ def run_bench(
     if not regress:
         return 0
 
+    baseline = _resolve_baseline(cfg)
     breaches: list[str] = []
-    if mean_recall < BASELINE["mean_recall_at_5"]:
+    if mean_recall < baseline["mean_recall_at_5"]:
         breaches.append(
-            f"mean_recall_at_5={mean_recall:.4f} < baseline {BASELINE['mean_recall_at_5']}"
+            f"mean_recall_at_5={mean_recall:.4f} < baseline {baseline['mean_recall_at_5']}"
         )
-    if total_tokens > BASELINE["total_tokens"]:
+    if total_tokens > baseline["total_tokens"]:
         breaches.append(
-            f"total_tokens={total_tokens} > baseline {BASELINE['total_tokens']}"
+            f"total_tokens={total_tokens} > baseline {baseline['total_tokens']}"
         )
-    if p95 > BASELINE["p95_latency_ms"]:
+    if p95 > baseline["p95_latency_ms"]:
         breaches.append(
-            f"p95_latency_ms={p95:.2f} > baseline {BASELINE['p95_latency_ms']}"
+            f"p95_latency_ms={p95:.2f} > baseline {baseline['p95_latency_ms']}"
         )
 
     if breaches:
