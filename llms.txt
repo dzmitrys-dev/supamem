@@ -18,8 +18,8 @@ installed, AI coding assistants gain persistent semantic memory across projects.
 
 ## Distribution
 
-- [PyPI](https://pypi.org/project/supamem/): Released via Trusted Publisher OIDC; `pip install supamem` or `uv tool install supamem`. Current version: v0.1.3.
-- [CHANGELOG](CHANGELOG.md): Per-version release notes (v0.1.0 initial, v0.1.1 update-check + AGENTS.md, v0.1.2 project-tunable regress baselines, v0.1.3 dual_memory_write + qdrant aliases)
+- [PyPI](https://pypi.org/project/supamem/): Released via Trusted Publisher OIDC; `pip install supamem` or `uv tool install supamem`. Current version: v0.1.4.
+- [CHANGELOG](CHANGELOG.md): Per-version release notes (v0.1.0 initial, v0.1.1 update-check + AGENTS.md, v0.1.2 project-tunable regress baselines, v0.1.3 dual_memory_write + qdrant aliases, v0.1.4 SessionStart banner + supamem live dashboard)
 
 ## Translations
 
@@ -38,6 +38,7 @@ installed, AI coding assistants gain persistent semantic memory across projects.
 - [supamem hook](README.md#cli-surface): Per-client session/edit hooks called by the client itself
 - [supamem doctor](README.md#cli-surface): Probe Qdrant, resolve config chain, report version drift, surface update-check status
 - [supamem stats](README.md#cli-surface): Welford schema-v2 usage counters
+- [supamem live](README.md#-see-it-work--supamem-live): Real-time terminal dashboard tailing the audit JSONL — visibility into PreToolUse hook injections (v0.1.4+)
 - [supamem migrate](README.md#cli-surface): Brownfield migration from an existing `dev_memory` collection
 - [supamem eval](README.md#cli-surface): Run the regression harness; project-tunable baselines via `[supamem.eval]` config (v0.1.2+)
 - [supamem uninstall](README.md#cli-surface): Reverse `supamem install` cleanly
@@ -48,6 +49,11 @@ installed, AI coding assistants gain persistent semantic memory across projects.
 - `dual_memory_write`: Persist agent-authored memory — writes Markdown to `<project>/.claude/insights/_agent/<slug>.md` with YAML frontmatter, immediately upserts into Qdrant (wait=True), idempotent on topic via UUIDv5
 - `qdrant_find` (alias of dual_memory_search): Backward-compat for users coming from upstream `mcp-server-qdrant`
 - `qdrant_store` (alias of dual_memory_write): Same compat shim. Disable both aliases with `SUPAMEM_QDRANT_ALIASES=0`
+
+## Visibility surfaces (v0.1.4+)
+
+- `supamem live` CLI: Rich-Live terminal dashboard, real-time tail of the audit JSONL with rotation/resize/Ctrl-C handling and pipe-safe plain-JSONL fallback when stdout isn't a TTY
+- `supamem hook session-start`: cross-client SessionStart banner injected via `additionalContext` (Claude Code) + `additional_context` (Cursor/OpenCode forks). Auto-detects calling client from `CLAUDECODE`/`OPENCODE`/`CURSOR_AGENT` env vars. Format: `🧠 supamem v<x.y.z> · <collection> · <N> chunks · audit <path>`. Fail-soft per hook discipline — never blocks session start
 
 ## Update-check (v0.1.1+)
 

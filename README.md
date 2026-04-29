@@ -141,6 +141,18 @@ already on the menu. ✨
 
 ---
 
+## 👀 See it work — `supamem live`
+
+Run `supamem live` in a side terminal to watch every retrieval call as it happens — perfect alongside Claude Code / Cursor / OpenCode for instant visibility into the silent PreToolUse-hook injections (which save tokens by NOT showing UI).
+
+![supamem live dashboard](docs/media/supamem-live.svg)
+
+The **SessionStart banner** (v0.1.4+) also lands a one-line status in your AI client at session open: `🧠 supamem v0.1.4 · <collection> · <N> chunks · audit <path>` — auto-detects Claude Code / Cursor / OpenCode via env vars.
+
+> 🎬 **Interactive demo:** [`supamem-live.cast`](docs/media/supamem-live.cast) — drop into [asciinema.org/player](https://asciinema.org/) or run locally with `asciinema play docs/media/supamem-live.cast`.
+
+---
+
 ## 🚀 Features
 
 | Feature | Description |
@@ -151,6 +163,8 @@ already on the menu. ✨
 | 🪝 **Multi-client hooks** | Claude Code session-start, OpenCode session-start, Cursor MDC |
 | 🧰 **One-command install** | Atomic config patching with auto-backup and rollback |
 | 🩺 **`supamem doctor`** | Probe Qdrant, resolve config chain, surface version drift |
+| 👀 **`supamem live`** | Rich-Live terminal dashboard tailing the audit JSONL — real-time visibility into retrieval calls (v0.1.4+) |
+| 🎬 **SessionStart banner** | One-line cross-client banner injected at session open (Claude Code / Cursor / OpenCode), v0.1.4+ |
 | 📊 **Welford counters** | Track recall rate, latency, query volume per project |
 | 🧪 **Eval harness** | 33-query golden corpus + regression detection |
 | 🔁 **Brownfield migration** | Detect existing `dev_memory` and migrate non-destructively |
@@ -250,7 +264,7 @@ supamem --version
 
 You should see a colorful banner and the credit line. 🎨
 
-> **Latest:** `v0.1.3` is published on [PyPI](https://pypi.org/project/supamem/). Released via Trusted
+> **Latest:** `v0.1.4` is published on [PyPI](https://pypi.org/project/supamem/). Released via Trusted
 > Publisher OIDC — every wheel is provenance-attested.
 
 ---
@@ -266,6 +280,7 @@ You should see a colorful banner and the credit line. 🎨
 | `supamem hook <client>` | Per-client session/edit hooks (called by the client itself) |
 | `supamem doctor` | 🩺 Probe Qdrant, print resolved config chain, report version drift |
 | `supamem stats` | Welford schema-v2 usage counters from `.supamem/state/` |
+| `supamem live` | 👀 Live dashboard tailing the audit JSONL — pipe-safe (plain JSONL when not a TTY); handles rotation, resize, Ctrl-C |
 | `supamem migrate` | Brownfield migration from a pre-existing `dev_memory` collection |
 | `supamem eval` | Run the regression harness against the bundled 33-query golden corpus |
 | `supamem uninstall --client <name>` | Reverse `supamem install` cleanly |

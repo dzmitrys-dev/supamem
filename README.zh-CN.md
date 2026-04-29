@@ -140,6 +140,18 @@ supamem doctor
 
 ---
 
+## 👀 看看它工作 — `supamem live`
+
+在另一个终端里运行 `supamem live`,实时观察每一次检索调用 — 与 Claude Code / Cursor / OpenCode 并行使用,即可瞬间看清 PreToolUse 钩子的注入活动(它们正是因为不显示 UI 才省下了 token)。
+
+![supamem live dashboard](docs/media/supamem-live.svg)
+
+**会话启动横幅**(v0.1.4+)在 AI 客户端打开会话时也会注入一行状态:`🧠 supamem v0.1.4 · <collection> · <N> chunks · audit <path>` — 通过环境变量自动识别 Claude Code / Cursor / OpenCode。
+
+> 🎬 **交互式演示:** [`supamem-live.cast`](docs/media/supamem-live.cast) — 拖入 [asciinema.org/player](https://asciinema.org/) 或本地运行 `asciinema play docs/media/supamem-live.cast`。
+
+---
+
 ## 🚀 功能
 
 | 功能 | 说明 |
@@ -150,6 +162,8 @@ supamem doctor
 | 🪝 **多客户端钩子** | Claude Code 会话开始 / OpenCode 会话开始 / Cursor MDC |
 | 🧰 **一键安装** | 原子配置写入,自动备份,可回滚 |
 | 🩺 **`supamem doctor`** | 探测 Qdrant、解析配置链、检测版本漂移 |
+| 👀 **`supamem live`** | 基于 Rich Live 的实时仪表盘,跟踪 audit JSONL — 实时检索调用可见(v0.1.4+) |
+| 🎬 **会话启动横幅** | 跨客户端单行横幅,在会话打开时注入(Claude Code / Cursor / OpenCode),v0.1.4+ |
 | 📊 **Welford 计数器** | 跟踪每项目的召回率、延迟、查询量 |
 | 🧪 **评测套件** | 33 条 golden 查询 + 回归检测 |
 | 🔁 **棕地迁移** | 检测已有的 `dev_memory` 并非破坏性迁移 |
@@ -249,7 +263,7 @@ supamem --version
 
 你会看到一个彩色的横幅和制作人员行。🎨
 
-> **最新:** `v0.1.3` 已发布到 [PyPI](https://pypi.org/project/supamem/)。通过 Trusted
+> **最新:** `v0.1.4` 已发布到 [PyPI](https://pypi.org/project/supamem/)。通过 Trusted
 > Publisher OIDC 发布 — 每个 wheel 都附带来源证明。
 
 ---
@@ -265,6 +279,7 @@ supamem --version
 | `supamem hook <client>` | 每客户端会话/编辑钩子(由客户端自动调用) |
 | `supamem doctor` | 🩺 探测 Qdrant、打印解析后的配置链、报告版本漂移 |
 | `supamem stats` | 来自 `.supamem/state/` 的 Welford schema-v2 使用计数 |
+| `supamem live` | 👀 跟踪 audit JSONL 的实时仪表盘 — 管道安全(非 TTY 时输出纯 JSONL);处理日志轮转、终端尺寸变化、Ctrl-C |
 | `supamem migrate` | 从已有 `dev_memory` 集合的棕地迁移 |
 | `supamem eval` | 对内置 33 条 golden 查询跑回归测试 |
 | `supamem uninstall --client <name>` | 干净反向 `supamem install` |

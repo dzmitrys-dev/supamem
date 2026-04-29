@@ -141,6 +141,18 @@ supamem doctor
 
 ---
 
+## 👀 動いているところを見る — `supamem live`
+
+`supamem live` を別ターミナルで実行すると、すべての検索呼び出しをリアルタイムで観察できます — Claude Code / Cursor / OpenCode と並行して使えば、サイレントな PreToolUse フック注入(UI を出さないからこそトークンを節約している)を瞬時に可視化できます。
+
+![supamem live dashboard](docs/media/supamem-live.svg)
+
+**SessionStart バナー**(v0.1.4+)は AI クライアントのセッション開始時にも一行ステータスを差し込みます:`🧠 supamem v0.1.4 · <collection> · <N> chunks · audit <path>` — 環境変数から Claude Code / Cursor / OpenCode を自動検出。
+
+> 🎬 **インタラクティブデモ:** [`supamem-live.cast`](docs/media/supamem-live.cast) — [asciinema.org/player](https://asciinema.org/) にドロップするか、ローカルで `asciinema play docs/media/supamem-live.cast` を実行。
+
+---
+
 ## 🚀 機能
 
 | 機能 | 説明 |
@@ -151,6 +163,8 @@ supamem doctor
 | 🪝 **マルチクライアントフック** | Claude Code セッション開始、OpenCode セッション開始、Cursor MDC |
 | 🧰 **ワンコマンドインストール** | 自動バックアップとロールバック付きアトミック設定パッチ |
 | 🩺 **`supamem doctor`** | Qdrant をプローブ、設定チェーンを解決、バージョンドリフトを表示 |
+| 👀 **`supamem live`** | audit JSONL を追跡する Rich-Live ターミナルダッシュボード — 検索呼び出しのリアルタイム可視化(v0.1.4+) |
+| 🎬 **SessionStart バナー** | セッション開始時に注入されるクロスクライアント一行バナー(Claude Code / Cursor / OpenCode)、v0.1.4+ |
 | 📊 **Welford カウンタ** | プロジェクトごとの recall レート、レイテンシ、クエリボリュームを追跡 |
 | 🧪 **評価ハーネス** | 33 クエリ正解コーパス + リグレッション検出 |
 | 🔁 **ブラウンフィールド移行** | 既存 `dev_memory` を検出して非破壊的に移行 |
@@ -250,7 +264,7 @@ supamem --version
 
 カラフルなバナーとクレジット行が表示されるはずです。🎨
 
-> **最新:** `v0.1.3` は [PyPI](https://pypi.org/project/supamem/) で公開されています。Trusted
+> **最新:** `v0.1.4` は [PyPI](https://pypi.org/project/supamem/) で公開されています。Trusted
 > Publisher OIDC でリリース — すべての wheel は来歴証明付きです。
 
 ---
@@ -266,6 +280,7 @@ supamem --version
 | `supamem hook <client>` | クライアント別セッション/編集フック(クライアント自身が呼び出す) |
 | `supamem doctor` | 🩺 Qdrant をプローブ、解決済み設定チェーンを出力、バージョンドリフトを報告 |
 | `supamem stats` | `.supamem/state/` からの Welford schema-v2 利用カウンタ |
+| `supamem live` | 👀 audit JSONL を追跡するライブダッシュボード — パイプセーフ(非 TTY 時はプレーン JSONL);ローテーション、リサイズ、Ctrl-C を処理 |
 | `supamem migrate` | 既存 `dev_memory` コレクションからのブラウンフィールド移行 |
 | `supamem eval` | 内蔵 33 クエリ正解コーパスに対するリグレッションハーネス実行 |
 | `supamem uninstall --client <name>` | `supamem install` をクリーンに反転 |

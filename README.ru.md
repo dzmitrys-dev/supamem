@@ -146,6 +146,18 @@ supamem doctor
 
 ---
 
+## 👀 Посмотрите как работает — `supamem live`
+
+Запустите `supamem live` в соседнем терминале, чтобы видеть каждый retrieval-вызов в реальном времени — отлично подходит рядом с Claude Code / Cursor / OpenCode для мгновенной видимости тихих PreToolUse-инъекций (которые и экономят токены за счёт того, что НЕ показывают UI).
+
+![supamem live dashboard](docs/media/supamem-live.svg)
+
+**SessionStart-баннер** (v0.1.4+) также вставляет однострочный статус в ваш AI-клиент при открытии сессии: `🧠 supamem v0.1.4 · <collection> · <N> chunks · audit <path>` — авто-детект Claude Code / Cursor / OpenCode по env-переменным.
+
+> 🎬 **Интерактивное демо:** [`supamem-live.cast`](docs/media/supamem-live.cast) — закиньте в [asciinema.org/player](https://asciinema.org/) или запустите локально `asciinema play docs/media/supamem-live.cast`.
+
+---
+
 ## 🚀 Возможности
 
 | Возможность | Описание |
@@ -156,6 +168,8 @@ supamem doctor
 | 🪝 **Multi-client хуки** | session-start Claude Code, session-start OpenCode, MDC Cursor |
 | 🧰 **Установка одной командой** | Атомарный патч конфигов с авто-бэкапом и откатом |
 | 🩺 **`supamem doctor`** | Пинг Qdrant, разрешение цепочки конфига, сигнал о дрейфе версий |
+| 👀 **`supamem live`** | Терминальный дашборд на Rich Live, отслеживающий audit JSONL — retrieval-вызовы видны в реальном времени (v0.1.4+) |
+| 🎬 **SessionStart-баннер** | Однострочный кросс-клиентский баннер при открытии сессии (Claude Code / Cursor / OpenCode), v0.1.4+ |
 | 📊 **Welford-счётчики** | Трекают recall-rate, латентность, объём запросов на проект |
 | 🧪 **Eval-харнесс** | Золотой корпус из 33 запросов + детектор регрессий |
 | 🔁 **Brownfield-миграция** | Детектит существующий `dev_memory` и мигрирует неразрушающе |
@@ -255,7 +269,7 @@ supamem --version
 
 Должны увидеть цветной баннер и строку об авторах. 🎨
 
-> **Актуальная версия:** `v0.1.3` опубликован на [PyPI](https://pypi.org/project/supamem/).
+> **Актуальная версия:** `v0.1.4` опубликован на [PyPI](https://pypi.org/project/supamem/).
 > Релиз через Trusted Publisher OIDC — у каждого wheel есть подтверждение происхождения.
 
 ---
@@ -271,6 +285,7 @@ supamem --version
 | `supamem hook <client>` | Хуки сессии/редактирования на клиента (вызываются самим клиентом) |
 | `supamem doctor` | 🩺 Пинг Qdrant, печать разрешённой цепочки конфига, отчёт о дрейфе версий |
 | `supamem stats` | Welford schema-v2 счётчики использования из `.supamem/state/` |
+| `supamem live` | 👀 Live-дашборд audit JSONL — безопасен в пайпе (plain JSONL вне TTY); обрабатывает ротацию, ресайз, Ctrl-C |
 | `supamem migrate` | Brownfield-миграция с уже существующей коллекции `dev_memory` |
 | `supamem eval` | Прогон регрессионного харнесса по встроенному корпусу из 33 запросов |
 | `supamem uninstall --client <name>` | Чисто откатить `supamem install` |

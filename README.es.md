@@ -147,6 +147,18 @@ ya está en el menú. ✨
 
 ---
 
+## 👀 Velo funcionar — `supamem live`
+
+Ejecuta `supamem live` en una terminal lateral para ver cada llamada de retrieval en tiempo real — ideal junto a Claude Code / Cursor / OpenCode para visibilidad instantánea de las inyecciones silenciosas del hook PreToolUse (silenciosas por diseño: así ahorran tokens).
+
+![supamem live dashboard](docs/media/supamem-live.svg)
+
+El **banner SessionStart** (v0.1.4+) también lanza una línea de estado en tu cliente IA al abrir la sesión: `🧠 supamem v0.1.4 · <collection> · <N> chunks · audit <path>` — auto-detecta Claude Code / Cursor / OpenCode vía variables de entorno.
+
+> 🎬 **Demo interactiva:** [`supamem-live.cast`](docs/media/supamem-live.cast) — pégalo en [asciinema.org/player](https://asciinema.org/) o ejecuta localmente `asciinema play docs/media/supamem-live.cast`.
+
+---
+
 ## 🚀 Funcionalidades
 
 | Funcionalidad | Descripción |
@@ -157,6 +169,8 @@ ya está en el menú. ✨
 | 🪝 **Hooks multi-cliente** | session-start de Claude Code, session-start de OpenCode, MDC de Cursor |
 | 🧰 **Instalación de un comando** | Patcheo atómico de config con auto-backup y rollback |
 | 🩺 **`supamem doctor`** | Probar Qdrant, resolver cadena de config, exponer drift de versión |
+| 👀 **`supamem live`** | Dashboard Rich-Live siguiendo el audit JSONL — visibilidad en tiempo real de las llamadas de retrieval (v0.1.4+) |
+| 🎬 **Banner SessionStart** | Banner cross-cliente de una línea inyectado al abrir sesión (Claude Code / Cursor / OpenCode), v0.1.4+ |
 | 📊 **Contadores Welford** | Trackear tasa de recall, latencia, volumen de queries por proyecto |
 | 🧪 **Arnés de eval** | Corpus dorado de 33 consultas + detección de regresión |
 | 🔁 **Migración brownfield** | Detectar `dev_memory` existente y migrar de forma no destructiva |
@@ -256,7 +270,7 @@ supamem --version
 
 Deberías ver un banner de colores y la línea de créditos. 🎨
 
-> **Última versión:** `v0.1.3` está publicado en [PyPI](https://pypi.org/project/supamem/). Lanzado vía
+> **Última versión:** `v0.1.4` está publicado en [PyPI](https://pypi.org/project/supamem/). Lanzado vía
 > Trusted Publisher OIDC — cada wheel tiene atestación de procedencia.
 
 ---
@@ -272,6 +286,7 @@ Deberías ver un banner de colores y la línea de créditos. 🎨
 | `supamem hook <client>` | Hooks de sesión/edición por cliente (llamados por el cliente) |
 | `supamem doctor` | 🩺 Probar Qdrant, imprimir cadena de config resuelta, reportar drift de versión |
 | `supamem stats` | Contadores Welford schema-v2 desde `.supamem/state/` |
+| `supamem live` | 👀 Dashboard en vivo siguiendo el audit JSONL — pipe-safe (JSONL plano cuando no hay TTY); maneja rotación, redimensionado, Ctrl-C |
 | `supamem migrate` | Migración brownfield desde una colección `dev_memory` preexistente |
 | `supamem eval` | Correr el arnés de regresión contra el corpus dorado de 33 consultas |
 | `supamem uninstall --client <name>` | Revertir `supamem install` limpiamente |
