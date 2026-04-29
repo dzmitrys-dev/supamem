@@ -263,7 +263,7 @@ supamem --version
 
 你会看到一个彩色的横幅和制作人员行。🎨
 
-> **最新:** `v0.1.4` 已发布到 [PyPI](https://pypi.org/project/supamem/)。通过 Trusted
+> **最新:** `v0.1.5` 已发布到 [PyPI](https://pypi.org/project/supamem/)。通过 Trusted
 > Publisher OIDC 发布 — 每个 wheel 都附带来源证明。
 
 ---

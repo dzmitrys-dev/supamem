@@ -270,7 +270,7 @@ supamem --version
 
 Deberías ver un banner de colores y la línea de créditos. 🎨
 
-> **Última versión:** `v0.1.4` está publicado en [PyPI](https://pypi.org/project/supamem/). Lanzado vía
+> **Última versión:** `v0.1.5` está publicado en [PyPI](https://pypi.org/project/supamem/). Lanzado vía
 > Trusted Publisher OIDC — cada wheel tiene atestación de procedencia.
 
 ---

@@ -264,7 +264,7 @@ supamem --version
 
 カラフルなバナーとクレジット行が表示されるはずです。🎨
 
-> **最新:** `v0.1.4` は [PyPI](https://pypi.org/project/supamem/) で公開されています。Trusted
+> **最新:** `v0.1.5` は [PyPI](https://pypi.org/project/supamem/) で公開されています。Trusted
 > Publisher OIDC でリリース — すべての wheel は来歴証明付きです。
 
 ---

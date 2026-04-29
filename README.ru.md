@@ -269,7 +269,7 @@ supamem --version
 
 Должны увидеть цветной баннер и строку об авторах. 🎨
 
-> **Актуальная версия:** `v0.1.4` опубликован на [PyPI](https://pypi.org/project/supamem/).
+> **Актуальная версия:** `v0.1.5` опубликован на [PyPI](https://pypi.org/project/supamem/).
 > Релиз через Trusted Publisher OIDC — у каждого wheel есть подтверждение происхождения.
 
 ---
