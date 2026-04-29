@@ -153,7 +153,11 @@ def cmd_evalbench(
     goldens: Optional[str] = typer.Option(None, "--goldens", help="Custom goldens JSONL path."),
 ) -> None:
     """Run the regression harness against the Phase 80.1 golden corpus."""
-    _stub("eval")
+    from supamem.config import load_config
+    from supamem.eval.runner import run_bench
+
+    cfg, _chain = load_config()
+    raise typer.Exit(run_bench(regress=regress, goldens_path=goldens, config=cfg))
 
 
 @app.command("install")

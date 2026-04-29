@@ -1,0 +1,33 @@
+{"id": "g01", "query": "how does the indexer chunk markdown documents", "required_substrings": ["chunk", "markdown"]}
+{"id": "g02", "query": "what is the locked schema for tuned_hybrid retrieval", "required_substrings": ["dense", "sparse"]}
+{"id": "g03", "query": "fail-soft contract for the MCP server tool", "required_substrings": ["fail-soft", "exit"]}
+{"id": "g04", "query": "where does supamem store its config file", "required_substrings": [".supamem/config.toml"]}
+{"id": "g05", "query": "which embedder powers the dense vector arm", "required_substrings": ["MiniLM"]}
+{"id": "g06", "query": "what BM25 model does sparse retrieval use", "required_substrings": ["Qdrant/bm25"]}
+{"id": "g07", "query": "how is the Welford counter schema versioned", "required_substrings": ["sum", "sumsq", "count"]}
+{"id": "g08", "query": "atomic write strategy for client config patches", "required_substrings": ["atomic", "replace"]}
+{"id": "g09", "query": "managed-block fence markers in CLAUDE.md", "required_substrings": ["BEGIN SUPAMEM", "END SUPAMEM"]}
+{"id": "g10", "query": "what is the RRF fusion algorithm parameter", "required_substrings": ["RRF", "fusion"]}
+{"id": "g11", "query": "default chunk soft max token cap", "required_substrings": ["250"]}
+{"id": "g12", "query": "supamem doctor exit codes", "required_substrings": ["exit"]}
+{"id": "g13", "query": "how does init detect Qdrant reachability", "required_substrings": ["healthz", "probe"]}
+{"id": "g14", "query": "brownfield migration paths supported", "required_substrings": ["coexist", "migrate", "adopt-as-is"]}
+{"id": "g15", "query": "stdio transport stdout discipline rule", "required_substrings": ["stdout", "stderr"]}
+{"id": "g16", "query": "Streamable HTTP transport kwarg", "required_substrings": ["streamable-http"]}
+{"id": "g17", "query": "snapshot before destructive migrate path", "required_substrings": ["snapshot"]}
+{"id": "g18", "query": "PreToolUse hook payload shape", "required_substrings": ["hookSpecificOutput", "additionalContext"]}
+{"id": "g19", "query": "cursor session-start snapshot regen target", "required_substrings": ["dual-memory-snapshot.mdc"]}
+{"id": "g20", "query": "share dir reference-not-copy contract", "required_substrings": ["share"]}
+{"id": "g21", "query": "qdrant api key redaction in doctor output", "required_substrings": ["redact"]}
+{"id": "g22", "query": "is_code_target gate file suffix rejection list", "required_substrings": [".md", ".lock"]}
+{"id": "g23", "query": "marker file for daily-rolled hook coordination", "required_substrings": ["queried"]}
+{"id": "g24", "query": "where do auto-goldens prevent SaaS LLM calls", "required_substrings": ["RuntimeError"]}
+{"id": "g25", "query": "what does derive_query strip drop_tokens for", "required_substrings": ["drop_tokens"]}
+{"id": "g26", "query": "search tool max query length DoS guard", "required_substrings": ["MAX_QUERY_LEN"]}
+{"id": "g27", "query": "summary_md field rendered in tool card", "required_substrings": ["summary_md"]}
+{"id": "g28", "query": "config precedence ladder rungs", "required_substrings": ["env", "supamem_toml"]}
+{"id": "g29", "query": "T-1 markdown header chunker headers list", "required_substrings": ["h1", "h2", "h3"]}
+{"id": "g30", "query": "T-5 cosine dedup threshold value", "required_substrings": ["0.97"]}
+{"id": "g31", "query": "T-8 token budget truncation cap", "required_substrings": ["1500"]}
+{"id": "g32", "query": "forbidden collection guard names list", "required_substrings": ["dev_memory"]}
+{"id": "g33", "query": "manifest legacy v1 to v2 schema upgrade", "required_substrings": ["legacy", "v2"]}
