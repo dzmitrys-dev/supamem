@@ -1,3 +1,5 @@
+**Languages:** [English](README.md) · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [日本語](README.ja.md) · [Русский](README.ru.md)
+
 <div align="center">
 
 # 🧠 supamem
@@ -6,7 +8,7 @@
 
 *Give Claude Code, Cursor, and OpenCode persistent semantic + structural memory across every project.*
 
-[![PyPI](https://img.shields.io/badge/pypi-coming%20v0.2-blue?style=flat-square&logo=pypi&logoColor=white)](https://pypi.org/project/supamem/)
+[![PyPI](https://img.shields.io/pypi/v/supamem?style=flat-square&logo=pypi&logoColor=white&color=blue)](https://pypi.org/project/supamem/)
 [![Python](https://img.shields.io/badge/python-3.12%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-success?style=flat-square)](LICENSE)
 [![Qdrant](https://img.shields.io/badge/Qdrant-1.10%2B-DC382D?style=flat-square&logo=qdrant&logoColor=white)](https://qdrant.tech/)
@@ -248,12 +250,8 @@ supamem --version
 
 You should see a colorful banner and the credit line. 🎨
 
-> **Note:** `v0.1.0` ships as a git-tag release per [D-44](docs/decisions). PyPI publish lands in
-> `v0.2`. To install the pre-release directly from git:
->
-> ```bash
-> uv tool install git+https://github.com/dzmitrys-dev/supamem@v0.1.0
-> ```
+> **Latest:** `v0.1.3` is published on [PyPI](https://pypi.org/project/supamem/). Released via Trusted
+> Publisher OIDC — every wheel is provenance-attested.
 
 ---
 
@@ -335,7 +333,7 @@ Updates `~/.config/opencode/opencode.json` and writes a session-start hook to
 - **Indexer** chunks Markdown by header (T-1 chunker, 200-token target / 250 soft max)
 - **Embedders** produce sparse (BM25) and dense (MiniLM-L6) vectors
 - **Retrieval** runs both arms in parallel, fuses with reciprocal rank fusion, returns top-k
-- **MCP server** exposes `qdrant-find` and `qdrant-store` tools, plus context resources
+- **MCP server** exposes `dual_memory_search` (read) and `dual_memory_write` (write/idempotent agent-memory persistence) — plus `qdrant_find` and `qdrant_store` as drop-in aliases for users coming from upstream `mcp-server-qdrant` (disable with `SUPAMEM_QDRANT_ALIASES=0`)
 - **Hooks** call `supamem hook <client>` at the right moment, so memory loads transparently
 
 ---

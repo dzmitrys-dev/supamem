@@ -20,6 +20,7 @@ Claude Code instructions for the supamem repository.
 - NEVER force-move a published git tag — PyPI rejects re-uploads of the same version
 - NEVER suppress errors in indexing/retrieval paths — surface via `err_console`
 - Update-check is the ONLY code path where blanket `except Exception: pass` is acceptable
+- NEVER edit `README.md` without also updating the 4 translations (`README.zh-CN.md`, `README.es.md`, `README.ja.md`, `README.ru.md`) AND bumping the `synced-with` SHA marker on line 2 of each. See AGENTS.md → "README Translations" for the one-liner.
 
 ## Definition Of Done
 

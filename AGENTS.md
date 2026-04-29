@@ -100,6 +100,25 @@ PyPI tags are immutable: never re-use a published version number.
 
 A daemon thread probes GitHub Releases on every CLI invocation, caches result for 24h in `platformdirs.user_cache_dir("supamem")/update_check.json`, and prints a stderr footer on the *next* invocation if a newer version is available. Suppress with `SUPAMEM_NO_UPDATE_CHECK=1`, `CI=1`, or `NO_UPDATE_NOTIFIER=1`. Never blocks; never raises.
 
+## README Translations (v0.1.3+)
+
+The repo ships **5 READMEs**: `README.md` (canonical English) + `README.zh-CN.md`, `README.es.md`, `README.ja.md`, `README.ru.md`. PyPI renders only the English file (`readme = "README.md"` in pyproject); translations are GitHub-only.
+
+**When you edit `README.md`, you MUST**:
+
+1. Apply the same edit to all 4 translations (`README.{zh-CN,es,ja,ru}.md`). Code blocks, badges, file paths, and CLI commands stay in their canonical English form — translate only prose, headings, and explanatory text.
+2. Bump the `<!-- synced-with: README.md @ <sha> -->` marker (line 2 of each translation) to the new commit SHA *after* your README commit lands. One-liner:
+   ```bash
+   SHA=$(git rev-parse --short HEAD)
+   sed -i "s|synced-with: README.md @ [a-f0-9]\{6,\}|synced-with: README.md @ $SHA|g" \
+     README.zh-CN.md README.es.md README.ja.md README.ru.md
+   ```
+3. NEVER ship a README change without updating the language switcher line at the top — all 5 files share the identical `[English](README.md) · [简体中文](README.zh-CN.md) · ...` line as their first line.
+4. If the English README adds a NEW section, translate it. If a section is removed in English, remove from translations too. Drift is the failure mode — keep them in lockstep.
+5. Translations are AI-assisted (disclosure on line 5 of each file). Native-speaker corrections via PR are encouraged; do NOT silently overwrite human-improved phrasing in subsequent updates — preserve any commit-history evidence of native edits.
+
+CI guard candidate: a script that fails when `README.md` changes without bumping the `synced-with` SHA in siblings (deferred — add when drift first bites).
+
 ## Reference Links
 
 - README: high-level overview, install, quickstart
