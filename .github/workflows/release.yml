@@ -5,10 +5,9 @@ on:
     tags: ['v*']
 
 jobs:
-  release:
+  build:
+    name: Build wheel + sdist
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -19,14 +18,55 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install build
-        run: pip install build
+      - name: Install build + twine
+        run: pip install build twine
 
-      - name: Build wheel + sdist
+      - name: Build
         run: python -m build
+
+      - name: Twine check
+        run: twine check dist/*
 
       - name: List artifacts
         run: ls -lh dist/
+
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish-pypi:
+    name: Publish to PyPI (Trusted Publisher OIDC)
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/supamem
+    permissions:
+      id-token: write
+    steps:
+      - name: Download dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    name: Create GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2

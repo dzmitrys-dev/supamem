@@ -1,15 +1,22 @@
 """Smoke tests for the supamem CLI surface (plan 80.6-01 Task 2)."""
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 
 
 def _run(*args: str) -> subprocess.CompletedProcess[str]:
+    # Force plain output: capture_output makes stdout non-TTY, but CI may also set
+    # FORCE_COLOR or COLUMNS; pin a deterministic env so Rich disables ANSI escapes
+    # and uses a wide width — keeps "subcommand" / "--flag" tokens unwrapped in --help.
+    env = {**os.environ, "NO_COLOR": "1", "TERM": "dumb", "COLUMNS": "200"}
+    env.pop("FORCE_COLOR", None)
     return subprocess.run(
         [sys.executable, "-m", "supamem", *args],
         capture_output=True,
         text=True,
+        env=env,
     )
 
 
@@ -59,12 +66,14 @@ def test_index_runs_failsoft_with_no_sources() -> None:
     )
 
 
-def test_version_prints_010() -> None:
-    """Test 6: --version prints styled banner containing 0.1.0 and credit line."""
+def test_version_prints_current() -> None:
+    """Test 6: --version prints styled banner with current __version__ + credit line."""
+    from supamem import __version__
+
     result = _run("--version")
     assert result.returncode == 0, result.stderr
     out = result.stdout
-    assert "0.1.0" in out, f"expected version in output, got: {out!r}"
+    assert __version__ in out, f"expected version in output, got: {out!r}"
     assert "supamem" in out
     # Credit line is part of the banner — verifies the SoftChat / SoftSkillz attribution.
     assert "SoftChat" in out

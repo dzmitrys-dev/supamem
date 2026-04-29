@@ -244,7 +244,23 @@ def cmd_migrate(
 
 
 def main() -> None:
-    app()
+    # Fire-and-forget update probe — writes cache for *next* invocation. Skipped
+    # when env vars opt out, when stderr is non-TTY (piped/redirected output),
+    # or when the in-process probe fails for any reason. Never blocks.
+    from supamem.update_check import get_pending_notification, start_background_check
+
+    start_background_check(__version__)
+    try:
+        app()
+    finally:
+        # Print any update notice queued from the *previous* invocation. Goes
+        # to stderr so JSON consumers piping stdout are unaffected.
+        notice = get_pending_notification(__version__)
+        if notice:
+            try:
+                err_console.print(notice, end="")
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

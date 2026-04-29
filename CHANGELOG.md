@@ -2,6 +2,36 @@
 
 All notable changes to `supamem` will be documented in this file.
 
+## v0.1.1 — 2026-04-29
+
+First PyPI release. Hardens v0.1.0 with CI fixes, agent guides, an update-check
+notifier, and a published wheel/sdist on PyPI so downstream consumers can pin a
+version range instead of a git tag.
+
+### Added
+
+- `supamem.update_check` — pip-style fire-and-forget GitHub Releases probe.
+  Daemon thread writes `platformdirs.user_cache_dir("supamem")/update_check.json`;
+  the *next* invocation prints a stderr footer if a newer release is cached.
+  24h TTL, 6h backoff on 403/429, ETag-aware. Suppress with
+  `SUPAMEM_NO_UPDATE_CHECK=1`, `NO_UPDATE_NOTIFIER=1`, or `CI=1`. Skipped when
+  stderr is non-TTY. Surfaced in `supamem doctor` (new "Update check" section).
+- `AGENTS.md` + `CLAUDE.md` — agent-facing project guides per the Apr 2026
+  cross-tool convention.
+
+### Changed
+
+- License metadata migrated to PEP 639 SPDX expression (`license = "MIT"`),
+  removing legacy `{ text = "MIT" }` form.
+- Distribution channel: PyPI (was git-tag-only). Install via
+  `pip install supamem` or `uv tool install supamem`.
+
+### Fixed
+
+- `tests/test_cli_smoke.py` subprocess env now pins `NO_COLOR=1`, `TERM=dumb`,
+  `COLUMNS=200`, and pops `FORCE_COLOR` — eliminates Rich color escapes that
+  broke CI assertions on GitHub Actions runners.
+
 ## v0.1.0 — 2026-04-29
 
 The initial public release. Extracted from the SoftChat dual-memory stack

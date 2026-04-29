@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -160,7 +161,32 @@ def run_doctor(*, redact_secrets: bool = True) -> int:
         else:
             ok(f"{row['client']:<12} v{row['block_version']} (current)")
 
-    # ── Section 4: Exit code ─────────────────────────────────────────────
+    # ── Section 4: Update check ──────────────────────────────────────────
+    console.print()
+    console.print("[supamem.brand]Update check[/supamem.brand]")
+    from supamem.update_check import doctor_report
+
+    uc = doctor_report(__version__)
+    cached = uc.get("cached_latest_version")
+    last_ts = uc.get("last_check_ts")
+    last_human = (
+        time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(last_ts))
+        if last_ts
+        else "never"
+    )
+    if uc.get("update_available"):
+        warn(
+            f"update available: {uc['current_version']} → {cached} "
+            f"(last check: {last_human})"
+        )
+    elif cached:
+        ok(f"on latest cached version v{cached} (last check: {last_human})")
+    else:
+        info(f"no probe yet — runs in background on next invocation (cache: {uc['cache_path']})")
+    if uc.get("suppressed_by_env"):
+        info(f"suppressed by env: {', '.join(uc['suppressed_by_env'])}")
+
+    # ── Section 5: Exit code ─────────────────────────────────────────────
     rc = 0
     if not qdrant_up or any_drift or (qdrant_up and not coll_status.get("present")):
         rc = 1
