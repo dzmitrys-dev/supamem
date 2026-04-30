@@ -3,7 +3,9 @@
 Resolution order (highest to lowest):
 
 1. ``$SUPAMEM_CONFIG`` env var pointing to an explicit TOML file
-2. ``<cwd>/.supamem/config.toml`` (the canonical project config)
+2. ``<cwd>/.supamem/config.toml`` (the canonical project config).
+   MCP stdio defaults ``cwd`` to ``Path.cwd()``; set ``SUPAMEM_PROJECT_ROOT`` to your
+   workspace root when the host launches the server outside the repo (Cursor/IDE).
 3. ``<cwd>/pyproject.toml`` ``[tool.supamem]`` section
 4. Auto-detect: presence of ``<cwd>/.claude/insights/`` seeds ``sources``
 5. Defaults baked into ``ResolvedConfig``

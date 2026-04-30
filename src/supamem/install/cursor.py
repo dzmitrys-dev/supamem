@@ -24,15 +24,17 @@ from supamem.install._types import InstallResult
 
 log = logging.getLogger("supamem.install.cursor")
 
-MCP_OVERLAY: dict[str, Any] = {
-    "mcpServers": {
-        "supamem": {
-            "command": "supamem",
-            "args": ["mcp-server", "--transport", "stdio"],
-            "env": {"DM_MCP_SOURCE": "mcp_cursor"},
-        }
+
+def _mcp_supamem_entry(cwd: Path) -> dict[str, Any]:
+    """Cursor MCP stanza — inject SUPAMEM_PROJECT_ROOT when bootstrapped in-repo."""
+    env: dict[str, str] = {"DM_MCP_SOURCE": "mcp_cursor"}
+    if (cwd / ".supamem" / "config.toml").is_file():
+        env["SUPAMEM_PROJECT_ROOT"] = str(cwd.resolve())
+    return {
+        "command": "supamem",
+        "args": ["mcp-server", "--transport", "stdio"],
+        "env": env,
     }
-}
 
 SESSION_START_HOOK: dict[str, Any] = {
     "sessionStart": [
@@ -90,7 +92,10 @@ def install(*, dry_run: bool = False) -> InstallResult:
     diffs: list[str] = []
 
     cur_mcp = _read_json(mcp_path)
-    merged_mcp = deep_merge_json(cur_mcp, MCP_OVERLAY)
+    merged_mcp = deep_merge_json(
+        cur_mcp,
+        {"mcpServers": {"supamem": _mcp_supamem_entry(cwd)}},
+    )
     res_mcp = atomic_write_json(mcp_path, merged_mcp, dry_run=dry_run)
     if res_mcp.diff:
         diffs.append(res_mcp.diff)

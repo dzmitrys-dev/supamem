@@ -90,10 +90,16 @@ def cmd_mcp_server(
     host: str = typer.Option("127.0.0.1", "--host", help="HTTP bind host (only used when --transport http)."),
 ) -> None:
     """Run the dual-memory MCP server."""
+    import os
+
+    from pathlib import Path
+
     from supamem.config import load_config
     from supamem.mcp_server import run_http, run_stdio
 
-    cfg, _chain = load_config()
+    root = os.environ.get("SUPAMEM_PROJECT_ROOT", "").strip()
+    cfg_root = Path(root) if root else None
+    cfg, _chain = load_config(cfg_root)
     if transport is Transport.stdio:
         run_stdio(cfg)
     elif transport is Transport.http:
