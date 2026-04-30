@@ -32,15 +32,29 @@ log = logging.getLogger("supamem.install.claude_code")
 
 CLAUDE_MD_IMPORT_LINE = "@~/.supamem/share/rules/dual-memory.md"
 
-MCP_OVERLAY: dict[str, Any] = {
-    "mcpServers": {
-        "supamem": {
-            "command": "supamem",
-            "args": ["mcp-server", "--transport", "stdio"],
-            "env": {"DM_MCP_SOURCE": "mcp_claude_code"},
-        }
+def _mcp_supamem_entry(cwd: Path) -> dict[str, Any]:
+    """Claude Code MCP stanza — inject SUPAMEM_PROJECT_ROOT when bootstrapped in-repo.
+
+    Mirrors ``cursor._mcp_supamem_entry``: when the user runs
+    ``supamem install --client claude-code`` from a directory containing
+    ``.supamem/config.toml``, the absolute workspace path is wired into the
+    MCP server entry's ``env`` block so Claude Code's MCP subprocess resolves
+    the workspace's collection regardless of cwd. Without this, the global
+    ``~/.claude.json`` mcpServers entry has no way to point at *this* project
+    on a multi-project machine — every install overwrites the prior one.
+    """
+    env: dict[str, str] = {"DM_MCP_SOURCE": "mcp_claude_code"}
+    if (cwd / ".supamem" / "config.toml").is_file():
+        env["SUPAMEM_PROJECT_ROOT"] = str(cwd.resolve())
+    return {
+        "command": "supamem",
+        "args": ["mcp-server", "--transport", "stdio"],
+        "env": env,
     }
-}
+
+
+def _mcp_overlay(cwd: Path) -> dict[str, Any]:
+    return {"mcpServers": {"supamem": _mcp_supamem_entry(cwd)}}
 
 HOOKS_OVERLAY: dict[str, Any] = {
     "hooks": {
@@ -140,7 +154,7 @@ def install(*, dry_run: bool = False) -> InstallResult:
     diffs: list[str] = []
 
     cur = _read_json(claude_json)
-    merged = deep_merge_json(cur, MCP_OVERLAY)
+    merged = deep_merge_json(cur, _mcp_overlay(Path.cwd()))
     res = atomic_write_json(claude_json, merged, dry_run=dry_run)
     if res.diff:
         diffs.append(res.diff)

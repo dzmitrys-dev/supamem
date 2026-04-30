@@ -27,6 +27,47 @@ def test_install_creates_mcp_entry_in_claude_json(home: Path) -> None:
     assert "mcp-server" in raw["mcpServers"]["supamem"]["args"]
 
 
+def test_install_injects_project_root_when_run_in_repo(
+    home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When installed from a directory containing .supamem/config.toml, the
+    MCP entry must carry SUPAMEM_PROJECT_ROOT in env so multi-project
+    machines don't collapse to a single global value (mirrors cursor behavior)."""
+    from supamem.install.claude_code import install
+
+    workspace = tmp_path / "workspace"
+    (workspace / ".supamem").mkdir(parents=True)
+    (workspace / ".supamem" / "config.toml").write_text(
+        "[supamem]\ncollection = 'project-a'\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(workspace)
+
+    install()
+    raw = json.loads((home / ".claude.json").read_text(encoding="utf-8"))
+    env = raw["mcpServers"]["supamem"]["env"]
+    assert env["SUPAMEM_PROJECT_ROOT"] == str(workspace.resolve())
+    assert env["DM_MCP_SOURCE"] == "mcp_claude_code"
+
+
+def test_install_no_project_root_when_outside_repo(
+    home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When installed from a directory WITHOUT .supamem/config.toml, no
+    SUPAMEM_PROJECT_ROOT should be written — the parent-walk fallback in
+    cmd_mcp_server handles discovery, and a stale absolute path would
+    actively mislead callers."""
+    from supamem.install.claude_code import install
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    install()
+    raw = json.loads((home / ".claude.json").read_text(encoding="utf-8"))
+    env = raw["mcpServers"]["supamem"]["env"]
+    assert "SUPAMEM_PROJECT_ROOT" not in env
+
+
 def test_install_preserves_sibling_mcp_servers(home: Path) -> None:
     from supamem.install.claude_code import install
 
