@@ -56,6 +56,17 @@ def _mcp_supamem_entry(cwd: Path) -> dict[str, Any]:
 def _mcp_overlay(cwd: Path) -> dict[str, Any]:
     return {"mcpServers": {"supamem": _mcp_supamem_entry(cwd)}}
 
+GATE_EDIT_HOOK_ENTRY: dict[str, Any] = {
+    "matcher": "Edit|Write|MultiEdit",
+    "hooks": [
+        {
+            "type": "command",
+            "command": "supamem hook claude-code-gate",
+            "timeout": 5,
+        }
+    ],
+}
+
 HOOKS_OVERLAY: dict[str, Any] = {
     "hooks": {
         "PreToolUse": [
@@ -112,8 +123,17 @@ def _hook_already_present(settings: dict[str, Any]) -> bool:
     return _hook_present(settings, "PreToolUse", "supamem hook claude-code")
 
 
-def _settings_with_hook(existing: dict[str, Any]) -> dict[str, Any]:
-    """Add PreToolUse + SessionStart hooks if absent. Idempotent per event."""
+def _settings_with_hook(
+    existing: dict[str, Any], *, enforce_search: bool = False
+) -> dict[str, Any]:
+    """Add PreToolUse + SessionStart hooks if absent. Idempotent per event.
+
+    When ``enforce_search`` is True, also register the
+    ``supamem hook claude-code-gate`` PreToolUse entry that DENIES
+    Edit/Write/MultiEdit when no recent ``mcp__supamem__dual_memory_search``
+    is found in the session transcript. This is opt-in because surprise-
+    blocking is hostile UX on first-run.
+    """
     merged = json.loads(json.dumps(existing))
     hooks_root = merged.setdefault("hooks", {})
 
@@ -121,6 +141,11 @@ def _settings_with_hook(existing: dict[str, Any]) -> dict[str, Any]:
         hooks_root.setdefault("PreToolUse", []).extend(
             HOOKS_OVERLAY["hooks"]["PreToolUse"]
         )
+
+    if enforce_search and not _hook_present(
+        merged, "PreToolUse", "supamem hook claude-code-gate"
+    ):
+        hooks_root.setdefault("PreToolUse", []).append(GATE_EDIT_HOOK_ENTRY)
 
     # SessionStart banner (v0.1.5+). Skip if any supamem session-start entry
     # already exists (covers users who installed v0.1.4 by hand earlier).
@@ -143,7 +168,9 @@ def _claude_md_with_import(existing: str) -> str:
     return f"{existing}{glue}\n{block}\n"
 
 
-def install(*, dry_run: bool = False, scope: str = "project") -> InstallResult:
+def install(
+    *, dry_run: bool = False, scope: str = "project", enforce_search: bool = False
+) -> InstallResult:
     """Install supamem MCP entry + hooks + CLAUDE.md import for Claude Code.
 
     ``scope`` controls where the MCP entry is written:
@@ -189,7 +216,7 @@ def install(*, dry_run: bool = False, scope: str = "project") -> InstallResult:
         backups.append(res.backup_path)
 
     cur_s = _read_json(settings_json)
-    merged_s = _settings_with_hook(cur_s)
+    merged_s = _settings_with_hook(cur_s, enforce_search=enforce_search)
     res_s = atomic_write_json(settings_json, merged_s, dry_run=dry_run)
     if res_s.diff:
         diffs.append(res_s.diff)
@@ -233,6 +260,8 @@ def _strip_supamem_from_mcp(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def _strip_supamem_hook(settings: dict[str, Any]) -> dict[str, Any]:
+    """Strip both the injection (`claude-code`) and gate (`claude-code-gate`)
+    PreToolUse hooks. Substring `supamem hook claude-code` matches both."""
     out = json.loads(json.dumps(settings))
     pre = out.get("hooks", {}).get("PreToolUse", [])
     cleaned: list[Any] = []

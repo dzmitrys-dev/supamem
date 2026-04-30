@@ -242,6 +242,16 @@ def cmd_install(
             "'user': global (~/.claude.json or ~/.cursor/mcp.json) — last install wins."
         ),
     ),
+    enforce_search: bool = typer.Option(
+        False,
+        "--enforce-search",
+        help=(
+            "OPT-IN (claude-code only): register a PreToolUse gate that DENIES "
+            "Edit/Write/MultiEdit when no recent dual_memory_search has been "
+            "logged in the session. Forces 'eat your own dog food' compliance. "
+            "Override per-session with SUPAMEM_GATE_DISABLE=1."
+        ),
+    ),
 ) -> None:
     """Patch a client config to point at supamem."""
     from supamem.install import install as do_install
@@ -251,6 +261,7 @@ def cmd_install(
             client=client.value if client else None,
             dry_run=dry_run,
             scope=scope.value,
+            enforce_search=enforce_search,
         )
     )
 

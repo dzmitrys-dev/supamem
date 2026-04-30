@@ -32,4 +32,8 @@ def dispatch(
         from supamem.hooks.session_start import run
 
         return run(client=None, config=config)
+    if client == "claude-code-gate":
+        from supamem.hooks.gate_edit import run as run_gate
+
+        return run_gate()
     raise ValueError(f"supamem: unknown hook client: {client!r}")

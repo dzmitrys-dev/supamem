@@ -35,7 +35,11 @@ VALID_SCOPES = ("project", "user")
 
 
 def install(
-    client: Optional[str], *, dry_run: bool = False, scope: str = "project"
+    client: Optional[str],
+    *,
+    dry_run: bool = False,
+    scope: str = "project",
+    enforce_search: bool = False,
 ) -> int:
     """Install supamem into the named client (or auto-detect).
 
@@ -68,15 +72,19 @@ def install(
     if client == "claude-code":
         from supamem.install import claude_code
 
-        result = claude_code.install(dry_run=dry_run, scope=scope)
+        result = claude_code.install(
+            dry_run=dry_run, scope=scope, enforce_search=enforce_search
+        )
     elif client == "cursor":
         from supamem.install import cursor as cursor_install
 
+        # Cursor's hooks API has no fail-closed pre-edit event today — gate
+        # is Claude-Code-only. enforce_search is silently ignored for Cursor.
         result = cursor_install.install(dry_run=dry_run, scope=scope)
     elif client == "opencode":
         from supamem.install import opencode
 
-        # opencode is global-only today — ignore scope
+        # opencode is global-only today — ignore scope and enforce_search
         result = opencode.install(dry_run=dry_run)
     else:  # pragma: no cover — VALID_CLIENTS guard above
         return 2
