@@ -63,6 +63,15 @@ Server-side hard caps on every retrieval response. Configured under the `[supame
 - `supamem live` CLI: Rich-Live terminal dashboard, real-time tail of the audit JSONL with rotation/resize/Ctrl-C handling and pipe-safe plain-JSONL fallback when stdout isn't a TTY
 - `supamem hook session-start`: cross-client SessionStart banner injected via `additionalContext` (Claude Code) + `additional_context` (Cursor/OpenCode forks). Auto-detects calling client from `CLAUDECODE`/`OPENCODE`/`CURSOR_AGENT` env vars. Format: `🧠 supamem v<x.y.z> · <collection> · <N> chunks · audit <path>`. Fail-soft per hook discipline — never blocks session start
 
+## MCP project-root resolution (v0.2.0+)
+
+stdio MCP servers are often launched by hosts (Cursor, IDE wrappers) from a cwd that is NOT the workspace, which silently drops supamem to the default collection (`dev_memory_tuned_hybrid`) and produces Qdrant 404s when callers query the project's actual collection.
+
+- `SUPAMEM_PROJECT_ROOT` (env var) — preferred, explicit. Set in the host's MCP `env` block (`~/.cursor/mcp.json`, `~/.claude.json` under `mcpServers.supamem.env`) so the subprocess locates `.supamem/config.toml` regardless of cwd
+- Parent-walk fallback — when the env var is unset, supamem walks parents from `Path.cwd()` looking for `.supamem/config.toml` or `pyproject.toml [tool.supamem]`. Stops at filesystem root or `$HOME` to avoid scanning above the user's home
+- Stderr fallthrough warning — when neither the env var nor the parent-walk locate a project marker AND the resolved collection is still the shipped default, `supamem mcp-server --transport stdio` emits a one-line stderr warning (cwd inspected, env var presence — never values, fix command). Stdout stays JSON-RPC clean
+- Verify with `supamem doctor` from the repo root: the resolved collection must match what the MCP client returns from `dual_memory_search`
+
 ## Update-check (v0.1.1+)
 
 - Daemon-thread GitHub Releases probe; 24h TTL cache at `platformdirs.user_cache_dir("supamem")/update_check.json`

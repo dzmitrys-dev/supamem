@@ -325,6 +325,11 @@ supamem install --client opencode
 
 </details>
 
+> 🛟 **MCP 从错误的 cwd 启动?** 某些宿主(Cursor、部分 IDE 封装器)会从 `$HOME` 而非工作区启动 MCP 子进程,导致 supamem 回退到默认 collection(`dev_memory_tuned_hybrid`)并返回 Qdrant 404。
+> 在宿主的 MCP 配置中设置 `SUPAMEM_PROJECT_ROOT=/abs/path/to/workspace`(例如 `~/.cursor/mcp.json` 的 `env` 块,或 `~/.claude.json` 中 `mcpServers.supamem.env`)。
+> 若未设置,supamem 会向上搜索父目录查找 `.supamem/config.toml` 或 `pyproject.toml` 的 `[tool.supamem]`,找不到时会在 stderr 输出一行警告。
+> 在仓库根目录运行 `supamem doctor` 验证:解析出的 collection 应与 MCP 客户端 `dual_memory_search` 返回的一致。
+
 ---
 
 ## 🧠 工作原理

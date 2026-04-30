@@ -94,12 +94,48 @@ def cmd_mcp_server(
 
     from pathlib import Path
 
-    from supamem.config import load_config
+    from supamem.config import ResolvedConfig, find_project_root, load_config
     from supamem.mcp_server import run_http, run_stdio
 
     root = os.environ.get("SUPAMEM_PROJECT_ROOT", "").strip()
-    cfg_root = Path(root) if root else None
-    cfg, _chain = load_config(cfg_root)
+    env_root_set = bool(root)
+    cfg_root: Path | None = Path(root) if root else None
+    discovered_root: Path | None = None
+    if cfg_root is None:
+        discovered_root = find_project_root()
+        if discovered_root is not None:
+            cfg_root = discovered_root
+    cfg, chain = load_config(cfg_root)
+
+    # Fail loud on stderr (stdout stays JSON-RPC clean) when MCP fell through
+    # to defaults — common when Cursor / Claude Code launch the subprocess from
+    # a cwd that is not the workspace and SUPAMEM_PROJECT_ROOT is unset.
+    if (
+        transport is Transport.stdio
+        and not env_root_set
+        and discovered_root is None
+        and chain.collection == "default"
+        and cfg.collection == ResolvedConfig().collection
+    ):
+        cwd_inspected = Path.cwd()
+        err_console.print(
+            f"[supamem.warn]⚠ supamem mcp-server[/supamem.warn] "
+            f"[supamem.muted]using default collection "
+            f"[supamem.accent]{cfg.collection}[/supamem.accent] — "
+            f"no project config found.[/supamem.muted]"
+        )
+        err_console.print(
+            f"[supamem.muted]  cwd:[/supamem.muted] {cwd_inspected}  "
+            f"[supamem.muted]SUPAMEM_PROJECT_ROOT:[/supamem.muted] unset  "
+            f"[supamem.muted]SUPAMEM_CONFIG:[/supamem.muted] "
+            f"{'set' if os.environ.get('SUPAMEM_CONFIG') else 'unset'}"
+        )
+        err_console.print(
+            "[supamem.muted]  fix: set "
+            "[supamem.accent]SUPAMEM_PROJECT_ROOT=/path/to/workspace[/supamem.accent] "
+            "in the MCP host config (e.g. ~/.cursor/mcp.json) and restart the host.[/supamem.muted]"
+        )
+
     if transport is Transport.stdio:
         run_stdio(cfg)
     elif transport is Transport.http:

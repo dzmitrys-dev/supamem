@@ -333,6 +333,11 @@ Actualiza `~/.config/opencode/opencode.json` y escribe un hook session-start en
 
 </details>
 
+> 🛟 **¿MCP lanzado desde el cwd equivocado?** Algunos hosts (Cursor, ciertos wrappers de IDE) lanzan el subproceso MCP desde `$HOME` en lugar del workspace, lo que hace que supamem caiga a la collection por defecto (`dev_memory_tuned_hybrid`) y devuelva 404 de Qdrant.
+> Define `SUPAMEM_PROJECT_ROOT=/abs/path/to/workspace` en la configuración MCP del host (por ejemplo el bloque `env` de `~/.cursor/mcp.json`, o `~/.claude.json` bajo `mcpServers.supamem.env`).
+> Si no está definida, supamem recorrerá los directorios padre buscando `.supamem/config.toml` o `pyproject.toml` con `[tool.supamem]` — y emitirá una advertencia de una línea en stderr si no encuentra ninguno.
+> Verifícalo con `supamem doctor` desde la raíz del repo: la collection resuelta debe coincidir con la que devuelve `dual_memory_search` desde tu cliente MCP.
+
 ---
 
 ## 🧠 Cómo funciona

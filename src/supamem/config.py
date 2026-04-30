@@ -169,6 +169,53 @@ def _apply_nested(
                 setattr(chain, dst_field, source)
 
 
+def find_project_root(start: Path | None = None) -> Path | None:
+    """Walk parents from ``start`` looking for a supamem-aware project root.
+
+    A directory qualifies if it contains either:
+
+    * ``.supamem/config.toml`` (canonical project config), OR
+    * ``pyproject.toml`` whose parsed contents include a ``[tool.supamem]`` table.
+
+    Used by ``supamem mcp-server`` when ``SUPAMEM_PROJECT_ROOT`` is unset, so MCP
+    hosts that spawn the subprocess from a non-workspace cwd (Cursor, some IDE
+    integrations) can still locate the workspace's ``.supamem/config.toml``.
+
+    Stops at the filesystem root or at ``$HOME`` (whichever comes first) to avoid
+    scanning above the user's home directory. Returns ``None`` if no marker is
+    found. Tradeoff: a parent project further up the tree could be picked up
+    accidentally — that is why ``SUPAMEM_PROJECT_ROOT`` remains the preferred,
+    explicit mechanism.
+    """
+    start = (start or Path.cwd()).resolve()
+    try:
+        home = Path.home().resolve()
+    except (RuntimeError, OSError):
+        home = None
+
+    current = start
+    while True:
+        if (current / ".supamem" / "config.toml").is_file():
+            return current
+        pyproject = current / "pyproject.toml"
+        if pyproject.is_file():
+            try:
+                data = _load_toml(pyproject)
+            except RuntimeError:
+                data = {}
+            if isinstance(data.get("tool"), dict) and isinstance(
+                data["tool"].get("supamem"), dict
+            ):
+                return current
+
+        parent = current.parent
+        if parent == current:
+            return None
+        if home is not None and current == home:
+            return None
+        current = parent
+
+
 def load_config(cwd: Path | None = None) -> tuple[ResolvedConfig, ConfigChain]:
     """Resolve the supamem config for ``cwd`` (defaults to ``Path.cwd()``)."""
     cwd = cwd or Path.cwd()
