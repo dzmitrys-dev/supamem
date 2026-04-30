@@ -143,23 +143,48 @@ def _claude_md_with_import(existing: str) -> str:
     return f"{existing}{glue}\n{block}\n"
 
 
-def install(*, dry_run: bool = False) -> InstallResult:
+def install(*, dry_run: bool = False, scope: str = "project") -> InstallResult:
+    """Install supamem MCP entry + hooks + CLAUDE.md import for Claude Code.
+
+    ``scope`` controls where the MCP entry is written:
+
+    * ``"project"`` (default) — ``<cwd>/.mcp.json`` (committable, team-shared).
+      Per Anthropic docs, project-scope `.mcp.json` is the canonical
+      per-workspace mechanism and is loaded with higher precedence than
+      user-scope. Required for multi-project machines.
+    * ``"user"`` — ``~/.claude.json`` ``mcpServers.supamem`` (legacy global).
+      Last install wins on multi-project machines; kept for users who want
+      supamem available across every project with one collection.
+
+    PreToolUse + SessionStart hooks (``~/.claude/settings.json``) and the
+    CLAUDE.md ``@import`` line are always written user-global — they describe
+    behavior of the user's Claude Code session, not of any single workspace.
+    """
     home = Path.home()
-    claude_json = home / ".claude.json"
+    cwd = Path.cwd()
     settings_json = home / ".claude" / "settings.json"
     claude_md = home / "CLAUDE.md"
+
+    if scope == "project":
+        mcp_target = cwd / ".mcp.json"
+    elif scope == "user":
+        mcp_target = home / ".claude.json"
+    else:
+        raise ValueError(
+            f"claude-code install: unknown scope {scope!r} (expected 'project' or 'user')"
+        )
 
     written: list[Path] = []
     backups: list[Path] = []
     diffs: list[str] = []
 
-    cur = _read_json(claude_json)
-    merged = deep_merge_json(cur, _mcp_overlay(Path.cwd()))
-    res = atomic_write_json(claude_json, merged, dry_run=dry_run)
+    cur = _read_json(mcp_target)
+    merged = deep_merge_json(cur, _mcp_overlay(cwd))
+    res = atomic_write_json(mcp_target, merged, dry_run=dry_run)
     if res.diff:
         diffs.append(res.diff)
     if res.written:
-        written.append(claude_json)
+        written.append(mcp_target)
     if res.backup_path:
         backups.append(res.backup_path)
 
@@ -230,14 +255,25 @@ def _strip_supamem_hook(settings: dict[str, Any]) -> dict[str, Any]:
 
 
 def uninstall() -> int:
+    """Remove supamem from BOTH project and user scopes (defensive).
+
+    Strips ``mcpServers.supamem`` from any of:
+    * ``<cwd>/.mcp.json`` (project scope)
+    * ``~/.claude.json`` (user scope)
+
+    so a single uninstall fully cleans up regardless of which scope the user
+    originally installed with.
+    """
     home = Path.home()
-    claude_json = home / ".claude.json"
+    cwd = Path.cwd()
+    mcp_targets = [cwd / ".mcp.json", home / ".claude.json"]
     settings_json = home / ".claude" / "settings.json"
     claude_md = home / "CLAUDE.md"
 
-    if claude_json.exists():
-        cur = _read_json(claude_json)
-        atomic_write_json(claude_json, _strip_supamem_from_mcp(cur))
+    for target in mcp_targets:
+        if target.exists():
+            cur = _read_json(target)
+            atomic_write_json(target, _strip_supamem_from_mcp(cur))
 
     if settings_json.exists():
         cur = _read_json(settings_json)

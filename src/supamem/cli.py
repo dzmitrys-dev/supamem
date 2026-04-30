@@ -61,6 +61,11 @@ class Client(str, Enum):
     opencode = "opencode"
 
 
+class InstallScope(str, Enum):
+    project = "project"
+    user = "user"
+
+
 @app.command("index")
 def cmd_index(
     target: str = typer.Option("tuned", "--target", help="Retrieval target (e.g. tuned, dense, bm25)."),
@@ -227,11 +232,27 @@ def cmd_evalbench(
 def cmd_install(
     client: Optional[Client] = typer.Option(None, "--client", help="Target client (claude-code, cursor, opencode)."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show planned config patches without applying."),
+    scope: InstallScope = typer.Option(
+        InstallScope.project,
+        "--scope",
+        help=(
+            "Where to write the MCP entry. "
+            "'project' (default): per-workspace (.mcp.json or .cursor/mcp.json) — "
+            "required for multi-project machines. "
+            "'user': global (~/.claude.json or ~/.cursor/mcp.json) — last install wins."
+        ),
+    ),
 ) -> None:
     """Patch a client config to point at supamem."""
     from supamem.install import install as do_install
 
-    raise typer.Exit(do_install(client=client.value if client else None, dry_run=dry_run))
+    raise typer.Exit(
+        do_install(
+            client=client.value if client else None,
+            dry_run=dry_run,
+            scope=scope.value,
+        )
+    )
 
 
 @app.command("uninstall")

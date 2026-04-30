@@ -31,8 +31,21 @@ def _autodetect() -> Optional[str]:
     return candidates[0] if len(candidates) == 1 else None
 
 
-def install(client: Optional[str], *, dry_run: bool = False) -> int:
-    """Install supamem into the named client (or auto-detect)."""
+VALID_SCOPES = ("project", "user")
+
+
+def install(
+    client: Optional[str], *, dry_run: bool = False, scope: str = "project"
+) -> int:
+    """Install supamem into the named client (or auto-detect).
+
+    ``scope`` defaults to ``"project"`` so multi-project machines work without
+    extra flags: each workspace gets its own ``.mcp.json`` / ``.cursor/mcp.json``
+    with the correct ``SUPAMEM_PROJECT_ROOT``. Pass ``scope="user"`` to keep
+    the legacy global behavior (one entry, last install wins).
+
+    ``opencode`` ignores ``scope`` for now — its config layout is global-only.
+    """
     if client is None:
         client = _autodetect()
         if client is None:
@@ -44,6 +57,10 @@ def install(client: Optional[str], *, dry_run: bool = False) -> int:
         err(f"unknown client: {client!r} (valid: {', '.join(VALID_CLIENTS)})")
         return 2
 
+    if scope not in VALID_SCOPES:
+        err(f"unknown scope: {scope!r} (valid: {', '.join(VALID_SCOPES)})")
+        return 2
+
     written = ensure_share_dir()
     if written:
         ok(f"synced {len(written)} share artifact(s)")
@@ -51,14 +68,15 @@ def install(client: Optional[str], *, dry_run: bool = False) -> int:
     if client == "claude-code":
         from supamem.install import claude_code
 
-        result = claude_code.install(dry_run=dry_run)
+        result = claude_code.install(dry_run=dry_run, scope=scope)
     elif client == "cursor":
         from supamem.install import cursor as cursor_install
 
-        result = cursor_install.install(dry_run=dry_run)
+        result = cursor_install.install(dry_run=dry_run, scope=scope)
     elif client == "opencode":
         from supamem.install import opencode
 
+        # opencode is global-only today — ignore scope
         result = opencode.install(dry_run=dry_run)
     else:  # pragma: no cover — VALID_CLIENTS guard above
         return 2

@@ -80,10 +80,30 @@ def _hooks_with_snapshot(existing: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
-def install(*, dry_run: bool = False) -> InstallResult:
+def install(*, dry_run: bool = False, scope: str = "project") -> InstallResult:
+    """Install supamem MCP entry + hooks for Cursor.
+
+    ``scope`` controls where the MCP entry is written:
+
+    * ``"project"`` (default) — ``<cwd>/.cursor/mcp.json``. Per-workspace,
+      project-level wins on conflict per Cursor docs. Required for multi-
+      project machines: each workspace carries its own ``SUPAMEM_PROJECT_ROOT``.
+    * ``"user"`` — ``~/.cursor/mcp.json`` (legacy global). Single-project
+      machines or users who want supamem available everywhere with one
+      collection. Last install wins on multi-project machines.
+
+    Hooks (``.cursor/hooks.json``) and the rules ``.mdc`` are always written
+    project-scoped — they describe per-workspace behavior regardless of where
+    the MCP entry lives.
+    """
     home = Path.home()
     cwd = Path.cwd()
-    mcp_path = home / ".cursor" / "mcp.json"
+    if scope == "project":
+        mcp_path = cwd / ".cursor" / "mcp.json"
+    elif scope == "user":
+        mcp_path = home / ".cursor" / "mcp.json"
+    else:
+        raise ValueError(f"cursor install: unknown scope {scope!r} (expected 'project' or 'user')")
     hooks_path = cwd / ".cursor" / "hooks.json"
     mdc_target = cwd / ".cursor" / "rules" / "dual-memory.mdc"
 
@@ -162,14 +182,21 @@ def _strip_supamem_session_start(hooks: dict[str, Any]) -> dict[str, Any]:
 
 
 def uninstall() -> int:
+    """Remove supamem from BOTH project and user scopes (defensive).
+
+    A user could have run ``supamem install --client cursor`` from multiple
+    machines or with different scope flags over time. Strip from both so a
+    single uninstall fully cleans up.
+    """
     home = Path.home()
     cwd = Path.cwd()
-    mcp_path = home / ".cursor" / "mcp.json"
+    mcp_paths = [cwd / ".cursor" / "mcp.json", home / ".cursor" / "mcp.json"]
     hooks_path = cwd / ".cursor" / "hooks.json"
     mdc_target = cwd / ".cursor" / "rules" / "dual-memory.mdc"
 
-    if mcp_path.exists():
-        atomic_write_json(mcp_path, _strip_supamem_from_mcp(_read_json(mcp_path)))
+    for mcp_path in mcp_paths:
+        if mcp_path.exists():
+            atomic_write_json(mcp_path, _strip_supamem_from_mcp(_read_json(mcp_path)))
     if hooks_path.exists():
         atomic_write_json(hooks_path, _strip_supamem_session_start(_read_json(hooks_path)))
     if mdc_target.exists():

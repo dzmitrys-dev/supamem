@@ -22,23 +22,48 @@ def project(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.Monkey
     return cwd
 
 
-def test_cursor_install_writes_mcp_json(home: Path, project: Path) -> None:
+def test_cursor_install_writes_mcp_json_project_scope_default(
+    home: Path, project: Path
+) -> None:
+    """Default scope is 'project' → write to <cwd>/.cursor/mcp.json (per-workspace)."""
     from supamem.install.cursor import install
 
     install()
+    project_mcp = project / ".cursor" / "mcp.json"
+    assert project_mcp.exists()
+    raw = json.loads(project_mcp.read_text(encoding="utf-8"))
+    assert "supamem" in raw["mcpServers"]
+    # Global file must NOT be touched on project-scope install.
+    assert not (home / ".cursor" / "mcp.json").exists()
+
+
+def test_cursor_install_user_scope_writes_global(home: Path, project: Path) -> None:
+    """scope='user' preserves legacy behavior (write to ~/.cursor/mcp.json)."""
+    from supamem.install.cursor import install
+
+    install(scope="user")
     raw = json.loads((home / ".cursor" / "mcp.json").read_text(encoding="utf-8"))
     assert "supamem" in raw["mcpServers"]
+    # Project-scoped MCP file must NOT exist on user-scope install.
+    assert not (project / ".cursor" / "mcp.json").exists()
+
+
+def test_cursor_install_unknown_scope_raises(home: Path, project: Path) -> None:
+    from supamem.install.cursor import install
+
+    with pytest.raises(ValueError, match="unknown scope"):
+        install(scope="bogus")
 
 
 def test_cursor_install_preserves_sibling_servers(home: Path, project: Path) -> None:
     from supamem.install.cursor import install
 
     pre = {"mcpServers": {"other": {"command": "x"}}}
-    (home / ".cursor").mkdir()
-    (home / ".cursor" / "mcp.json").write_text(json.dumps(pre), encoding="utf-8")
+    (project / ".cursor").mkdir()
+    (project / ".cursor" / "mcp.json").write_text(json.dumps(pre), encoding="utf-8")
 
     install()
-    raw = json.loads((home / ".cursor" / "mcp.json").read_text(encoding="utf-8"))
+    raw = json.loads((project / ".cursor" / "mcp.json").read_text(encoding="utf-8"))
     assert "other" in raw["mcpServers"]
     assert "supamem" in raw["mcpServers"]
 
@@ -79,20 +104,33 @@ def test_cursor_install_dry_run(home: Path, project: Path) -> None:
     from supamem.install.cursor import install
 
     result = install(dry_run=True)
-    assert not (home / ".cursor" / "mcp.json").exists()
+    assert not (project / ".cursor" / "mcp.json").exists()
     assert not (project / ".cursor" / "rules" / "dual-memory.mdc").exists()
     assert result.diff
 
 
-def test_cursor_uninstall_removes_block(home: Path, project: Path) -> None:
+def test_cursor_uninstall_strips_both_scopes(home: Path, project: Path) -> None:
+    """Uninstall must strip supamem from BOTH project and user scopes —
+    user may have installed under either or both at different times."""
     from supamem.install.cursor import install, uninstall
 
-    pre = {"mcpServers": {"other": {"command": "x"}}}
+    # Pre-existing sibling at project scope.
+    (project / ".cursor").mkdir()
+    (project / ".cursor" / "mcp.json").write_text(
+        json.dumps({"mcpServers": {"other": {"command": "x"}}}), encoding="utf-8"
+    )
+    # Pre-existing sibling at user scope.
     (home / ".cursor").mkdir()
-    (home / ".cursor" / "mcp.json").write_text(json.dumps(pre), encoding="utf-8")
+    (home / ".cursor" / "mcp.json").write_text(
+        json.dumps({"mcpServers": {"other-user": {"command": "y"}, "supamem": {"command": "stale"}}}),
+        encoding="utf-8",
+    )
 
-    install()
+    install()  # project scope (default)
     uninstall()
-    raw = json.loads((home / ".cursor" / "mcp.json").read_text(encoding="utf-8"))
-    assert "supamem" not in raw["mcpServers"]
-    assert "other" in raw["mcpServers"]
+    project_raw = json.loads((project / ".cursor" / "mcp.json").read_text(encoding="utf-8"))
+    assert "supamem" not in project_raw.get("mcpServers", {})
+    assert "other" in project_raw["mcpServers"]
+    user_raw = json.loads((home / ".cursor" / "mcp.json").read_text(encoding="utf-8"))
+    assert "supamem" not in user_raw.get("mcpServers", {})
+    assert "other-user" in user_raw["mcpServers"]
