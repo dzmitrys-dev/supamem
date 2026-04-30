@@ -66,6 +66,27 @@ def test_index_runs_failsoft_with_no_sources() -> None:
     )
 
 
+def test_doctor_shows_caps() -> None:
+    """Plan 05-04 Task 01: ``supamem doctor`` surfaces the three cap values + sources.
+
+    Asserts the new "MCP caps" section renders with all three keys and their
+    defaults (25 / 250 / 200) plus a ``[source: ...]`` provenance tag. Subprocess
+    env is pinned by ``_run`` (NO_COLOR=1, TERM=dumb, COLUMNS=200) so Rich color
+    escapes never pollute the assertion strings.
+    """
+    result = _run("doctor")
+    # doctor exits 1 when Qdrant is unreachable (CI / dev without docker up);
+    # the caps section runs unconditionally before that exit, so we don't gate
+    # on returncode here — only on the rendered surface.
+    out = result.stdout
+    assert "MCP caps" in out, f"expected 'MCP caps' section header in output, got: {out!r}"
+    for key in ("max_top_k", "max_query_chars", "max_preview_chars"):
+        assert key in out, f"expected {key!r} in doctor output, got: {out!r}"
+    for default in ("25", "250", "200"):
+        assert default in out, f"expected default {default!r} in doctor output, got: {out!r}"
+    assert "[source:" in out, f"expected provenance tag '[source: ...]' in output, got: {out!r}"
+
+
 def test_version_prints_current() -> None:
     """Test 6: --version prints styled banner with current __version__ + credit line."""
     from supamem import __version__

@@ -140,6 +140,22 @@ def run_doctor(*, redact_secrets: bool = True) -> int:
     # rich's soft_wrap still respects the 80-col default in pytest.
     print(format_chain(cfg, chain, redact_secrets=redact_secrets))
 
+    # ── Section 2b: MCP caps (D-12) ──────────────────────────────────────
+    console.print()
+    console.print("[supamem.brand]MCP caps[/supamem.brand]")
+    ok(
+        f"max_top_k         = {cfg.mcp_caps_max_top_k}  "
+        f"[source: {chain.mcp_caps_max_top_k}]"
+    )
+    ok(
+        f"max_query_chars   = {cfg.mcp_caps_max_query_chars}  "
+        f"[source: {chain.mcp_caps_max_query_chars}]"
+    )
+    ok(
+        f"max_preview_chars = {cfg.mcp_caps_max_preview_chars}  "
+        f"[source: {chain.mcp_caps_max_preview_chars}]"
+    )
+
     # ── Section 3: Installed clients drift ───────────────────────────────
     console.print()
     console.print("[supamem.brand]Installed clients[/supamem.brand]")
