@@ -52,6 +52,11 @@ class ResolvedConfig:
     regress_baseline_recall_at_5: float = 0.60
     regress_baseline_total_tokens: int = 4000
     regress_baseline_p95_latency_ms: int = 500
+    # MCP response caps — Phase 5 D-09 / D-10. Three flat fields populated
+    # from the two-level [supamem.mcp.caps] TOML table via _NESTED_TABLES.
+    mcp_caps_max_top_k: int = 25
+    mcp_caps_max_query_chars: int = 250
+    mcp_caps_max_preview_chars: int = 200
 
 
 @dataclass
@@ -70,6 +75,9 @@ class ConfigChain:
     regress_baseline_recall_at_5: Source = "default"
     regress_baseline_total_tokens: Source = "default"
     regress_baseline_p95_latency_ms: Source = "default"
+    mcp_caps_max_top_k: Source = "default"
+    mcp_caps_max_query_chars: Source = "default"
+    mcp_caps_max_preview_chars: Source = "default"
 
 
 _LEGACY_ENV: dict[str, str] = {
@@ -91,6 +99,17 @@ _NESTED_TABLES: list[tuple[str, dict[str, str]]] = [
         },
     ),
     ("cache", {"cache_dir": "cache_dir"}),
+    # Two-level dotted path: [supamem.mcp.caps] → flat mcp_caps_* fields.
+    # _apply_nested drills through "mcp" then "caps"; _apply_section skips
+    # the FIRST segment ("mcp") in its skip-set to avoid setattr accidents.
+    (
+        "mcp.caps",
+        {
+            "max_top_k": "mcp_caps_max_top_k",
+            "max_query_chars": "mcp_caps_max_query_chars",
+            "max_preview_chars": "mcp_caps_max_preview_chars",
+        },
+    ),
 ]
 
 
@@ -108,10 +127,13 @@ def _apply_section(
     source: Source,
 ) -> None:
     """Apply flat field overrides from a [supamem] / [tool.supamem] section."""
+    # For dotted nested keys (e.g. "mcp.caps") only the FIRST segment
+    # ("mcp") ever appears as a top-level key in the TOML data — skip that.
+    skip_first_segments = {sub.split(".", 1)[0] for sub, _ in _NESTED_TABLES}
     for key, value in section.items():
         if hasattr(cfg, key) and not isinstance(getattr(cfg, key), dict):
-            # skip nested tables (hook/eval/cache) — handled by _apply_nested
-            if key in {sub for sub, _ in _NESTED_TABLES}:
+            # skip nested tables (hook/eval/cache/mcp) — handled by _apply_nested
+            if key in skip_first_segments:
                 continue
             setattr(cfg, key, value)
             setattr(chain, key, source)
@@ -123,9 +145,20 @@ def _apply_nested(
     section: dict[str, Any],
     source: Source,
 ) -> None:
-    """Apply nested [supamem.hook], [supamem.eval], [supamem.cache] tables."""
+    """Apply nested [supamem.hook], [supamem.eval], [supamem.cache], [supamem.mcp.caps] tables.
+
+    A ``sub_key`` containing one or more dots (e.g. ``"mcp.caps"``) is drilled
+    level-by-level through ``section`` via ``dict.get(part, {})``. Single-level
+    keys keep the existing flat behavior. A non-dict at any intermediate level
+    falls through harmlessly (defaults remain in effect).
+    """
     for sub_key, field_map in _NESTED_TABLES:
-        sub = section.get(sub_key, {})
+        sub: Any = section
+        for part in sub_key.split("."):
+            if not isinstance(sub, dict):
+                sub = {}
+                break
+            sub = sub.get(part, {})
         if not isinstance(sub, dict):
             continue
         for src_key, dst_field in field_map.items():
