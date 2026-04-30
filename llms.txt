@@ -45,10 +45,18 @@ installed, AI coding assistants gain persistent semantic memory across projects.
 
 ## MCP tools (v0.1.3)
 
-- `dual_memory_search`: Hybrid (BM25+dense, RRF) retrieval over the project's Qdrant collection. Top-k, latency, summary
+- `dual_memory_search`: Hybrid (BM25+dense, RRF) retrieval over the project's Qdrant collection. Top-k, latency, summary. Response shape (v0.2.0+): each `Chunk` carries `text` (full intact payload) and `preview` (display-only excerpt capped at `mcp.caps.max_preview_chars`); top-level `SearchResult.clamped_to` is set when the server clamped requested `top_k`
 - `dual_memory_write`: Persist agent-authored memory — writes Markdown to `<project>/.claude/insights/_agent/<slug>.md` with YAML frontmatter, immediately upserts into Qdrant (wait=True), idempotent on topic via UUIDv5
-- `qdrant_find` (alias of dual_memory_search): Backward-compat for users coming from upstream `mcp-server-qdrant`
+- `qdrant_find` (alias of dual_memory_search): Backward-compat for users coming from upstream `mcp-server-qdrant`. Inherits the same caps and response shape as the canonical tool (D-17 alias parity)
 - `qdrant_store` (alias of dual_memory_write): Same compat shim. Disable both aliases with `SUPAMEM_QDRANT_ALIASES=0`
+
+## MCP response caps (v0.2.0+)
+
+Server-side hard caps on every retrieval response. Configured under the `[supamem.mcp.caps]` TOML table; surfaced in `supamem doctor` with config-source provenance.
+
+- `mcp.caps.max_top_k` (default: 25) — server silently clamps requested `top_k` to this value; `SearchResult.clamped_to` is populated when clamping fires so callers can detect it
+- `mcp.caps.max_query_chars` (default: 250) — Pydantic `Field(max_length=...)` baked into the tool schema at registration time; queries longer than the cap are rejected with a structured MCP validation error (no silent truncation, no stdout pollution)
+- `mcp.caps.max_preview_chars` (default: 200) — display preview cap on each `Chunk.preview`; the full canonical payload in `Chunk.text` is never truncated
 
 ## Visibility surfaces (v0.1.4+)
 
