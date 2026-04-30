@@ -87,6 +87,7 @@ Format: `🧠 supamem ✓ v0.2.0 · <collection> · <N> chunks · audit <path>` 
 - Health flag — single character right after `supamem`: `✓` healthy / `⚠` qdrant unreachable OR resolved collection is still the shipped default (legacy global-install / wrong-cwd failure mode)
 - Update hint — cache-only read of `update_check.json`; never blocks session-open on network. Healing is NEVER automatic — the banner only signals; run `supamem repair` to act
 - Suppress entirely with `SUPAMEM_BANNER_DISABLE=1`
+- Suppress ONLY the user-visible terminal line (keep injecting context for the model) with `SUPAMEM_BANNER_QUIET=1`. v0.2.1+ emits `systemMessage` (Claude Code) and `user_message` (Cursor forward-compat) alongside `additionalContext` — Claude Code renders `systemMessage` as the `SessionStart:startup says: <line>` row in the terminal. Health flag `⚠` now also fires on per-client install drift detected by `supamem doctor` (managed-block version != running CLI version).
 
 ## Update-check (v0.1.1+)
 

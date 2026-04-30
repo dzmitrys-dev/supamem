@@ -295,7 +295,8 @@ You should see a colorful banner and the credit line. 🎨
 | `SUPAMEM_GATE_DISABLE=1` | Bypass the opt-in claude-code edit-gate for the current session (`--enforce-search` users only). |
 | `SUPAMEM_ADVISORY_DISABLE=1` | Suppress the Cursor `beforeSubmitPrompt` advisory hook. |
 | `SUPAMEM_NO_UPDATE_CHECK=1`, `NO_UPDATE_NOTIFIER=1`, `CI=1` | Suppress the GitHub Releases probe. |
-| `SUPAMEM_BANNER_DISABLE=1` | Suppress the SessionStart one-line banner. |
+| `SUPAMEM_BANNER_DISABLE=1` | Suppress the SessionStart one-line banner entirely (no context injection, no user-visible status). |
+| `SUPAMEM_BANNER_QUIET=1` | Suppress only the **user-visible** terminal status line; keep injecting the banner into Claude Code's `additionalContext` for the model. Use this when you want supamem context loaded but no per-session `SessionStart:supamem says: …` row in your terminal. |
 
 ### SessionStart banner format
 

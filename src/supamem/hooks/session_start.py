@@ -76,7 +76,8 @@ def _probe_health_flag(cfg: ResolvedConfig, points: int | None) -> str:
     * ``"⚠"`` when supamem looks misconfigured for THIS project:
       qdrant unreachable, OR the resolved collection is still the shipped
       default (``dev_memory_tuned_hybrid``) AND no project config was loaded
-      (the legacy global-install failure mode).
+      (the legacy global-install failure mode), OR per-client install drift
+      (a client's managed-block version differs from the running CLI).
     * ``"✓"`` otherwise.
     """
     if points is None:
@@ -86,7 +87,24 @@ def _probe_health_flag(cfg: ResolvedConfig, points: int | None) -> str:
     default_collection = ResolvedConfig().collection
     if cfg.collection == default_collection:
         return "⚠"
+    if _has_install_drift():
+        return "⚠"
     return "✓"
+
+
+def _has_install_drift() -> bool:
+    """True if any installed client's managed-block version differs from the
+    running CLI version (``supamem doctor`` drift signal).
+
+    Cheap: reads small text files; never raises.
+    """
+    try:
+        from supamem.doctor import version_drift_report
+
+        return any(row.get("drift") for row in version_drift_report())
+    except Exception as exc:  # noqa: BLE001 — banner must never fail
+        log.debug("session_start: drift probe failed: %s", exc)
+        return False
 
 
 def _probe_update_hint() -> str | None:
@@ -161,16 +179,40 @@ def _detect_client() -> str:
 
 
 def _emit_payload(banner: str) -> dict[str, Any]:
-    """Dual-format JSON payload that works across Claude Code / Cursor / OpenCode."""
-    return {
+    """Cross-host JSON payload — silent context injection + user-visible status.
+
+    Three keys, three audiences:
+
+    * ``hookSpecificOutput.additionalContext`` (Claude Code) — silent
+      context injection into the model's window. Carries the full banner
+      so the model knows version, collection, chunk count, audit path.
+    * ``additional_context`` (Cursor / OpenCode forks) — snake-case
+      duplicate; harmless on Claude Code (key ignored).
+    * ``systemMessage`` (Claude Code) — the **user-visible** status line.
+      Per Claude Code hooks docs, this field renders as the
+      ``SessionStart:startup says: <line>`` row the user sees in the
+      terminal. Suppressed when ``SUPAMEM_BANNER_QUIET=1``.
+    * ``user_message`` (Cursor) — Cursor docs note this field is
+      "accepted but not enforced" today; we include it for forward-
+      compat once Cursor ships UI for it. No-op on Claude Code.
+
+    The reason ``additionalContext`` and ``systemMessage`` carry the same
+    payload is that both audiences benefit from the same one-liner: the
+    user gets visible confirmation; the model gets context it can cite
+    when answering "what version of supamem am I on?" without a tool call.
+    """
+    payload: dict[str, Any] = {
         "hookSpecificOutput": {
             "hookEventName": "SessionStart",
             "additionalContext": banner,
         },
-        # Snake-case duplicate for Cursor / OpenCode forks that adopted the
-        # older shape. Harmless on Claude Code (key ignored).
         "additional_context": banner,
     }
+    if os.environ.get("SUPAMEM_BANNER_QUIET", "").strip() != "1":
+        payload["systemMessage"] = banner
+        # Cursor future-compat (currently a no-op in Cursor's UI per its docs).
+        payload["user_message"] = banner
+    return payload
 
 
 def run(client: str | None = None, *, config: ResolvedConfig | None = None) -> int:

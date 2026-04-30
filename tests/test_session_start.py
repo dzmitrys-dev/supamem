@@ -36,13 +36,20 @@ def test_build_banner_starts_with_emoji_and_version() -> None:
 
 
 def test_build_banner_health_flag_ok_when_project_collection() -> None:
-    """Custom collection name + reachable qdrant → ✓."""
+    """Custom collection + reachable qdrant + no drift → ✓.
+
+    `_has_install_drift` is mocked so the test's verdict doesn't depend on
+    the developer's real CLAUDE.md / .cursor managed-block versions on the
+    machine running the suite.
+    """
     cfg = ResolvedConfig(collection="proj-coll")
     with patch(
         "supamem.hooks.session_start._probe_collection",
         return_value=("proj-coll", 5),
     ), patch(
         "supamem.hooks.session_start._probe_update_hint", return_value=None
+    ), patch(
+        "supamem.hooks.session_start._has_install_drift", return_value=False
     ):
         banner = build_banner(cfg)
     assert "🧠 supamem ✓ v" in banner
@@ -56,6 +63,22 @@ def test_build_banner_health_flag_warn_on_default_collection() -> None:
         return_value=(cfg.collection, 0),
     ), patch(
         "supamem.hooks.session_start._probe_update_hint", return_value=None
+    ):
+        banner = build_banner(cfg)
+    assert "🧠 supamem ⚠ v" in banner
+
+
+def test_build_banner_health_flag_warn_on_install_drift() -> None:
+    """A client whose managed-block version differs from the running CLI
+    flips the health flag to ⚠ — surfaces ``supamem doctor`` drift in-band."""
+    cfg = ResolvedConfig(collection="proj-coll")
+    with patch(
+        "supamem.hooks.session_start._probe_collection",
+        return_value=("proj-coll", 5),
+    ), patch(
+        "supamem.hooks.session_start._probe_update_hint", return_value=None
+    ), patch(
+        "supamem.hooks.session_start._has_install_drift", return_value=True
     ):
         banner = build_banner(cfg)
     assert "🧠 supamem ⚠ v" in banner
@@ -169,13 +192,35 @@ def test_detect_client_default_when_no_env(monkeypatch: pytest.MonkeyPatch) -> N
 # ── _emit_payload (dual-format JSON) ────────────────────────────────────────
 
 
-def test_emit_payload_has_both_camelcase_and_snakecase_keys() -> None:
+def test_emit_payload_has_both_camelcase_and_snakecase_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("SUPAMEM_BANNER_QUIET", raising=False)
     payload = _emit_payload("hello banner")
-    # Camel for Claude Code
+    # Camel for Claude Code (silent context injection)
     assert payload["hookSpecificOutput"]["hookEventName"] == "SessionStart"
     assert payload["hookSpecificOutput"]["additionalContext"] == "hello banner"
-    # Snake for Cursor / OpenCode forks
+    # Snake for Cursor / OpenCode forks (silent context injection)
     assert payload["additional_context"] == "hello banner"
+    # User-visible status (Claude Code renders systemMessage as the
+    # `SessionStart:startup says: <line>` row in the terminal).
+    assert payload["systemMessage"] == "hello banner"
+    # Cursor forward-compat (Cursor docs note user_message is "accepted but
+    # not enforced" today; harmless on Claude Code).
+    assert payload["user_message"] == "hello banner"
+
+
+def test_emit_payload_quiet_env_suppresses_user_visible_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SUPAMEM_BANNER_QUIET=1 → payload still injects context silently but
+    does NOT emit the user-visible systemMessage / user_message keys."""
+    monkeypatch.setenv("SUPAMEM_BANNER_QUIET", "1")
+    payload = _emit_payload("hello banner")
+    assert payload["hookSpecificOutput"]["additionalContext"] == "hello banner"
+    assert payload["additional_context"] == "hello banner"
+    assert "systemMessage" not in payload
+    assert "user_message" not in payload
 
 
 # ── run (end-to-end) ────────────────────────────────────────────────────────

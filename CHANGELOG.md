@@ -2,6 +2,30 @@
 
 All notable changes to `supamem` will be documented in this file.
 
+## v0.2.1 — unreleased
+
+Patch fixing two v0.2.0 banner gaps that turned out to matter:
+
+### Added
+
+- **User-visible SessionStart banner** — the v0.2.0 banner reached the
+  model via `additionalContext` but was invisible to the user. Adds a
+  `systemMessage` field to the SessionStart hook payload, which Claude
+  Code renders as the `SessionStart:startup says: <line>` row in the
+  terminal (officially documented dual-channel pattern). Cursor
+  `user_message` is included for forward-compat (per Cursor docs the
+  field is "accepted but not enforced" today; will surface once Cursor
+  ships UI for it). Suppress only the user-visible row with
+  `SUPAMEM_BANNER_QUIET=1` (keeps context injection alive for the
+  model). `SUPAMEM_BANNER_DISABLE=1` still kills both channels.
+- **`supamem doctor` install-drift surfaced in the banner** — the
+  health flag now flips to `⚠` when any installed client's managed-
+  block version differs from the running CLI (i.e. you upgraded
+  supamem but a client's CLAUDE.md/.cursor rules still reference the
+  old version). Prompts running `supamem repair` to resync. The drift
+  probe is cheap (small text reads, never raises); banner failures
+  fall back to `✓` rather than blocking session-start.
+
 ## v0.2.0 — 2026-05-01
 
 First milestone of the v0.2.0 token-economy line. Ships server-side hard
