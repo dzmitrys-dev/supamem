@@ -36,4 +36,8 @@ def dispatch(
         from supamem.hooks.gate_edit import run as run_gate
 
         return run_gate()
+    if client == "cursor-advisory":
+        from supamem.hooks.cursor_advisory import run as run_advisory
+
+        return run_advisory()
     raise ValueError(f"supamem: unknown hook client: {client!r}")

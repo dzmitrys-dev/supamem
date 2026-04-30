@@ -45,6 +45,15 @@ SESSION_START_HOOK: dict[str, Any] = {
     ]
 }
 
+ADVISORY_HOOK: dict[str, Any] = {
+    "beforeSubmitPrompt": [
+        {
+            "command": ["supamem", "hook", "cursor-advisory"],
+            "timeout": 5,
+        }
+    ]
+}
+
 
 def _read_json(path: Path) -> dict[str, Any]:
     if not path.exists():
@@ -72,11 +81,30 @@ def _hooks_already_present(existing: dict[str, Any]) -> bool:
     return False
 
 
+def _advisory_already_present(existing: dict[str, Any]) -> bool:
+    for entry in existing.get("beforeSubmitPrompt", []) or []:
+        cmd = entry.get("command", [])
+        if isinstance(cmd, list) and "supamem" in cmd and "cursor-advisory" in cmd:
+            return True
+        if isinstance(cmd, str) and "cursor-advisory" in cmd:
+            return True
+    return False
+
+
 def _hooks_with_snapshot(existing: dict[str, Any]) -> dict[str, Any]:
-    if _hooks_already_present(existing):
-        return existing
+    """Add sessionStart snapshot + beforeSubmitPrompt advisory if absent.
+
+    Each event is gated independently so re-running install picks up only
+    the missing entries — important for users on older installs upgrading
+    in place.
+    """
     merged = json.loads(json.dumps(existing))
-    merged.setdefault("sessionStart", []).extend(SESSION_START_HOOK["sessionStart"])
+    if not _hooks_already_present(merged):
+        merged.setdefault("sessionStart", []).extend(SESSION_START_HOOK["sessionStart"])
+    if not _advisory_already_present(merged):
+        merged.setdefault("beforeSubmitPrompt", []).extend(
+            ADVISORY_HOOK["beforeSubmitPrompt"]
+        )
     return merged
 
 
@@ -165,19 +193,36 @@ def _strip_supamem_from_mcp(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def _strip_supamem_session_start(hooks: dict[str, Any]) -> dict[str, Any]:
+    """Strip BOTH the snapshot sessionStart and advisory beforeSubmitPrompt
+    entries that this installer added. Other entries are preserved."""
     out = json.loads(json.dumps(hooks))
+
     ss = out.get("sessionStart", []) or []
-    cleaned: list[Any] = []
+    cleaned_ss: list[Any] = []
     for entry in ss:
         cmd = entry.get("command", [])
         flat = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
         if "supamem" in flat and "--snapshot" in flat:
             continue
-        cleaned.append(entry)
-    if cleaned:
-        out["sessionStart"] = cleaned
+        cleaned_ss.append(entry)
+    if cleaned_ss:
+        out["sessionStart"] = cleaned_ss
     elif "sessionStart" in out:
         del out["sessionStart"]
+
+    bsp = out.get("beforeSubmitPrompt", []) or []
+    cleaned_bsp: list[Any] = []
+    for entry in bsp:
+        cmd = entry.get("command", [])
+        flat = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
+        if "supamem" in flat and "cursor-advisory" in flat:
+            continue
+        cleaned_bsp.append(entry)
+    if cleaned_bsp:
+        out["beforeSubmitPrompt"] = cleaned_bsp
+    elif "beforeSubmitPrompt" in out:
+        del out["beforeSubmitPrompt"]
+
     return out
 
 
