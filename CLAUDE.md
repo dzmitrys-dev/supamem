@@ -11,6 +11,23 @@ Claude Code instructions for the supamem repository.
 - Use `/systematic-debug` before proposing bug fixes
 - Verify with `uv run pytest` (project root) and `uv run ruff check src tests` before claiming done
 
+## Dual-Memory Tool Use (HARD — eat your own dog food)
+
+This repo SHIPS supamem. If you don't call its MCP tools yourself, end users won't either. Before any of the following, your FIRST action MUST be a `mcp__supamem__dual_memory_search` (or `mcp__supamem__qdrant_find` for semantic-only):
+
+- ANY edit under `src/supamem/` — search first, edit second. No exceptions.
+- Touching retrieval / embedder / chunker / indexer / hooks / installer code
+- Investigating a non-obvious bug, test failure, or surprising behavior
+- Architecture decisions, ADR-shaped questions ("should I rename X?", "where does Y belong?")
+- Before proposing CONTEXT.md decisions during `/gsd-discuss-phase`
+
+Anti-patterns:
+- Searching AFTER editing (the point is to load context BEFORE choosing an approach)
+- Skipping because "I already know" — that mindset is exactly what wastes end-user tokens
+- Calling only the structural side when the question is "why" — semantic memory has the rationale
+
+If the search returns nothing relevant, say so explicitly ("supamem search empty — proceeding from code") so the gap is visible. Drift between this rule and actual behavior is the bug we're trying to fix in v0.2.0.
+
 ## Hard Constraints
 
 - NEVER use bare `print()` — import from `src/supamem/console.py`
