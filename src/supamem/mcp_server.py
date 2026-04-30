@@ -263,6 +263,11 @@ def _register_dual_memory_tool(app: Any, config: ResolvedConfig) -> None:
 
     aliases_enabled = os.environ.get("SUPAMEM_QDRANT_ALIASES", "1").strip() not in ("0", "false", "")
 
+    # Capture cap values ONCE so canonical + alias schemas cannot drift
+    # (D-17 anti-drift; Pitfall 4).
+    max_q = config.mcp_caps_max_query_chars
+    max_k = config.mcp_caps_max_top_k
+
     # ── Read: dual_memory_search (canonical) ────────────────────────────────
     @app.tool(
         name="dual_memory_search",
@@ -272,9 +277,20 @@ def _register_dual_memory_tool(app: Any, config: ResolvedConfig) -> None:
     async def dual_memory_search_tool(  # noqa: ARG001  (FastMCP wraps this)
         query: str = Field(
             "",
-            description="Natural-language question. Hybrid (BM25 + dense) search over project memory.",
+            description=(
+                f"Natural-language question. Hybrid (BM25 + dense) search over "
+                f"project memory. Max {max_q} chars (server enforced)."
+            ),
+            max_length=max_q,
         ),
-        top_k: int = Field(5, description="Max chunks to return (1-10 recommended)."),
+        top_k: int = Field(
+            5,
+            description=(
+                f"Max chunks to return. Server clamps to {max_k}; "
+                f"clamped_to is set in response when this fires."
+            ),
+            ge=1,
+        ),
     ) -> SearchResult:
         return await dual_memory_search(query=query, top_k=top_k, config=config)
 
@@ -344,8 +360,22 @@ def _register_dual_memory_tool(app: Any, config: ResolvedConfig) -> None:
             ),
         )
         async def qdrant_find_alias(  # noqa: ARG001
-            query: str = Field("", description="Search query (alias of dual_memory_search)."),
-            top_k: int = Field(5, description="Max chunks to return."),
+            query: str = Field(
+                "",
+                description=(
+                    f"Search query (alias of dual_memory_search). "
+                    f"Max {max_q} chars (server enforced)."
+                ),
+                max_length=max_q,
+            ),
+            top_k: int = Field(
+                5,
+                description=(
+                    f"Max chunks to return (alias of dual_memory_search). "
+                    f"Server clamps to {max_k}."
+                ),
+                ge=1,
+            ),
         ) -> SearchResult:
             return await dual_memory_search(query=query, top_k=top_k, config=config)
 
