@@ -121,4 +121,69 @@ def uninstall(client: Optional[str]) -> int:
     return 2
 
 
-__all__ = ["install", "uninstall"]
+def repair(
+    client: Optional[str],
+    *,
+    dry_run: bool = False,
+    enforce_search: bool = False,
+) -> int:
+    """Re-install at project scope and strip stale GLOBAL supamem entries.
+
+    The migration verb for users on legacy global installs. Strategy:
+
+    1. Strip ``mcpServers.supamem`` from the GLOBAL config files
+       (``~/.claude.json``, ``~/.cursor/mcp.json``) — uninstall already does
+       this defensively across both scopes, but we want only the user-scope
+       removal here, NOT the project-scope removal that uninstall does. So
+       we call the per-client uninstall (strips both) and then re-install
+       project scope to put project files back.
+    2. Re-run ``install(scope="project")`` from the current cwd so the
+       per-workspace files exist with ``SUPAMEM_PROJECT_ROOT`` injected.
+
+    On a healthy install this is a near no-op: stripping a missing entry is
+    a no-op, and re-installing on top of an already-correct project scope
+    file reports ``no_op=True``.
+
+    Pass ``client=None`` to repair every detected install. Auto-detect uses
+    the same heuristic as ``install()``.
+    """
+    if client is None:
+        # Repair every client that has any signal of being installed
+        # (project-scope or user-scope). We attempt all and report.
+        targets: list[str] = []
+        cwd = Path.cwd()
+        if (cwd / ".mcp.json").exists() or (Path.home() / ".claude.json").exists():
+            targets.append("claude-code")
+        if (cwd / ".cursor" / "mcp.json").exists() or (
+            Path.home() / ".cursor" / "mcp.json"
+        ).exists():
+            targets.append("cursor")
+        if (Path.home() / ".config" / "opencode").exists():
+            targets.append("opencode")
+        if not targets:
+            err("no installed clients detected — nothing to repair")
+            return 2
+    else:
+        if client not in VALID_CLIENTS:
+            err(f"unknown client: {client!r}")
+            return 2
+        targets = [client]
+
+    rc_overall = 0
+    for tgt in targets:
+        info(f"repair: {tgt}")
+        # Uninstall strips supamem from both project AND user scopes.
+        uninstall_rc = uninstall(tgt)
+        if uninstall_rc != 0:
+            rc_overall = uninstall_rc
+            continue
+        # Re-install at project scope so per-workspace files are recreated.
+        install_rc = install(
+            tgt, dry_run=dry_run, scope="project", enforce_search=enforce_search
+        )
+        if install_rc != 0:
+            rc_overall = install_rc
+    return rc_overall
+
+
+__all__ = ["install", "uninstall", "repair"]

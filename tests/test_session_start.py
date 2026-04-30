@@ -24,11 +24,78 @@ def test_build_banner_starts_with_emoji_and_version() -> None:
     with patch(
         "supamem.hooks.session_start._probe_collection",
         return_value=("proj-coll", 0),
+    ), patch(
+        "supamem.hooks.session_start._probe_update_hint", return_value=None
     ):
         banner = build_banner(cfg)
-    assert banner.startswith("🧠 supamem v")
+    # Format includes a single-char health flag between "supamem" and the version.
+    assert banner.startswith("🧠 supamem ")
+    assert " v" in banner
     assert "proj-coll" in banner
     assert "audit" in banner
+
+
+def test_build_banner_health_flag_ok_when_project_collection() -> None:
+    """Custom collection name + reachable qdrant → ✓."""
+    cfg = ResolvedConfig(collection="proj-coll")
+    with patch(
+        "supamem.hooks.session_start._probe_collection",
+        return_value=("proj-coll", 5),
+    ), patch(
+        "supamem.hooks.session_start._probe_update_hint", return_value=None
+    ):
+        banner = build_banner(cfg)
+    assert "🧠 supamem ✓ v" in banner
+
+
+def test_build_banner_health_flag_warn_on_default_collection() -> None:
+    """Resolved collection equals shipped default → no project config loaded → ⚠."""
+    cfg = ResolvedConfig()  # default collection
+    with patch(
+        "supamem.hooks.session_start._probe_collection",
+        return_value=(cfg.collection, 0),
+    ), patch(
+        "supamem.hooks.session_start._probe_update_hint", return_value=None
+    ):
+        banner = build_banner(cfg)
+    assert "🧠 supamem ⚠ v" in banner
+
+
+def test_build_banner_health_flag_warn_on_qdrant_unreachable() -> None:
+    cfg = ResolvedConfig(collection="proj-coll")
+    with patch(
+        "supamem.hooks.session_start._probe_collection",
+        return_value=("proj-coll", None),
+    ), patch(
+        "supamem.hooks.session_start._probe_update_hint", return_value=None
+    ):
+        banner = build_banner(cfg)
+    assert "🧠 supamem ⚠ v" in banner
+
+
+def test_build_banner_appends_update_hint_when_available() -> None:
+    cfg = ResolvedConfig(collection="proj-coll")
+    with patch(
+        "supamem.hooks.session_start._probe_collection",
+        return_value=("proj-coll", 5),
+    ), patch(
+        "supamem.hooks.session_start._probe_update_hint",
+        return_value="update v0.2.0 available",
+    ):
+        banner = build_banner(cfg)
+    assert "update v0.2.0 available" in banner
+
+
+def test_build_banner_omits_update_hint_when_on_latest() -> None:
+    cfg = ResolvedConfig(collection="proj-coll")
+    with patch(
+        "supamem.hooks.session_start._probe_collection",
+        return_value=("proj-coll", 5),
+    ), patch(
+        "supamem.hooks.session_start._probe_update_hint", return_value=None
+    ):
+        banner = build_banner(cfg)
+    assert "update" not in banner
 
 
 def test_build_banner_with_qdrant_unreachable_marks_so() -> None:
@@ -57,9 +124,13 @@ def test_build_banner_with_no_collection_omits_chunk_count() -> None:
     with patch(
         "supamem.hooks.session_start._probe_collection",
         return_value=(None, None),
+    ), patch(
+        "supamem.hooks.session_start._probe_update_hint", return_value=None
     ):
         banner = build_banner(cfg)
-    assert "🧠 supamem v" in banner
+    # Health flag still rendered; the version-prefix substring is present.
+    assert "🧠 supamem " in banner
+    assert " v" in banner
     assert "chunks" not in banner
 
 

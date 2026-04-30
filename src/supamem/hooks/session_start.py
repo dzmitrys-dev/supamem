@@ -70,22 +70,75 @@ def _probe_audit_path() -> Path:
         return Path.home() / ".cache" / "supamem" / "audit.jsonl"
 
 
+def _probe_health_flag(cfg: ResolvedConfig, points: int | None) -> str:
+    """Single-character health indicator for the banner.
+
+    * ``"⚠"`` when supamem looks misconfigured for THIS project:
+      qdrant unreachable, OR the resolved collection is still the shipped
+      default (``dev_memory_tuned_hybrid``) AND no project config was loaded
+      (the legacy global-install failure mode).
+    * ``"✓"`` otherwise.
+    """
+    if points is None:
+        return "⚠"
+    # ResolvedConfig() default collection — see config.py:42. If we're still
+    # on it, no project TOML was loaded.
+    default_collection = ResolvedConfig().collection
+    if cfg.collection == default_collection:
+        return "⚠"
+    return "✓"
+
+
+def _probe_update_hint() -> str | None:
+    """Return ``"update v0.X.Y available"`` if a newer release is cached, else None.
+
+    Cache-only — never touches the network. The background daemon-thread
+    probe in ``update_check`` is what populates the cache asynchronously.
+    """
+    try:
+        from supamem.update_check import doctor_report
+
+        report = doctor_report(__version__)
+        if report.get("update_available") and report.get("cached_latest_version"):
+            return f"update v{report['cached_latest_version']} available"
+    except Exception as exc:  # noqa: BLE001 — banner must never fail
+        log.debug("session_start: update probe failed: %s", exc)
+    return None
+
+
 # ── Banner construction ─────────────────────────────────────────────────────
 
 
 def build_banner(cfg: ResolvedConfig | None = None) -> str:
-    """Compose the one-line banner. Pure function (cfg may be None for tests)."""
+    """Compose the one-line banner. Pure function (cfg may be None for tests).
+
+    Format:
+        🧠 supamem ✓ v0.1.5 · supamem-supamem · 28 chunks · audit /path
+                  ^── health flag (✓ healthy, ⚠ misconfigured/unreachable)
+
+    When a newer release is cached locally (populated by the background
+    update-check daemon), an extra segment is appended:
+        … · update v0.2.0 available
+
+    Length is capped at MAX_BANNER_CHARS (200); the audit path is the first
+    segment dropped if we're at risk of overflow, then the chunk count.
+    """
     cfg = cfg or ResolvedConfig()
     collection, points = _probe_collection(cfg)
     audit = _probe_audit_path()
+    health = _probe_health_flag(cfg, points)
+    update_hint = _probe_update_hint()
 
-    parts = [f"🧠 supamem v{__version__}"]
+    head = f"🧠 supamem {health} v{__version__}"
+    parts = [head]
     if collection:
         if points is None:
             parts.append(f"{collection} (qdrant unreachable)")
         else:
             parts.append(f"{collection} · {points} chunks")
     parts.append(f"audit {audit}")
+    if update_hint:
+        parts.append(update_hint)
 
     banner = " · ".join(parts)
     if len(banner) > MAX_BANNER_CHARS:

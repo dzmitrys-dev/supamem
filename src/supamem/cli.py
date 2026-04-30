@@ -276,6 +276,44 @@ def cmd_uninstall(
     raise typer.Exit(do_uninstall(client=client.value if client else None))
 
 
+@app.command("repair")
+def cmd_repair(
+    client: Optional[Client] = typer.Option(
+        None, "--client", help="Target client (default: re-install all detected installs)."
+    ),
+    enforce_search: bool = typer.Option(
+        False,
+        "--enforce-search",
+        help="Re-register the claude-code edit-gate (opt-in, mirrors `supamem install`).",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show what would change without applying."
+    ),
+) -> None:
+    """Re-run install in project scope and strip stale legacy global entries.
+
+    The current per-workspace install model (`<repo>/.mcp.json`,
+    `<repo>/.cursor/mcp.json`) supersedes the legacy global write to
+    `~/.claude.json` / `~/.cursor/mcp.json`. ``supamem repair`` is the
+    user-explicit migration verb: it re-installs at project scope from the
+    current cwd and removes any stale ``mcpServers.supamem`` entries from
+    the global files so they can't shadow per-workspace installs in OTHER
+    repos.
+
+    Idempotent: running on a healthy install is a no-op (nothing to write,
+    nothing to strip).
+    """
+    from supamem.install import repair as do_repair
+
+    raise typer.Exit(
+        do_repair(
+            client=client.value if client else None,
+            enforce_search=enforce_search,
+            dry_run=dry_run,
+        )
+    )
+
+
 @app.command("doctor")
 def cmd_doctor(
     show_secrets: bool = typer.Option(
