@@ -54,7 +54,14 @@ SECRET_ENV_VARS = ("QDRANT_URL", "QDRANT_API_KEY")
 
 class Chunk(BaseModel):
     score: float = Field(..., description="RRF-fused score from tuned_hybrid retrieval")
-    text: str = Field(..., description="Document excerpt from the chunk")
+    text: str = Field(
+        ...,
+        description="Full canonical chunk payload (intact, never truncated)",
+    )
+    preview: str = Field(
+        "",
+        description="Display-only excerpt, capped at mcp.caps.max_preview_chars",
+    )
     source: str = Field(..., description="Source file path or document identifier")
     file_path: Optional[str] = Field(None, description="Original file path if available")
 
@@ -71,16 +78,40 @@ class SearchResult(BaseModel):
     chunks: list[Chunk] = Field(..., description="Retrieved chunks ranked by score")
     total_tokens: int = Field(..., description="Approx token count across all chunk text")
     latency_ms: int = Field(..., description="Wall-clock retrieval latency")
+    clamped_to: Optional[int] = Field(
+        None,
+        description="Set when server clamped requested top_k (CAPS-03)",
+    )
 
 
-def _build_summary_md(chunk_count: int, total_tokens: int, latency_ms: int) -> str:
-    """One-line Markdown summary surfaced in the tool-call card."""
+def _build_summary_md(
+    chunk_count: int,
+    total_tokens: int,
+    latency_ms: int,
+    *,
+    requested_top_k: Optional[int] = None,
+    clamped_to: Optional[int] = None,
+) -> str:
+    """Multi-line Markdown summary card for the tool-call render (D-14).
+
+    Zero-match render is intentionally unchanged (D-16). When ``clamped_to`` is
+    set alongside ``requested_top_k``, an extra ``⚠️`` line surfaces the clamp
+    so users can raise ``mcp.caps.max_top_k`` if they need more headroom.
+    """
     if chunk_count == 0:
         return f"🧠 **supamem** · no matches · {latency_ms} ms"
-    return (
-        f"🧠 **supamem** · {chunk_count} chunks · {total_tokens} tokens · "
-        f"{latency_ms} ms · _−78% vs naive RAG_"
-    )
+    lines = [
+        "🧠 **supamem** · _Memory Search_",
+        "",
+        f"• **{chunk_count} chunks** · {total_tokens} tokens · {latency_ms} ms",
+        "• _−78% vs naive RAG_",
+    ]
+    if clamped_to is not None and requested_top_k is not None:
+        lines.append(
+            f"⚠️ Clamped `top_k`: {requested_top_k} → {clamped_to} "
+            f"(raise `mcp.caps.max_top_k`)"
+        )
+    return "\n".join(lines)
 
 
 # ---- Error sanitization (T-80.6-05-01) -----------------------------------
