@@ -1,0 +1,13 @@
+{
+  "sessionStart": [
+    {
+      "command": [
+        "supamem",
+        "index",
+        "--snapshot",
+        "cursor"
+      ],
+      "timeout": 60
+    }
+  ]
+}
