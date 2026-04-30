@@ -23,7 +23,7 @@
 {"id": "g23", "query": "marker file for daily-rolled hook coordination", "required_substrings": ["queried"]}
 {"id": "g24", "query": "where do auto-goldens prevent SaaS LLM calls", "required_substrings": ["RuntimeError"]}
 {"id": "g25", "query": "what does derive_query strip drop_tokens for", "required_substrings": ["drop_tokens"]}
-{"id": "g26", "query": "search tool max query length DoS guard", "required_substrings": ["MAX_QUERY_LEN"]}
+{"id": "g26", "query": "search tool max query length cap", "required_substrings": ["mcp_caps_max_query_chars"]}
 {"id": "g27", "query": "summary_md field rendered in tool card", "required_substrings": ["summary_md"]}
 {"id": "g28", "query": "config precedence ladder rungs", "required_substrings": ["env", "supamem_toml"]}
 {"id": "g29", "query": "T-1 markdown header chunker headers list", "required_substrings": ["h1", "h2", "h3"]}

@@ -44,7 +44,6 @@ from supamem.retrieval.types import RetrievedChunk  # noqa: E402
 
 # ---- Constants ------------------------------------------------------------
 
-MAX_QUERY_LEN = 4096
 MAX_FILE_PATH_LEN = 1024
 SECRET_ENV_VARS = ("QDRANT_URL", "QDRANT_API_KEY")
 
@@ -171,16 +170,23 @@ async def dual_memory_search(
     """Hybrid Qdrant retrieval over the configured collection (D-25 lock)."""
     cfg = config or ResolvedConfig()
     q = (query or "").strip()
-    if len(q) > MAX_QUERY_LEN:
-        raise ValueError(f"query too long (>{MAX_QUERY_LEN} chars)")
     if not q:
         raise ValueError("query required")
+    # Query length is enforced at the Pydantic schema boundary
+    # (Field(max_length=cfg.mcp_caps_max_query_chars)) — see
+    # _register_dual_memory_tool. No len() check here (D-07).
+
+    cap = cfg.mcp_caps_max_top_k
+    effective_top_k = min(max(1, top_k), cap)
+    clamped_to: Optional[int] = effective_top_k if top_k > cap else None
 
     backend = _get_backend(cfg)
 
     t0 = time.perf_counter()
     try:
-        hits: list[RetrievedChunk] = await asyncio.to_thread(backend.query, q, top_k)
+        hits: list[RetrievedChunk] = await asyncio.to_thread(
+            backend.query, q, effective_top_k
+        )
     except Exception as exc:  # noqa: BLE001
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
         log.exception("retrieval failed: %s", exc)
@@ -188,15 +194,26 @@ async def dual_memory_search(
         raise RuntimeError(_sanitize_error(exc)) from None
 
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
+    # Defensive: backend may return more than effective_top_k (e.g. mock
+    # backends or future Qdrant versions). Enforce exact count post-call.
+    hits = (hits or [])[:effective_top_k]
+    pcap = cfg.mcp_caps_max_preview_chars
     chunks: list[Chunk] = []
-    for h in hits or []:
+    for h in hits:
         text = (h.text or "").strip()
         if not text:
             continue
+        if len(text) > pcap:
+            # Reserve one codepoint of budget for the ellipsis so the total
+            # preview length remains ≤ pcap (test asserts <=).
+            preview = text[: max(0, pcap - 1)] + "…" if pcap > 0 else ""
+        else:
+            preview = text[:pcap]
         chunks.append(
             Chunk(
                 score=float(h.score or 0.0),
                 text=text,
+                preview=preview,
                 source=h.source_path or h.file_path or "?",
                 file_path=h.file_path,
             )
@@ -208,10 +225,17 @@ async def dual_memory_search(
         elapsed_ms=elapsed_ms,
     )
     return SearchResult(
-        summary_md=_build_summary_md(len(chunks), total_tokens, int(elapsed_ms)),
+        summary_md=_build_summary_md(
+            len(chunks),
+            total_tokens,
+            int(elapsed_ms),
+            requested_top_k=top_k,
+            clamped_to=clamped_to,
+        ),
         chunks=chunks,
         total_tokens=total_tokens,
         latency_ms=int(elapsed_ms),
+        clamped_to=clamped_to,
     )
 
 
