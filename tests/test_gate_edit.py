@@ -87,21 +87,72 @@ def test_deny_when_transcript_missing_on_disk(
     assert "dual_memory_search" in out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_allow_when_transcript_exists_with_placeholder_strategy(
+def _write_transcript(path: Path, entries: list[dict]) -> None:
+    path.write_text(
+        "\n".join(json.dumps(e) for e in entries) + "\n", encoding="utf-8"
+    )
+
+
+def test_deny_when_user_turn_has_no_search(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
 ) -> None:
-    """Placeholder strategy returns True for any non-empty existing transcript.
-
-    REPLACE THIS TEST when the recency-window strategy is locked in: it
-    should construct a transcript without a recent search and assert deny,
-    plus a separate test that includes a recent search and asserts allow.
-    """
+    """Strategy A: user turn → assistant did NOT call search → deny."""
     transcript = tmp_path / "session.jsonl"
-    transcript.write_text(
-        json.dumps({"type": "user", "message": {"content": "hi"}}) + "\n",
-        encoding="utf-8",
+    _write_transcript(
+        transcript,
+        [
+            {"type": "user", "message": {"content": "fix the bug"}},
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {"type": "text", "text": "Sure, let me read the file."},
+                        {
+                            "type": "tool_use",
+                            "name": "Read",
+                            "input": {"file_path": "/foo.py"},
+                        },
+                    ]
+                },
+            },
+        ],
+    )
+    rc, out, _err = _run_with_payload(
+        {"tool_name": "Edit", "transcript_path": str(transcript)},
+        monkeypatch,
+        capsys,
+    )
+    assert rc == 0
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_allow_when_assistant_called_search_after_user(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    """Strategy A: search tool_use found before hitting previous user turn → allow."""
+    transcript = tmp_path / "session.jsonl"
+    _write_transcript(
+        transcript,
+        [
+            {"type": "user", "message": {"content": "fix the bug"}},
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "name": "mcp__supamem__dual_memory_search",
+                            "input": {"query": "auth bug fix"},
+                        }
+                    ]
+                },
+            },
+            {"type": "tool_result", "content": "..."},
+        ],
     )
     rc, out, _err = _run_with_payload(
         {"tool_name": "Edit", "transcript_path": str(transcript)},
@@ -110,6 +161,97 @@ def test_allow_when_transcript_exists_with_placeholder_strategy(
     )
     assert rc == 0
     assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
+
+
+def test_qdrant_find_alias_satisfies_recency(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    """The qdrant_find alias should count as a search."""
+    transcript = tmp_path / "session.jsonl"
+    _write_transcript(
+        transcript,
+        [
+            {"type": "user", "message": {"content": "refactor auth"}},
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "name": "mcp__supamem__qdrant_find",
+                            "input": {"query": "auth"},
+                        }
+                    ]
+                },
+            },
+        ],
+    )
+    rc, out, _err = _run_with_payload(
+        {"tool_name": "Edit", "transcript_path": str(transcript)},
+        monkeypatch,
+        capsys,
+    )
+    assert rc == 0
+    assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
+
+
+def test_deny_when_search_was_in_previous_turn_not_current(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    """Strategy A: search in previous user turn doesn't count for current turn.
+    The walk hits the most-recent user entry first → deny."""
+    transcript = tmp_path / "session.jsonl"
+    _write_transcript(
+        transcript,
+        [
+            {"type": "user", "message": {"content": "first task"}},
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "name": "mcp__supamem__dual_memory_search",
+                            "input": {"query": "first"},
+                        }
+                    ]
+                },
+            },
+            {"type": "user", "message": {"content": "now do something else"}},
+            {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": "ok"}]},
+            },
+        ],
+    )
+    rc, out, _err = _run_with_payload(
+        {"tool_name": "Edit", "transcript_path": str(transcript)},
+        monkeypatch,
+        capsys,
+    )
+    assert rc == 0
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_deny_on_empty_transcript(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    """No user boundary in window → can't prove freshness → deny."""
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text("", encoding="utf-8")
+    rc, out, _err = _run_with_payload(
+        {"tool_name": "Edit", "transcript_path": str(transcript)},
+        monkeypatch,
+        capsys,
+    )
+    assert rc == 0
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 def test_stdout_is_single_json_line(

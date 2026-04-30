@@ -116,43 +116,48 @@ def _scan_transcript_for_recent_search(transcript_path: Path) -> bool:
 
 
 def _recency_satisfied(jsonl_lines: list[bytes]) -> bool:
-    """Walk transcript lines (oldest first within our window) and decide.
+    """Strategy A — STRICT "since last user turn".
 
-    TODO(daisy): RECENCY-WINDOW DESIGN DECISION — please choose ONE strategy.
+    The PreToolUse hook fires before the pending Edit, so the Edit's own
+    tool_use is NOT yet in the transcript. We walk the transcript window
+    from end backward; every assistant entry seen is prior to the pending
+    Edit.
 
-    The transcript is JSONL where each line is one of:
-      - {"type": "user", "message": {...}, ...}
-      - {"type": "assistant", "message": {"content": [{"type": "tool_use",
-            "name": "...", "input": {...}}, ...]}, ...}
-      - {"type": "tool_result", ...}
+    * If we find an assistant tool_use whose ``name`` is in
+      ``_SEARCH_TOOL_NAMES`` before hitting a ``"user"`` entry → allow:
+      the agent searched within this turn.
+    * If we hit a ``"user"`` entry first → deny: this turn has produced no
+      search. The agent must call dual_memory_search before editing.
+    * If we exhaust the window without seeing a user boundary → deny: the
+      256 KB byte cap chopped off the boundary, we can't prove freshness.
+      Agent can override per-session with ``SUPAMEM_GATE_DISABLE=1``.
 
-    Three viable strategies (pick one and implement here, ~5-10 lines):
-
-    A) "since last user turn" — STRICT. Walk lines from end backward; if we
-       hit a search tool_use BEFORE we hit the previous "user" entry, allow.
-       Otherwise deny. Forces a fresh search every time the user gives a new
-       instruction. Risk: feels naggy on iterative back-and-forth edits.
-
-    B) "within last N tool calls" (e.g. N=20) — RELAXED. Count tool_use
-       entries from end; if any of the most recent N is a search, allow.
-       Decouples gating from conversation structure. Risk: a stale search
-       can paper over a topic shift.
-
-    C) "within last X seconds wall-clock" (e.g. X=600) — TIME-WINDOW. Compare
-       transcript line timestamps. Simple. Risk: ignores semantic structure
-       entirely; long-paused sessions get re-prompted.
-
-    Recommended: (A) for hard enforcement aligned with the project CLAUDE.md
-    "search BEFORE choosing an approach" rule. Switch to (B) if it feels too
-    nagging in practice — the gate is opt-in via install flag anyway.
-
-    Until you decide, this returns True (always allow) so the hook is a
-    no-op. Replace the body with one of the strategies above.
+    Aligns with the project CLAUDE.md "search BEFORE choosing an approach"
+    rule. The gate is opt-in via ``--enforce-search`` so users who want
+    strictness self-select.
     """
-    # PLACEHOLDER — see TODO. Returning True keeps the gate inert until the
-    # recency strategy is locked in.
-    _ = jsonl_lines  # silence lint while placeholder lives
-    return True
+    for raw in reversed(jsonl_lines):
+        try:
+            entry = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        etype = entry.get("type")
+        if etype == "user":
+            return False
+        if etype == "assistant":
+            content = entry.get("message", {}).get("content", [])
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if (
+                    isinstance(block, dict)
+                    and block.get("type") == "tool_use"
+                    and block.get("name") in _SEARCH_TOOL_NAMES
+                ):
+                    return True
+    return False
 
 
 def run() -> int:
