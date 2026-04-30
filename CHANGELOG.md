@@ -2,6 +2,75 @@
 
 All notable changes to `supamem` will be documented in this file.
 
+## v0.2.0 — unreleased
+
+First milestone of the v0.2.0 token-economy line. Phase 5 ships server-side
+hard caps on every MCP retrieval response so agents can't blow their context
+budget by accident, and so callers can detect when the server clamped a
+request. No upstream phase dependencies; additive at the schema layer.
+
+### Added
+
+- New `[supamem.mcp.caps]` TOML config table with three keys:
+  - `max_top_k` (default: **25**) — silently clamps requested `top_k` on every
+    retrieval call; the response carries `SearchResult.clamped_to` so callers
+    can detect it.
+  - `max_query_chars` (default: **250**) — enforced via Pydantic
+    `Field(max_length=...)` baked into the MCP tool schema at registration
+    time; over-cap queries fail at the schema boundary as a structured MCP
+    validation error (no silent truncation, no stdout pollution).
+  - `max_preview_chars` (default: **200**) — display preview cap applied to
+    `Chunk.preview` on each hit. The full canonical payload in `Chunk.text`
+    is **never** truncated.
+- New `Chunk.preview: str` field on MCP search responses — display-only
+  excerpt of `Chunk.text`, capped at `max_preview_chars`. Existing
+  `Chunk.text` consumers see byte-identical full payloads (backward-compat).
+- New top-level `SearchResult.clamped_to: Optional[int]` field — set to the
+  effective cap when the server clamped requested `top_k`; `None` otherwise.
+- `summary_md` rendering now includes a `⚠️` warning line on clamp events
+  (D-14): `⚠️ Clamped \`top_k\`: {requested} → {N} (raise mcp.caps.max_top_k)`.
+- `supamem doctor` surfaces all three cap values in a dedicated **MCP caps**
+  section with config-source attribution (`[source: default|user|project]`).
+- `qdrant_find` alias inherits identical caps and response shape via shared
+  closure-captured locals — alias drift is impossible by construction (D-17).
+
+### Changed
+
+- Query-length enforcement is now **config-driven** at the MCP schema
+  boundary. The previous internal `MAX_QUERY_LEN = 4096` constant in
+  `src/supamem/mcp_server.py` has been removed; the cap lives at
+  `cfg.mcp_caps_max_query_chars` and is baked into the tool's JSON Schema
+  at registration time so MCP clients (Cursor, Claude Code) see the limit
+  at tool-discovery time.
+
+### ⚠️ Behavior change — review before upgrading
+
+The default `max_query_chars` is **250**, dramatically lower than the previous
+internal `MAX_QUERY_LEN = 4096`. Agents (or callers) submitting queries longer
+than 250 characters now receive a structured MCP validation error instead of
+the request silently working. If your workflow legitimately needs longer
+queries — long natural-language prompts, embedded code excerpts, paragraph
+seeds — raise the cap explicitly in your project config:
+
+```toml
+# .supamem/config.toml
+[supamem.mcp.caps]
+max_query_chars = 4096  # restore v0.1.x behavior
+```
+
+The new default is calibrated for token economy on small focused queries,
+which is the intended retrieval-key shape. Long contexts belong in the
+ingestion path (write to `dual_memory_write`), not in retrieval queries.
+
+### Notes
+
+- This is one phase of the v0.2.0 milestone; `pyproject.toml` is not bumped
+  here. The version bump lands at the milestone Definition-of-Done point.
+- README.md and the four translations (`README.{zh-CN,es,ja,ru}.md`) are
+  intentionally untouched in this entry per PUB-05: README updates are
+  gated on Phase 13 bench validation so the user-facing narrative ships
+  with measured numbers, not pre-bench claims.
+
 ## v0.1.5 — 2026-04-29
 
 `supamem install --client claude-code` now wires the **SessionStart banner**
