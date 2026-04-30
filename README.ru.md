@@ -331,6 +331,12 @@ supamem install --client opencode
 
 </details>
 
+> ✨ **v0.2.0 — мульти-проектная установка (по умолчанию теперь per-workspace).** `supamem install` теперь по умолчанию пишет в `<repo>/.mcp.json` (project scope для Claude Code) и `<repo>/.cursor/mcp.json` (workspace-scope для Cursor), автоматически инжектируя `SUPAMEM_PROJECT_ROOT`. Миграция с устаревшей глобальной установки: запустите `supamem repair` в каждом supamem-проекте — он удалит устаревшие глобальные записи и переустановит на уровне проекта.
+>
+> Жёсткое требование поиска (opt-in, только Claude Code): `supamem install --client claude-code --enforce-search` регистрирует PreToolUse-гейт, который ОТКЛОНЯЕТ `Edit/Write/MultiEdit`, если в текущем пользовательском ходе не было вызова `mcp__supamem__dual_memory_search`. Локальный обход на сессию: `SUPAMEM_GATE_DISABLE=1`. У Cursor API хуков пока нет fail-closed события до редактирования — вместо этого мы внедряем `agentMessage`-подсказку через `beforeSubmitPrompt`; отключается через `SUPAMEM_ADVISORY_DISABLE=1`.
+>
+> SessionStart-баннер теперь начинается с одно-символьного флага здоровья (`✓` / `⚠`) и добавляет `update v0.X.Y available`, когда фоновый update-check кешировал новый релиз.
+
 > 🛟 **MCP запущен из неправильного cwd?** Некоторые хосты (Cursor, отдельные IDE-обёртки) запускают MCP-подпроцесс из `$HOME`, а не из рабочей области — supamem откатывается к коллекции по умолчанию (`dev_memory_tuned_hybrid`) и получает 404 от Qdrant.
 > Задайте `SUPAMEM_PROJECT_ROOT=/abs/path/to/workspace` в MCP-конфиге хоста (например, в блоке `env` файла `~/.cursor/mcp.json` или в `~/.claude.json` под `mcpServers.supamem.env`).
 > Если переменная не задана, supamem пройдёт вверх по родительским каталогам в поисках `.supamem/config.toml` или `pyproject.toml` с `[tool.supamem]` — и выведет однострочное предупреждение в stderr, если ничего не найдёт.

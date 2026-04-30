@@ -326,6 +326,12 @@ supamem install --client opencode
 
 </details>
 
+> ✨ **v0.2.0 — マルチプロジェクト対応(デフォルトがワークスペース単位に変更)。** `supamem install` は既定で `<repo>/.mcp.json`(Claude Code のプロジェクトスコープ)および `<repo>/.cursor/mcp.json`(Cursor のワークスペース)に書き込み、`SUPAMEM_PROJECT_ROOT` を自動注入します。レガシーなグローバルインストールからの移行は、各 supamem プロジェクトで `supamem repair` を実行 —— 古いグローバル設定を削除し、プロジェクトスコープで再インストールします。
+>
+> 検索強制ゲート(オプトイン、Claude Code のみ): `supamem install --client claude-code --enforce-search` は PreToolUse ゲートを登録し、現在のユーザーターン内に `mcp__supamem__dual_memory_search` の呼び出しがない `Edit/Write/MultiEdit` を拒否します。セッション内で一時的に無効化: `SUPAMEM_GATE_DISABLE=1`。Cursor の hooks API には fail-closed なプリエディットイベントが未だ無いため、`beforeSubmitPrompt` で `agentMessage` のアドバイザリーを注入します; `SUPAMEM_ADVISORY_DISABLE=1` で無効化できます。
+>
+> SessionStart バナーは 1 文字のヘルスフラグ(`✓` / `⚠`)を先頭に表示し、ローカルキャッシュに新バージョンが検出された場合は `update v0.X.Y available` を末尾に追加します。
+
 > 🛟 **MCP が間違った cwd から起動されている?** 一部のホスト(Cursor、特定の IDE ラッパー)はワークスペースではなく `$HOME` から MCP サブプロセスを起動するため、supamem はデフォルトの collection(`dev_memory_tuned_hybrid`)にフォールバックし Qdrant が 404 を返します。
 > ホストの MCP 設定(例: `~/.cursor/mcp.json` の `env` ブロック、または `~/.claude.json` の `mcpServers.supamem.env`)に `SUPAMEM_PROJECT_ROOT=/abs/path/to/workspace` を設定してください。
 > 未設定の場合、supamem は親ディレクトリを遡って `.supamem/config.toml` または `pyproject.toml` の `[tool.supamem]` を探し、見つからなければ stderr に 1 行の警告を出力します。

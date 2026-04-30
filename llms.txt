@@ -32,7 +32,8 @@ installed, AI coding assistants gain persistent semantic memory across projects.
 ## CLI commands
 
 - [supamem init](README.md#cli-surface): Greenfield bootstrap — probes Qdrant, creates collection, writes `.supamem/config.toml`
-- [supamem install](README.md#wiring-into-your-client): Patch a client config (claude-code, cursor, opencode) — atomic with backup
+- [supamem install](README.md#wiring-into-your-client): Patch a client config (claude-code, cursor, opencode) — atomic with backup. `--scope project` (default, per-workspace `.mcp.json` / `.cursor/mcp.json`) or `--scope user` (legacy global). `--enforce-search` (claude-code only) registers the opt-in PreToolUse edit-gate.
+- [supamem repair](README.md#cli-surface): Migrate from legacy global install to per-workspace files. Strips stale globals, re-installs at project scope. Idempotent. (v0.2.0+)
 - [supamem index](README.md#cli-surface): Embed dev memories into Qdrant using the locked tuned-hybrid pipeline (D-25)
 - [supamem mcp-server](README.md#cli-surface): Run the MCP server over stdio (default) or HTTP
 - [supamem hook](README.md#cli-surface): Per-client session/edit hooks called by the client itself
@@ -67,10 +68,25 @@ Server-side hard caps on every retrieval response. Configured under the `[supame
 
 stdio MCP servers are often launched by hosts (Cursor, IDE wrappers) from a cwd that is NOT the workspace, which silently drops supamem to the default collection (`dev_memory_tuned_hybrid`) and produces Qdrant 404s when callers query the project's actual collection.
 
-- `SUPAMEM_PROJECT_ROOT` (env var) — preferred, explicit. Set in the host's MCP `env` block (`~/.cursor/mcp.json`, `~/.claude.json` under `mcpServers.supamem.env`) so the subprocess locates `.supamem/config.toml` regardless of cwd
+- `SUPAMEM_PROJECT_ROOT` (env var) — preferred, explicit. Auto-injected by `supamem install --scope project` into `<repo>/.mcp.json` (Claude Code) and `<repo>/.cursor/mcp.json` (Cursor) so the subprocess locates `.supamem/config.toml` regardless of cwd
 - Parent-walk fallback — when the env var is unset, supamem walks parents from `Path.cwd()` looking for `.supamem/config.toml` or `pyproject.toml [tool.supamem]`. Stops at filesystem root or `$HOME` to avoid scanning above the user's home
 - Stderr fallthrough warning — when neither the env var nor the parent-walk locate a project marker AND the resolved collection is still the shipped default, `supamem mcp-server --transport stdio` emits a one-line stderr warning (cwd inspected, env var presence — never values, fix command). Stdout stays JSON-RPC clean
 - Verify with `supamem doctor` from the repo root: the resolved collection must match what the MCP client returns from `dual_memory_search`
+
+## Multi-project install + agent-discipline hooks (v0.2.0+)
+
+- **Per-workspace install is the default** as of v0.2.0. `supamem install --client claude-code` writes to `<repo>/.mcp.json` (Anthropic project-scope MCP file, takes precedence over user-scope per docs). `supamem install --client cursor` writes to `<repo>/.cursor/mcp.json` (Cursor per-workspace, project-level wins on conflict). Use `--scope user` to keep legacy global writes (last install wins on multi-project machines).
+- **`supamem repair`** is the migration verb for users on legacy global installs. Strips supamem from BOTH project AND user scopes (defensive uninstall) then re-installs at project scope from current cwd. Idempotent. Auto-detects clients when `--client` omitted. Forwards `--enforce-search`.
+- **Claude Code edit-gate hook** (`supamem hook claude-code-gate`, opt-in via `supamem install --enforce-search`). Registers a PreToolUse `Edit|Write|MultiEdit` matcher that DENIES the tool call when no `mcp__supamem__dual_memory_search` (or `qdrant_find` alias) is logged in the session transcript since the last user turn (strategy A — strict per-turn). Reverse-scans the transcript JSONL with a 256 KB byte cap; emits Anthropic's `permissionDecision: deny` JSON contract on stdout. Override per-session with `SUPAMEM_GATE_DISABLE=1`.
+- **Cursor `beforeSubmitPrompt` advisory hook** (`supamem hook cursor-advisory`). Cursor 1.7's hooks API has no fail-closed pre-edit event, so this is advisory-only: when the user's prompt looks edit-bound (regex over `fix|refactor|rename|implement|add|...`), emit `{"continue": true, "permission": "allow", "agentMessage": "..."}` reminding the agent to call `dual_memory_search` first. Override with `SUPAMEM_ADVISORY_DISABLE=1`. Auto-installed by Cursor installer alongside the existing sessionStart snapshot.
+
+## SessionStart banner (v0.2.0 enriched)
+
+Format: `🧠 supamem ✓ v0.2.0 · <collection> · <N> chunks · audit <path>` (additional `· update v0.X.Y available` segment when `update_check` cache reports a newer release).
+
+- Health flag — single character right after `supamem`: `✓` healthy / `⚠` qdrant unreachable OR resolved collection is still the shipped default (legacy global-install / wrong-cwd failure mode)
+- Update hint — cache-only read of `update_check.json`; never blocks session-open on network. Healing is NEVER automatic — the banner only signals; run `supamem repair` to act
+- Suppress entirely with `SUPAMEM_BANNER_DISABLE=1`
 
 ## Update-check (v0.1.1+)
 

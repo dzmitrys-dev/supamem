@@ -23,3 +23,6 @@ HANDOFF-*.md
 # runs supamem locally on this repo they shouldn't leak into the package)
 .supamem/
 .claude/insights/_agent/
+
+# supamem installer atomic-write backups (never commit; user-private)
+*.bak.*

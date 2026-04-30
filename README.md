@@ -274,7 +274,8 @@ You should see a colorful banner and the credit line. 🎨
 | Command | Purpose |
 |---------|---------|
 | `supamem init` | Greenfield bootstrap — probes Qdrant, creates collection, writes `.supamem/config.toml` |
-| `supamem install --client <name>` | Patch a client config (`claude-code`, `cursor`, `opencode`) — atomic with backup |
+| `supamem install --client <name>` | Patch a client config (`claude-code`, `cursor`, `opencode`) — atomic with backup. Defaults to `--scope project` (per-workspace files); pass `--scope user` for legacy global behavior. Pass `--enforce-search` (claude-code only) to wire the opt-in edit-gate hook. |
+| `supamem repair` | 🩹 Migrate from legacy global install to per-workspace files. Strips stale `mcpServers.supamem` from globals and re-installs at project scope from the current cwd. Idempotent. |
 | `supamem index` | Embed dev memories into Qdrant using the locked tuned-hybrid pipeline (D-25) |
 | `supamem mcp-server` | Run the MCP server (`--transport stdio` default; `--transport http` for HTTP) |
 | `supamem hook <client>` | Per-client session/edit hooks (called by the client itself) |
@@ -283,7 +284,31 @@ You should see a colorful banner and the credit line. 🎨
 | `supamem live` | 👀 Live dashboard tailing the audit JSONL — pipe-safe (plain JSONL when not a TTY); handles rotation, resize, Ctrl-C |
 | `supamem migrate` | Brownfield migration from a pre-existing `dev_memory` collection |
 | `supamem eval` | Run the regression harness against the bundled 33-query golden corpus |
-| `supamem uninstall --client <name>` | Reverse `supamem install` cleanly |
+| `supamem uninstall --client <name>` | Reverse `supamem install` cleanly. Strips supamem from BOTH project and user scopes. |
+
+### Environment variables
+
+| Var | Purpose |
+|-----|---------|
+| `SUPAMEM_PROJECT_ROOT` | Absolute path to the workspace. Honored first by `mcp-server` for project resolution; injected automatically by `supamem install --scope project` so MCP hosts that launch the subprocess from the wrong cwd still resolve the right collection. |
+| `SUPAMEM_CONFIG` | Explicit TOML path overriding all discovery. Highest precedence. |
+| `SUPAMEM_GATE_DISABLE=1` | Bypass the opt-in claude-code edit-gate for the current session (`--enforce-search` users only). |
+| `SUPAMEM_ADVISORY_DISABLE=1` | Suppress the Cursor `beforeSubmitPrompt` advisory hook. |
+| `SUPAMEM_NO_UPDATE_CHECK=1`, `NO_UPDATE_NOTIFIER=1`, `CI=1` | Suppress the GitHub Releases probe. |
+| `SUPAMEM_BANNER_DISABLE=1` | Suppress the SessionStart one-line banner. |
+
+### SessionStart banner format
+
+Every supported client emits a one-line status at session open:
+
+```
+🧠 supamem ✓ v0.2.0 · supamem-myproject · 412 chunks · audit /home/me/.cache/supamem/audit.jsonl
+          ^── health flag (✓ healthy / ⚠ misconfigured or qdrant unreachable)
+```
+
+When a newer release is locally cached by the background update probe, an
+`update v0.X.Y available` segment is appended. Healing is never automatic —
+the banner only signals; run `supamem repair` to act.
 
 Every long-running command shows a **live spinner** with elapsed time so you always know it's
 working. Use `--help` on any subcommand for details.
@@ -296,11 +321,17 @@ working. Use `--help` on any subcommand for details.
 <summary><b>Claude Code</b></summary>
 
 ```bash
-supamem install --client claude-code
+supamem install --client claude-code              # default: --scope project (per-workspace .mcp.json)
+supamem install --client claude-code --scope user  # legacy global install in ~/.claude.json
+supamem install --client claude-code --enforce-search  # also register the opt-in edit-gate
 ```
 
-Adds an entry to `~/.claude.json` under `mcpServers` and registers a session-start hook under
-`~/.claude/hooks/`. Preview without applying with `--dry-run`.
+Default writes `<repo>/.mcp.json` (project-scope, committable; takes precedence over user-scope
+per Anthropic MCP docs). Always registers the SessionStart banner + injection hook in
+`~/.claude/settings.json`. With `--enforce-search`, also registers a PreToolUse gate that
+DENIES `Edit|Write|MultiEdit` when no `mcp__supamem__dual_memory_search` is found in the
+session transcript since the last user turn — override per-session with
+`SUPAMEM_GATE_DISABLE=1`. Preview any command with `--dry-run`.
 
 </details>
 
@@ -308,10 +339,16 @@ Adds an entry to `~/.claude.json` under `mcpServers` and registers a session-sta
 <summary><b>Cursor</b></summary>
 
 ```bash
-supamem install --client cursor
+supamem install --client cursor              # default: --scope project (<repo>/.cursor/mcp.json)
+supamem install --client cursor --scope user  # legacy global install in ~/.cursor/mcp.json
 ```
 
-Patches `.cursor/mcp.json` and writes `.cursor/rules/dual-memory.mdc`.
+Default writes `<repo>/.cursor/mcp.json` (per-workspace; project-level wins on conflict per
+Cursor docs). Always writes `<repo>/.cursor/rules/dual-memory.mdc` and registers a
+sessionStart snapshot hook + a `beforeSubmitPrompt` advisory in `<repo>/.cursor/hooks.json`.
+The advisory injects an `agentMessage` reminder when the user's prompt looks edit-bound;
+suppress with `SUPAMEM_ADVISORY_DISABLE=1`. (Cursor's hooks API doesn't yet support a
+fail-closed pre-edit event — the advisory is the strongest available nudge.)
 
 </details>
 

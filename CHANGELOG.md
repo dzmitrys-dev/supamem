@@ -2,12 +2,13 @@
 
 All notable changes to `supamem` will be documented in this file.
 
-## v0.2.0 — unreleased
+## v0.2.0 — 2026-05-01
 
-First milestone of the v0.2.0 token-economy line. Phase 5 ships server-side
-hard caps on every MCP retrieval response so agents can't blow their context
-budget by accident, and so callers can detect when the server clamped a
-request. No upstream phase dependencies; additive at the schema layer.
+First milestone of the v0.2.0 token-economy line. Ships server-side hard
+caps on every MCP retrieval response (Phase 5), the multi-project install
+fix and `supamem repair` migration verb, agent-discipline hooks
+(claude-code edit-gate + Cursor advisory), and the SessionStart banner
+enrichment. See the **Behavior change** notes below — review before upgrading.
 
 ### Added
 
@@ -70,6 +71,75 @@ ingestion path (write to `dual_memory_write`), not in retrieval queries.
   intentionally untouched in this entry per PUB-05: README updates are
   gated on Phase 13 bench validation so the user-facing narrative ships
   with measured numbers, not pre-bench claims.
+
+---
+
+### Added — multi-project install + agent-discipline hooks (2026-05-01)
+
+Closes the silent wrong-collection bug on multi-project machines and lands
+the `--enforce-search` opt-in gate that turns the project's "search BEFORE
+choosing an approach" rule from advisory into mechanical.
+
+- **Per-workspace install is now the default.** `supamem install` writes
+  to `<repo>/.mcp.json` (Claude Code project scope, per Anthropic docs)
+  and `<repo>/.cursor/mcp.json` (Cursor per-workspace path). Each
+  per-workspace file carries an explicit `SUPAMEM_PROJECT_ROOT` env
+  pointing to the install-time cwd. Pass `--scope user` to keep the
+  legacy global write to `~/.claude.json` / `~/.cursor/mcp.json`.
+- **Defense-in-depth project-root resolution** in `cmd_mcp_server`:
+  honor `SUPAMEM_PROJECT_ROOT` first, then walk parents from `Path.cwd()`
+  for `.supamem/config.toml` or `pyproject.toml [tool.supamem]` (stops
+  at `$HOME` / filesystem root). Both miss + collection still default →
+  one-line stderr warning naming cwd, env-var presence (never values),
+  and the fix command. Stdout stays JSON-RPC clean.
+- **`supamem repair` verb** — migrates a user from legacy global install
+  to per-workspace files in one command. Strips stale supamem entries
+  from globals, re-installs at project scope. Auto-detects clients;
+  idempotent on a healthy install. Forwards `--enforce-search`.
+- **Claude Code edit-gate hook** (`--enforce-search` on install).
+  Registers a PreToolUse `Edit|Write|MultiEdit` matcher that DENIES the
+  tool call when no `mcp__supamem__dual_memory_search` (or `qdrant_find`
+  alias) is found in the session transcript since the last user turn
+  (strategy A — strict per-turn). Emits Anthropic's
+  `permissionDecision: deny` JSON contract on stdout; reverse-scans the
+  transcript with a 256 KB byte cap. Override per-session with
+  `SUPAMEM_GATE_DISABLE=1`.
+- **Cursor `beforeSubmitPrompt` advisory hook** — Cursor 1.7's hooks API
+  has no fail-closed pre-edit event, so this is advisory-only: when the
+  user's prompt looks edit-bound (regex over fix/refactor/rename/...),
+  inject an `agentMessage` reminding the agent to call
+  `dual_memory_search` first. Override with `SUPAMEM_ADVISORY_DISABLE=1`.
+- **SessionStart banner enrichment** — banner now leads with a 1-char
+  health flag (`✓` healthy / `⚠` qdrant unreachable or default
+  collection still in effect) and appends `update v0.X.Y available`
+  when the existing `update_check` daemon has cached a newer release.
+  No auto-heal — surfacing only.
+
+### Changed — multi-project install (2026-05-01)
+
+- `supamem install --client claude-code` no longer writes to
+  `~/.claude.json` `mcpServers.supamem` by default. The new default is
+  `<repo>/.mcp.json` (project scope). Behavioral migration path:
+  `supamem repair` (recommended) or pass `--scope user` to keep legacy.
+- `supamem install --client cursor` no longer writes the MCP entry to
+  `~/.cursor/mcp.json` by default. New default: `<repo>/.cursor/mcp.json`.
+- `supamem uninstall --client {claude-code,cursor}` is now defensive:
+  strips supamem from BOTH project and user scopes regardless of which
+  scope the user originally installed with.
+
+### ⚠️ Behavior change — review before upgrading (2026-05-01)
+
+If you previously ran `supamem install` from inside a workspace, you
+likely have a `mcpServers.supamem` entry in `~/.claude.json` and
+possibly `~/.cursor/mcp.json`. After upgrading, the **per-workspace
+files take precedence** in their respective workspaces, but the stale
+global entry will be used by hosts opened in a directory that has no
+per-workspace file — and that entry has no `SUPAMEM_PROJECT_ROOT`, so
+it'll silently fall through to the default collection
+(`dev_memory_tuned_hybrid`).
+
+Recommended: run `supamem repair` from each of your supamem-enabled
+workspaces. It strips the stale globals and re-installs per-workspace.
 
 ## v0.1.5 — 2026-04-29
 

@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "supamem": {
+      "command": "supamem",
+      "args": [
+        "mcp-server",
+        "--transport",
+        "stdio"
+      ],
+      "env": {
+        "DM_MCP_SOURCE": "mcp_cursor",
+        "SUPAMEM_PROJECT_ROOT": "/home/dzmitry/Coding/supamem"
+      }
+    }
+  }
+}

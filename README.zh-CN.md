@@ -325,6 +325,12 @@ supamem install --client opencode
 
 </details>
 
+> ✨ **v0.2.0 — 多项目安装(默认改为按工作区写入)。** `supamem install` 默认写入 `<repo>/.mcp.json`(Claude Code 项目作用域)和 `<repo>/.cursor/mcp.json`(Cursor 工作区作用域),并自动注入 `SUPAMEM_PROJECT_ROOT`。从旧版全局安装迁移:在每个 supamem 项目运行 `supamem repair` —— 它会清除全局陈旧条目并按项目作用域重新安装。
+>
+> 启用强制搜索门(可选,仅 Claude Code):`supamem install --client claude-code --enforce-search` 会注册一个 PreToolUse 门,在当前用户回合内未调用 `mcp__supamem__dual_memory_search` 时拒绝 `Edit/Write/MultiEdit`。每会话临时绕过:`SUPAMEM_GATE_DISABLE=1`。Cursor 的 hooks API 目前不支持失败关闭式预编辑事件 —— 改为通过 `beforeSubmitPrompt` 注入建议消息;通过 `SUPAMEM_ADVISORY_DISABLE=1` 关闭。
+>
+> 会话开始横幅现在带 1 字符健康标志(`✓` / `⚠`)并在本地缓存检测到新版本时附加 `update v0.X.Y available`。
+
 > 🛟 **MCP 从错误的 cwd 启动?** 某些宿主(Cursor、部分 IDE 封装器)会从 `$HOME` 而非工作区启动 MCP 子进程,导致 supamem 回退到默认 collection(`dev_memory_tuned_hybrid`)并返回 Qdrant 404。
 > 在宿主的 MCP 配置中设置 `SUPAMEM_PROJECT_ROOT=/abs/path/to/workspace`(例如 `~/.cursor/mcp.json` 的 `env` 块,或 `~/.claude.json` 中 `mcpServers.supamem.env`)。
 > 若未设置,supamem 会向上搜索父目录查找 `.supamem/config.toml` 或 `pyproject.toml` 的 `[tool.supamem]`,找不到时会在 stderr 输出一行警告。

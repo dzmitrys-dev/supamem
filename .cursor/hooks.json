@@ -9,5 +9,15 @@
       ],
       "timeout": 60
     }
+  ],
+  "beforeSubmitPrompt": [
+    {
+      "command": [
+        "supamem",
+        "hook",
+        "cursor-advisory"
+      ],
+      "timeout": 5
+    }
   ]
 }
