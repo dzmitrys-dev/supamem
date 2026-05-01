@@ -4,13 +4,20 @@ Locks the R-04 additive shape: per-message dedupe is keyed by
 ``(session_uuid, message_uuid, content_hash)`` under a top-level
 ``__transcripts__`` key in the same JSON manifest. Existing file-keyed
 entries roundtrip byte-stable.
+
+Task 3 adds end-to-end append-only and modified-message integration tests.
 """
 from __future__ import annotations
 
 import json
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import MagicMock
 
+import pytest
+
+from supamem.config import ResolvedConfig
+from supamem.indexer import run_index
 from supamem.indexer.manifest import Manifest
 
 
@@ -123,3 +130,129 @@ def test_double_underscore_namespace_does_not_collide(tmp_path: Path) -> None:
     assert "/doc.md" in m.entries
     assert "__future_thing__" not in m.entries
     assert m.transcripts == {"s1": {"m1": {"content_hash": "h", "indexed_at": "x"}}}
+
+
+# ───── End-to-end append-only integration (Task 3, D-25, INGEST-04) ────────
+
+
+_FIXTURE = Path(__file__).parent / "fixtures" / "transcripts" / "simple_session.jsonl"
+
+
+def _wire_index_mocks(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    fake_client = MagicMock()
+    fake_client.get_collections.return_value = MagicMock(collections=[])
+    fake_dense = MagicMock()
+    fake_dense.embed = lambda batch: iter([[0.1] * 384 for _ in batch])
+
+    class _SparseVec:
+        def __init__(self) -> None:
+            self.indices = [1, 2, 3]
+            self.values = [0.5, 0.4, 0.3]
+
+    fake_sparse = MagicMock()
+    fake_sparse.embed = lambda batch: iter([_SparseVec() for _ in batch])
+
+    import supamem.indexer as indexer_mod
+
+    monkeypatch.setattr(
+        indexer_mod, "QdrantClient", lambda *a, **k: fake_client, raising=False
+    )
+    monkeypatch.setattr(
+        indexer_mod, "build_dense_embedder", lambda *a, **k: fake_dense, raising=False
+    )
+    monkeypatch.setattr(
+        indexer_mod, "build_sparse_embedder", lambda *a, **k: fake_sparse, raising=False
+    )
+    return fake_client
+
+
+def _append_pair(jsonl: Path, user_uuid: str, parent: str, asst_uuid: str) -> None:
+    """Append a synthetic Q+A pair that mirrors the simple_session shape."""
+    new_user = (
+        '{"type":"user","uuid":"' + user_uuid + '","parentUuid":"' + parent
+        + '","sessionId":"s1","timestamp":"2026-01-02T00:00:00Z","cwd":"/tmp",'
+        '"version":"1.5.0","gitBranch":"main","isSidechain":false,'
+        '"userType":"external","message":{"role":"user","content":"new question"}}'
+    )
+    new_asst = (
+        '{"type":"assistant","uuid":"' + asst_uuid + '","parentUuid":"' + user_uuid
+        + '","sessionId":"s1","timestamp":"2026-01-02T00:00:01Z","cwd":"/tmp",'
+        '"version":"1.5.0","gitBranch":"main","isSidechain":false,'
+        '"userType":"external","message":{"role":"assistant",'
+        '"content":[{"type":"text","text":"new answer"}]}}'
+    )
+    with jsonl.open("a", encoding="utf-8") as fh:
+        fh.write(new_user + "\n")
+        fh.write(new_asst + "\n")
+
+
+def test_append_only_new_chunks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Append one Q+A pair → only 1 new ChunkRecord upserted; existing skipped."""
+    jsonl = tmp_path / "session.jsonl"
+    jsonl.write_text(_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+    fake_client = _wire_index_mocks(monkeypatch)
+
+    cfg = ResolvedConfig(
+        sources=[str(jsonl)], cache_dir=str(tmp_path / "cache"), collection="t"
+    )
+
+    rc1 = run_index(target="tuned", force=False, sources=[str(jsonl)], config=cfg)
+    assert rc1 == 0
+    first_points = sum(
+        len(call.kwargs.get("points") or call.args[1])
+        for call in fake_client.upsert.call_args_list
+    )
+    assert first_points >= 3  # 3 turn pairs in fixture
+
+    # Append a 4th pair to the file
+    _append_pair(jsonl, user_uuid="u4", parent="a3", asst_uuid="a4")
+
+    fake_client.reset_mock()
+    rc2 = run_index(target="tuned", force=False, sources=[str(jsonl)], config=cfg)
+    assert rc2 == 0
+    new_points = sum(
+        len(call.kwargs.get("points") or call.args[1])
+        for call in fake_client.upsert.call_args_list
+    )
+    assert new_points == 1, f"expected exactly 1 new chunk, got {new_points}"
+
+
+def test_modified_message_purge_then_reinsert(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Modify an existing message's content → re-index produces 1 upsert at same chunk_id."""
+    jsonl = tmp_path / "session.jsonl"
+    jsonl.write_text(_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+    fake_client = _wire_index_mocks(monkeypatch)
+
+    cfg = ResolvedConfig(
+        sources=[str(jsonl)], cache_dir=str(tmp_path / "cache"), collection="t"
+    )
+    rc1 = run_index(target="tuned", force=False, sources=[str(jsonl)], config=cfg)
+    assert rc1 == 0
+    first_ids = []
+    for call in fake_client.upsert.call_args_list:
+        for pt in call.kwargs.get("points") or call.args[1]:
+            first_ids.append(pt.id)
+
+    # Mutate one user message's content (same uuid u2 — different text)
+    raw = jsonl.read_text(encoding="utf-8")
+    mutated = raw.replace('"content":"how are you"', '"content":"how are you DOING"')
+    assert mutated != raw, "fixture mutation did not apply"
+    jsonl.write_text(mutated, encoding="utf-8")
+
+    fake_client.reset_mock()
+    rc2 = run_index(target="tuned", force=False, sources=[str(jsonl)], config=cfg)
+    assert rc2 == 0
+    second_ids = []
+    for call in fake_client.upsert.call_args_list:
+        for pt in call.kwargs.get("points") or call.args[1]:
+            second_ids.append(pt.id)
+
+    # Exactly one chunk re-emitted (the modified one)
+    assert len(second_ids) == 1, f"expected 1 re-upsert, got {len(second_ids)}"
+    # Deterministic chunk_id → the new id matches one of the original ids
+    # (overwrites in place, no duplication).
+    assert second_ids[0] in first_ids
