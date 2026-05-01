@@ -184,6 +184,59 @@ def run_doctor(*, redact_secrets: bool = True) -> int:
         f"[source: {chain.transcript_exclude_paths_glob}]"
     )
 
+    # ── Section 2d: Classifier rooms (Phase 7 D-16) ──────────────────────
+    console.print()
+    console.print("[supamem.brand]Classifier rooms[/supamem.brand]")
+    for room, kws in cfg.classifier_rooms.items():
+        ok(f"  {room:<12} = {kws}  [source: {chain.classifier_rooms}]")
+    # Load the on-disk manifest so we can surface the persisted classifier
+    # hash (post-sweep state). Missing/malformed manifest → '(none)'.
+    from supamem.indexer import _manifest_path
+    from supamem.indexer.manifest import Manifest
+
+    try:
+        _mf = Manifest.load(_manifest_path(cfg))
+        _ch = _mf.classifier_hash
+    except Exception:  # noqa: BLE001 — non-essential probe (CLAUDE.md sanctions)
+        _ch = None
+    ok(f"  classifier_hash = {_ch or '(none)'}")
+
+    # ── Section 2e: Room histogram (Phase 7 D-07) ────────────────────────
+    console.print()
+    console.print("[supamem.brand]Room histogram[/supamem.brand]")
+    try:
+        from qdrant_client.http import models as qmodels
+    except Exception:  # noqa: BLE001 — qdrant-client may be missing
+        qmodels = None  # type: ignore[assignment]
+
+    # ``client`` is bound only inside the qdrant_up branch above, so guard
+    # it here. The `null` bucket is ALWAYS shown (D-07) — even with no
+    # Qdrant connection it surfaces as `: 0`, matching T-07-02-04.
+    _client_for_histogram = locals().get("client") if qdrant_up else None
+    for room in [*cfg.classifier_rooms.keys(), None]:
+        label = "null" if room is None else room
+        n = 0
+        if _client_for_histogram is not None and qmodels is not None:
+            try:
+                if room is None:
+                    cf = qmodels.Filter(
+                        must=[qmodels.IsNullCondition(
+                            is_null=qmodels.PayloadField(key="room")
+                        )]
+                    )
+                else:
+                    cf = qmodels.Filter(
+                        must=[qmodels.FieldCondition(
+                            key="room", match=qmodels.MatchValue(value=room)
+                        )]
+                    )
+                n = _client_for_histogram.count(
+                    collection_name=cfg.collection, count_filter=cf
+                ).count
+            except Exception:  # noqa: BLE001 — non-essential probe (T-07-02-04)
+                n = 0
+        ok(f"  {label:<12} : {n}")
+
     # ── Section 3: Installed clients drift ───────────────────────────────
     console.print()
     console.print("[supamem.brand]Installed clients[/supamem.brand]")
