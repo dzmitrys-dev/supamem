@@ -18,8 +18,8 @@ installed, AI coding assistants gain persistent semantic memory across projects.
 
 ## Distribution
 
-- [PyPI](https://pypi.org/project/supamem/): Released via Trusted Publisher OIDC; `pip install supamem` or `uv tool install supamem`. Current version: v0.1.5.
-- [CHANGELOG](CHANGELOG.md): Per-version release notes (v0.1.0 initial, v0.1.1 update-check + AGENTS.md, v0.1.2 project-tunable regress baselines, v0.1.3 dual_memory_write + qdrant aliases, v0.1.4 SessionStart banner + supamem live dashboard)
+- [PyPI](https://pypi.org/project/supamem/): Released via Trusted Publisher OIDC; `pip install supamem` or `uv tool install supamem`. Current version: v0.2.2a1 (alpha pre-release; v0.2.0 / v0.2.1 already shipped).
+- [CHANGELOG](CHANGELOG.md): Per-version release notes (v0.1.0 initial, v0.1.1 update-check + AGENTS.md, v0.1.2 project-tunable regress baselines, v0.1.3 dual_memory_write + qdrant aliases, v0.1.4 SessionStart banner + supamem live dashboard, v0.1.5 SessionStart wired by installer, v0.2.0 mcp.caps + multi-project install + agent-discipline hooks, v0.2.1 user-visible banner + drift signal, v0.2.2a1 transcript chunker plugin)
 
 ## Translations
 
@@ -34,7 +34,7 @@ installed, AI coding assistants gain persistent semantic memory across projects.
 - [supamem init](README.md#cli-surface): Greenfield bootstrap — probes Qdrant, creates collection, writes `.supamem/config.toml`
 - [supamem install](README.md#wiring-into-your-client): Patch a client config (claude-code, cursor, opencode) — atomic with backup. `--scope project` (default, per-workspace `.mcp.json` / `.cursor/mcp.json`) or `--scope user` (legacy global). `--enforce-search` (claude-code only) registers the opt-in PreToolUse edit-gate.
 - [supamem repair](README.md#cli-surface): Migrate from legacy global install to per-workspace files. Strips stale globals, re-installs at project scope. Idempotent. (v0.2.0+)
-- [supamem index](README.md#cli-surface): Embed dev memories into Qdrant using the locked tuned-hybrid pipeline (D-25)
+- [supamem index](README.md#cli-surface): Embed dev memories into Qdrant using the locked tuned-hybrid pipeline (D-25). v0.2.2a1+ adds `--transcripts` (bare → uses `[supamem.transcript] default_root`, defaults to `~/.claude/projects/`) and `--transcripts <path>` (explicit) to ingest Claude Code session JSONL as Q+A drawer chunks; `--transcripts-only` skips the default project corpus; `--since Nd|Nh|0` filters transcripts by mtime (default 180d, `0` disables)
 - [supamem mcp-server](README.md#cli-surface): Run the MCP server over stdio (default) or HTTP
 - [supamem hook](README.md#cli-surface): Per-client session/edit hooks called by the client itself
 - [supamem doctor](README.md#cli-surface): Probe Qdrant, resolve config chain, report version drift, surface update-check status
@@ -96,11 +96,28 @@ Format: `🧠 supamem ✓ v0.2.0 · <collection> · <N> chunks · audit <path>` 
 - Suppress with `SUPAMEM_NO_UPDATE_CHECK=1`, `NO_UPDATE_NOTIFIER=1`, or `CI=1`
 - Visible in `supamem doctor` (current vs cached-latest, last-check timestamp, suppression env)
 
+## Transcript ingestion (v0.2.2a1+)
+
+- `supamem index --transcripts` (bare flag) ingests Claude Code session JSONL from `~/.claude/projects/` (or `[supamem.transcript] default_root`) as Q+A drawer chunks via the new `transcript` chunker entry-point. Pass an explicit path with `supamem index --transcripts /path/to/sessions/`. Mixed corpora dispatch per-suffix: `*.md` → `markdown_header`, `*.jsonl` → `transcript`.
+- `--transcripts-only` skips the default project corpus and indexes only transcripts in the same run.
+- `--since 30d` / `--since 12h` / `--since 0` — mtime filter on transcript JSONL; `0` disables. Defaults to `[supamem.transcript] since_days = 180`.
+- New `[supamem.transcript]` config table (six keys; surfaced by `supamem doctor` with `[source: ...]` provenance):
+  - `default_root` (str, default `~/.claude/projects/`)
+  - `since_days` (int, default `180`)
+  - `tool_payload_max_chars` (int, default `2000`) — tool-use payloads above this size are elided to a synthesis stub
+  - `chunk_soft_max_tokens` (int, default `600`)
+  - `include_paths_glob` (list[str], default `[]`)
+  - `exclude_paths_glob` (list[str], default `[]`) — hand-exclude sensitive sessions before indexing
+- New plugin entry-point: `transcript = "supamem.indexer.transcript.chunker:chunk_transcript"` under the `supamem.chunker` group. Signature: `chunk_transcript(text: str, *, source_path: Path, **kwargs) -> list[ChunkRecord]`.
+- Per-message-uuid dedupe in the manifest (`__transcripts__` key) — re-running on an unchanged corpus reports `0 new, 0 changed`. Editing one message purges-then-reinserts only that chunk.
+- ⚠ Transcripts may contain secrets — review your `~/.cache/supamem` Qdrant collection before sharing (no v1 redaction; see CHANGELOG security note for v0.2.2a1).
+
 ## Architecture
 
 - [How it works](README.md#how-it-works): MCP server topology, hybrid retrieval, hook flow
 - [Hybrid retrieval](README.md#features): Tuned BM25 + MiniLM fusion, locked schema D-25
 - [Markdown chunker](README.md#features): Header-aware T-1 chunker, 200-token target / 250 soft max
+- [Transcript chunker](README.md#transcript-ingestion-v022a1): Q+A drawer chunks from Claude Code session JSONL (v0.2.2a1+)
 
 ## Prerequisites
 

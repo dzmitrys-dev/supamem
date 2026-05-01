@@ -2,6 +2,59 @@
 
 All notable changes to `supamem` will be documented in this file.
 
+## [0.2.2a1] — 2026-05-01
+
+First alpha of the v0.2.2 line. Ships the **transcript chunker plugin**
+(Phase 6 of the v0.2.0 milestone train) — supamem can now index Claude
+Code session JSONL as Q+A drawer chunks alongside the existing Markdown
+corpus. Default-OFF: opt in with `--transcripts`.
+
+### Added
+
+- `supamem index --transcripts` (bare flag) ingests Claude Code session
+  JSONL from `~/.claude/projects/` (or `[supamem.transcript] default_root`)
+  as Q+A drawer chunks via the new `supamem.chunker = transcript`
+  entry-point. Pass an explicit path with
+  `supamem index --transcripts /path/to/sessions/`. Mixed corpora dispatch
+  per-suffix: `*.md` → `markdown_header`, `*.jsonl` → `transcript`
+  (INGEST-01..INGEST-05).
+- `--transcripts-only` skips the default project corpus and indexes only
+  transcripts in the same run.
+- `--since 30d` (or `Nh`) filters transcript JSONL by mtime; `--since 0`
+  disables. Defaults to `[supamem.transcript] since_days = 180`.
+- `[supamem.transcript]` config table with six keys: `default_root`,
+  `since_days` (180), `tool_payload_max_chars` (2000),
+  `chunk_soft_max_tokens` (600), `include_paths_glob`,
+  `exclude_paths_glob`. All surfaced by `supamem doctor` with
+  `[source: default|user|project]` provenance.
+- Per-message-uuid dedupe in `manifest.py` under the `__transcripts__`
+  key — re-running on an unchanged corpus reports `0 new, 0 changed`.
+  Editing one message purges-then-reinserts only that message's chunk
+  (append-only on the rest).
+- Tool-use payloads above 2000 chars are elided to a synthesis stub;
+  `tool_uses` metadata always lists `{id, tool_name, status}` regardless.
+  Status correlates with `tool_result.is_error` from the next pair when
+  observable.
+- `rich.progress` indexing bar shows session/chunk/elapsed counts
+  (auto-disabled under `NO_COLOR=1` or non-tty).
+- `supamem doctor` gains a **Transcript config** section between MCP caps
+  and Installed clients, surfacing the six `[supamem.transcript]` keys
+  with config-source attribution.
+
+### Security
+
+- ⚠ **Transcripts may contain secrets** (API keys, tokens from
+  copy-pasted env files, credentials in tool payloads). v0.2.2a1 ships
+  **no redaction** — review your `~/.cache/supamem` Qdrant collection
+  before sharing it. Hand-exclude sensitive sessions via
+  `[supamem.transcript] exclude_paths_glob`. Redaction is tracked for
+  v0.3 via a future `supamem.redactor` plugin group.
+
+### Deferred
+
+- Cursor SQLite + ChatGPT export ingestion → follow-on plugins
+  (third-party or supamem-shipped after v1 stabilizes).
+
 ## v0.2.1 — unreleased
 
 Patch fixing two v0.2.0 banner gaps that turned out to matter:
