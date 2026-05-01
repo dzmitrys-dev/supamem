@@ -535,4 +535,7 @@ def run_index(
     except OSError:
         pass
 
-    return 0 if failed == 0 else 0  # fail-soft contract — never propagate
+    # fail-soft contract: any per-source failure was already counted into
+    # `failed` and surfaced via err_console; the overall run still returns 0
+    # so callers (hooks, CI) never break on a single bad doc.
+    return 0
