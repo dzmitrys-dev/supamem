@@ -148,11 +148,28 @@ def _bump(*_args: Any, **_kwargs: Any) -> None:
 
 # ---- Backend cache (one TunedHybridBackend per config) -------------------
 
-_BACKEND_CACHE: dict[int, TunedHybridBackend] = {}
+_BACKEND_CACHE: dict[tuple, TunedHybridBackend] = {}
+
+
+def _backend_key(cfg: ResolvedConfig) -> tuple:
+    """Structural cache key — id(config) is unsafe across GC.
+
+    A freed ResolvedConfig's address can be reused by an allocator-fresh
+    config with different qdrant_url / api_key / collection, silently
+    handing the new caller the prior backend (wrong collection, wrong
+    forbidden-collection guard). Key on the fields that actually shape
+    backend identity.
+    """
+    return (
+        cfg.qdrant_url,
+        cfg.qdrant_api_key,
+        cfg.collection,
+        cfg.allow_legacy_collection,
+    )
 
 
 def _get_backend(config: ResolvedConfig) -> TunedHybridBackend:
-    key = id(config)
+    key = _backend_key(config)
     if key not in _BACKEND_CACHE:
         _BACKEND_CACHE[key] = TunedHybridBackend(config=config)
     return _BACKEND_CACHE[key]
