@@ -183,13 +183,31 @@ def _apply_section(
     section: dict[str, Any],
     source: Source,
 ) -> None:
-    """Apply flat field overrides from a [supamem] / [tool.supamem] section."""
-    # For dotted nested keys (e.g. "mcp.caps") only the FIRST segment
-    # ("mcp") ever appears as a top-level key in the TOML data — skip that.
+    """Apply flat field overrides from a [supamem] / [tool.supamem] section.
+
+    Notes on the two filters below:
+
+    * ``isinstance(getattr(cfg, key), dict)`` — already excludes dict-typed
+      fields (e.g. ``classifier_rooms``). A user who writes a flat
+      ``classifier_rooms = { ... }`` under ``[supamem]`` (instead of the
+      canonical nested ``[supamem.classifier.rooms]`` table) has their
+      value INTENTIONALLY ignored here; the only supported shape is the
+      nested table consumed by ``_apply_nested``. See
+      ``test_flat_classifier_rooms_under_supamem_is_ignored``.
+
+    * ``key in skip_first_segments`` — defense-in-depth for a future
+      scalar field whose name happens to collide with a nested table's
+      first segment (e.g. someone adds a flat ``mcp`` attribute on
+      ``ResolvedConfig`` while ``[supamem.mcp.caps]`` already exists).
+      Today none of the entries in ``_NESTED_TABLES`` ("hook", "eval",
+      "cache", "mcp", "transcript", "classifier") match a non-dict
+      attribute on ``ResolvedConfig``, so this branch is unreachable,
+      but it stays as a guard against silent setattr accidents on
+      future schema additions.
+    """
     skip_first_segments = {sub.split(".", 1)[0] for sub, _ in _NESTED_TABLES}
     for key, value in section.items():
         if hasattr(cfg, key) and not isinstance(getattr(cfg, key), dict):
-            # skip nested tables (hook/eval/cache/mcp) — handled by _apply_nested
             if key in skip_first_segments:
                 continue
             setattr(cfg, key, value)

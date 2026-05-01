@@ -197,3 +197,29 @@ def test_classifier_rooms_provenance_default(
     assert chain.classifier_rooms == "default"
     assert list(cfg.classifier_rooms.keys())[0] == "tests"
     assert list(cfg.classifier_rooms.keys())[-1] == "backend"
+
+
+def test_flat_classifier_rooms_under_supamem_is_ignored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A flat ``classifier_rooms = { ... }`` under ``[supamem]`` is intentionally
+    ignored — only the canonical ``[supamem.classifier.rooms]`` nested table is
+    honored. Locks WR-05 contract: dict-typed fields are excluded by
+    ``_apply_section`` (``isinstance(..., dict)`` filter), so the user's
+    flat-form value is silently dropped and defaults remain in effect.
+    """
+    monkeypatch.delenv("SUPAMEM_CONFIG", raising=False)
+    cfg_dir = tmp_path / ".supamem"
+    cfg_dir.mkdir()
+    (cfg_dir / "config.toml").write_text(
+        "[supamem]\n"
+        'classifier_rooms = { backend = ["src"], tests = ["tests"] }\n',
+        encoding="utf-8",
+    )
+    cfg, chain = load_config(tmp_path)
+    # User's flat-form override is dropped — defaults still in effect.
+    assert chain.classifier_rooms == "default"
+    assert list(cfg.classifier_rooms.keys())[0] == "tests"
+    assert "backend" in cfg.classifier_rooms
+    # Default backend prefix list is the shipped one, not the user's ["src"].
+    assert cfg.classifier_rooms["backend"] != ["src"]
