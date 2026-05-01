@@ -29,10 +29,11 @@ to keep smoke-test output deterministic.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import uuid
 from pathlib import Path
-from typing import Any, Iterable, Literal
+from typing import Any, Iterable, Literal, Optional
 
 from rich.progress import (
     BarColumn,
@@ -43,9 +44,10 @@ from rich.progress import (
 )
 
 from supamem.config import ResolvedConfig
-from supamem.console import console
+from supamem.console import console, err_console
 from supamem.embedders import build_dense_embedder, build_sparse_embedder
 from supamem.indexer.chunker import CHUNK_MIN_TOKENS, _token_count, chunk_markdown
+from supamem.indexer.classifier import classify_room
 from supamem.indexer.manifest import Manifest
 from supamem.indexer.transcript import ChunkRecord, chunk_transcript
 
@@ -96,6 +98,65 @@ def _expand_sources(sources: Iterable[str]) -> list[Path]:
 
 def _compute_hash(content: str) -> str:
     return hashlib.sha256(content.encode()).hexdigest()
+
+
+def _classifier_hash(rooms: dict[str, list[str]]) -> str:
+    """sha256 of ``[classifier.rooms]`` config — order-sensitive (D-01a + D-08).
+
+    Uses ``sort_keys=False`` (the default) so dict insertion order is part of
+    the digest. Insertion order encodes classifier priority (first-match-wins
+    per D-01a); reordering rooms in the TOML config changes classification
+    outcomes, so it MUST trip the sweep gate. Do NOT add ``sort_keys=True``
+    here — that would couple the gate to keyword-set drift only and silently
+    miss priority drift (07-01-SUMMARY note + python-hashing insight).
+    """
+    return hashlib.sha256(json.dumps(rooms).encode("utf-8")).hexdigest()
+
+
+def _reclassify_sweep(client: Any, cfg: ResolvedConfig, *, batch: int = 512) -> int:
+    """Re-classify all points on classifier hash drift (D-08, D-09, R-04).
+
+    Scrolls the collection in batches of ``batch`` points, recomputes ``room``
+    per ``file_path`` via :func:`classify_room`, groups updates by new_room,
+    and issues ONE :meth:`set_payload` per group (NOT one per point — Phase 7
+    D-09 batching invariant). Skips points whose room is already correct.
+    Uses ``wait=True`` for idempotency under interruption (RESEARCH R-03).
+
+    Returns the number of points whose payload was updated.
+    """
+    offset: Any = None
+    updated = 0
+    while True:
+        points, offset = client.scroll(
+            collection_name=cfg.collection,
+            limit=batch,
+            with_payload=True,
+            with_vectors=False,
+            offset=offset,
+        )
+        if not points:
+            break
+        by_room: dict[Optional[str], list[Any]] = {}
+        for p in points:
+            payload = p.payload or {}
+            file_path = payload.get("file_path")
+            if not file_path:
+                continue
+            new_room = classify_room(file_path, cfg.classifier_rooms)
+            old_room = payload.get("room", "__missing__")
+            if new_room != old_room:
+                by_room.setdefault(new_room, []).append(p.id)
+        for room, ids in by_room.items():
+            client.set_payload(
+                collection_name=cfg.collection,
+                payload={"room": room},
+                points=ids,
+                wait=True,
+            )
+            updated += len(ids)
+        if offset is None:
+            break
+    return updated
 
 
 def _chunk_id(file_path: str, idx: int) -> str:
@@ -223,6 +284,7 @@ def _index_records(
     sha: str,
     collection: str,
     is_transcript: bool,
+    classifier_rooms: dict[str, list[str]],
 ) -> int:
     """Embed ``records`` and upsert hybrid points. Returns chunks written."""
     from qdrant_client.http import models as qmodels
@@ -256,11 +318,16 @@ def _index_records(
             point_id = _chunk_id(abs_path, idx)
             content_hash = sha
 
+        # D-06 + D-11 + D-13: payload.room is ALWAYS present (string or None),
+        # positioned BEFORE **rec.metadata so a chunker can deliberately
+        # override classification by setting metadata["room"]. v1 default
+        # chunkers do NOT set this — the spread is just a forward-compat seam.
         payload = {
             "file_path": abs_path,
             "chunk_idx": idx,
             "content_hash": content_hash,
             "document": rec.text,
+            "room": classify_room(abs_path, classifier_rooms),
             **rec.metadata,
         }
         points.append(
@@ -291,6 +358,7 @@ def _process_one_source(
     dense: Any,
     sparse: Any,
     collection: str,
+    classifier_rooms: dict[str, list[str]],
 ) -> tuple[int, int]:
     """Process a single source path. Returns ``(chunks_written, failed)``.
 
@@ -348,6 +416,7 @@ def _process_one_source(
             sha=sha,
             collection=collection,
             is_transcript=is_transcript,
+            classifier_rooms=classifier_rooms,
         )
         if n > 0 and not is_transcript:
             manifest.update(abs_path, target, sha)
@@ -390,6 +459,25 @@ def run_index(
     manifest_path = _manifest_path(cfg)
     manifest = Manifest.load(manifest_path)
 
+    # Plan 07-02 D-08 / D-09 / R-04: gate the classifier sweep on hash drift.
+    # Pre-Phase-7 manifests have classifier_hash=None, which trips the gate
+    # exactly once on the first post-upgrade run (set_payload only — no
+    # re-embedding). Subsequent runs with stable config skip the scroll.
+    current_classifier_hash = _classifier_hash(cfg.classifier_rooms)
+    if manifest.classifier_hash != current_classifier_hash:
+        try:
+            err_console.print(
+                "[supamem.brand]Classifier config changed — re-classifying chunks…"
+                "[/supamem.brand]"
+            )
+            updated = _reclassify_sweep(client, cfg)
+            err_console.print(
+                f"  re-classified {updated} chunks (no re-embedding)"
+            )
+        except Exception:  # noqa: BLE001 — fail-soft per top-level contract
+            updated = 0
+        manifest.classifier_hash = current_classifier_hash
+
     written = 0
     failed = 0
     chunks_emitted = 0
@@ -407,6 +495,7 @@ def run_index(
                     dense=dense,
                     sparse=sparse,
                     collection=cfg.collection,
+                    classifier_rooms=cfg.classifier_rooms,
                 )
                 written += n
                 failed += fail
@@ -423,6 +512,7 @@ def run_index(
                 dense=dense,
                 sparse=sparse,
                 collection=cfg.collection,
+                classifier_rooms=cfg.classifier_rooms,
             )
             written += n
             failed += fail
