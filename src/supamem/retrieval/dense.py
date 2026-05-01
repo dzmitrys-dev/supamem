@@ -6,9 +6,10 @@ class. Concrete dense-only query implementation arrives in a follow-up plan
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 from supamem.config import ResolvedConfig
+from supamem.retrieval.filters import WhereDict
 from supamem.retrieval.types import RetrievedChunk
 
 
@@ -18,7 +19,13 @@ class DenseBackend:
     def __init__(self, *, config: ResolvedConfig) -> None:
         self.config = config
 
-    def query(self, text: str, k: int = 5) -> list[RetrievedChunk]:  # noqa: ARG002
+    def query(
+        self,
+        text: str,
+        k: int = 5,
+        *,
+        where: Optional[WhereDict] = None,
+    ) -> list[RetrievedChunk]:  # noqa: ARG002
         raise NotImplementedError(
             "supamem.retrieval.dense: not yet implemented — use 'tuned_hybrid' "
             "for production retrieval (D-25 lock)."
