@@ -16,7 +16,7 @@ import logging
 import os
 import sys
 import time
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 # ---- Logging routed to stderr BEFORE any heavy import ---------------------
 
@@ -165,6 +165,7 @@ async def dual_memory_search(
     query: str = "",
     top_k: int = 5,
     *,
+    where: Optional[dict[str, Union[str, list[str]]]] = None,
     config: ResolvedConfig | None = None,
 ) -> SearchResult:
     """Hybrid Qdrant retrieval over the configured collection (D-25 lock)."""
@@ -185,7 +186,7 @@ async def dual_memory_search(
     t0 = time.perf_counter()
     try:
         hits: list[RetrievedChunk] = await asyncio.to_thread(
-            backend.query, q, effective_top_k
+            backend.query, q, effective_top_k, where=where
         )
     except Exception as exc:  # noqa: BLE001
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
@@ -268,6 +269,17 @@ def _register_dual_memory_tool(app: Any, config: ResolvedConfig) -> None:
     max_q = config.mcp_caps_max_query_chars
     max_k = config.mcp_caps_max_top_k
 
+    # D-17 anti-drift — the where Field description is defined ONCE here and
+    # referenced by BOTH dual_memory_search_tool AND qdrant_find_alias. Inlining
+    # the description string into either handler is the exact bug D-17 prevents.
+    where_desc = (
+        "Optional payload filter. AND across keys, OR within list values. "
+        "v1 documents 'room' as a key (one of: backend, frontend, tests, "
+        "docs, scripts, config, migrations, types). Example: "
+        '{"room": "backend"} or {"room": ["backend", "tests"]}. '
+        "Unknown keys are passed through to Qdrant."
+    )
+
     # ── Read: dual_memory_search (canonical) ────────────────────────────────
     @app.tool(
         name="dual_memory_search",
@@ -291,8 +303,13 @@ def _register_dual_memory_tool(app: Any, config: ResolvedConfig) -> None:
             ),
             ge=1,
         ),
+        where: Optional[dict[str, Union[str, list[str]]]] = Field(
+            None, description=where_desc
+        ),
     ) -> SearchResult:
-        return await dual_memory_search(query=query, top_k=top_k, config=config)
+        return await dual_memory_search(
+            query=query, top_k=top_k, where=where, config=config
+        )
 
     # ── Write: dual_memory_write (canonical) ────────────────────────────────
     @app.tool(
@@ -376,8 +393,13 @@ def _register_dual_memory_tool(app: Any, config: ResolvedConfig) -> None:
                 ),
                 ge=1,
             ),
+            where: Optional[dict[str, Union[str, list[str]]]] = Field(
+                None, description=where_desc
+            ),
         ) -> SearchResult:
-            return await dual_memory_search(query=query, top_k=top_k, config=config)
+            return await dual_memory_search(
+                query=query, top_k=top_k, where=where, config=config
+            )
 
         @app.tool(
             name="qdrant_store",
