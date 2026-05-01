@@ -16,9 +16,13 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 EntryDict = dict[str, str]
 TRANSCRIPTS_KEY = "__transcripts__"
+# Plan 07-02 D-10: classifier hash is stored under a top-level reserved key,
+# emitted only when not None so Phase-6-era manifests round-trip byte-stable.
+CLASSIFIER_HASH_KEY = "__classifier_hash__"
 
 
 @dataclass
@@ -26,6 +30,10 @@ class Manifest:
     entries: dict[str, EntryDict] = field(default_factory=dict)
     transcripts: dict[str, dict[str, dict]] = field(default_factory=dict)
     # transcripts[session_uuid][message_uuid] = {"content_hash": "...", "indexed_at": "..."}
+    classifier_hash: Optional[str] = None
+    # Plan 07-02 D-10: sha256 digest of [classifier.rooms]; drift triggers a
+    # set_payload sweep on next ``run_index``. Missing key on Phase-6 manifests
+    # loads as None which trips the gate exactly once on first post-upgrade run.
 
     @classmethod
     def load(cls, path: Path) -> Manifest:
@@ -39,6 +47,11 @@ class Manifest:
             return cls()
         # R-04: pop the namespaced transcripts key first.
         raw_transcripts = raw.get(TRANSCRIPTS_KEY, {})
+        # D-10: classifier hash is a top-level reserved key; missing → None.
+        raw_classifier_hash = raw.get(CLASSIFIER_HASH_KEY)
+        classifier_hash = (
+            str(raw_classifier_hash) if isinstance(raw_classifier_hash, str) else None
+        )
         transcripts: dict[str, dict[str, dict]] = {}
         if isinstance(raw_transcripts, dict):
             for session_uuid, bucket in raw_transcripts.items():
@@ -66,7 +79,9 @@ class Manifest:
                     "prod": str(v.get("prod") or ""),
                     "tuned": str(v.get("tuned") or ""),
                 }
-        return cls(entries=out, transcripts=transcripts)
+        return cls(
+            entries=out, transcripts=transcripts, classifier_hash=classifier_hash
+        )
 
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -75,6 +90,10 @@ class Manifest:
         # bytes stay identical when no transcripts have been indexed.
         if self.transcripts:
             payload[TRANSCRIPTS_KEY] = self.transcripts
+        # D-10: emit classifier hash only when set so legacy manifests (no
+        # classifier) keep byte-identical JSON output.
+        if self.classifier_hash is not None:
+            payload[CLASSIFIER_HASH_KEY] = self.classifier_hash
         path.write_text(
             json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
         )
