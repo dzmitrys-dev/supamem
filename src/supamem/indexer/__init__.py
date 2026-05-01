@@ -465,18 +465,26 @@ def run_index(
     # re-embedding). Subsequent runs with stable config skip the scroll.
     current_classifier_hash = _classifier_hash(cfg.classifier_rooms)
     if manifest.classifier_hash != current_classifier_hash:
+        err_console.print(
+            "[supamem.brand]Classifier config changed — re-classifying chunks…"
+            "[/supamem.brand]"
+        )
+        sweep_ok = False
         try:
-            err_console.print(
-                "[supamem.brand]Classifier config changed — re-classifying chunks…"
-                "[/supamem.brand]"
-            )
             updated = _reclassify_sweep(client, cfg)
+            sweep_ok = True
             err_console.print(
                 f"  re-classified {updated} chunks (no re-embedding)"
             )
-        except Exception:  # noqa: BLE001 — fail-soft per top-level contract
-            updated = 0
-        manifest.classifier_hash = current_classifier_hash
+        except Exception as exc:  # noqa: BLE001 — fail-soft, but SURFACE
+            err_console.print(
+                f"[red]classifier sweep failed: "
+                f"{type(exc).__name__}: {exc}[/red]"
+            )
+        if sweep_ok:
+            # Only persist the hash on a fully-successful sweep; otherwise
+            # leave the stale hash in place so the next run_index retries.
+            manifest.classifier_hash = current_classifier_hash
 
     written = 0
     failed = 0
