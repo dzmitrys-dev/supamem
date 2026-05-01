@@ -135,3 +135,65 @@ def test_existing_eval_table_still_loads(
     # And caps remain at defaults when no [supamem.mcp.caps] block exists.
     assert cfg.mcp_caps_max_top_k == 25
     assert chain.mcp_caps_max_top_k == "default"
+
+
+def test_classifier_rooms_default_order() -> None:
+    """Phase 7 D-14 / D-15 — defaults ship in D-01a priority order."""
+    cfg = ResolvedConfig()
+    keys = list(cfg.classifier_rooms.keys())
+    assert keys == [
+        "tests",
+        "types",
+        "migrations",
+        "config",
+        "scripts",
+        "docs",
+        "frontend",
+        "backend",
+    ]
+    assert cfg.classifier_rooms["tests"] == [
+        "tests",
+        "test",
+        "__tests__",
+        "spec",
+        "specs",
+    ]
+    assert cfg.classifier_rooms["backend"] == [
+        "src",
+        "backend",
+        "api",
+        "server",
+        "lib",
+    ]
+
+
+def test_classifier_rooms_loads_from_toml(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``[supamem.classifier.rooms]`` table flows into ``classifier_rooms``,
+    preserving user TOML key order (Pitfall 4 — first-match-wins requires
+    insertion-order preservation through the merge path)."""
+    monkeypatch.delenv("SUPAMEM_CONFIG", raising=False)
+    cfg_dir = tmp_path / ".supamem"
+    cfg_dir.mkdir()
+    (cfg_dir / "config.toml").write_text(
+        "[supamem.classifier.rooms]\n"
+        'backend = ["src"]\n'
+        'tests = ["tests"]\n',
+        encoding="utf-8",
+    )
+    cfg, chain = load_config(tmp_path)
+    assert list(cfg.classifier_rooms.keys()) == ["backend", "tests"]
+    assert cfg.classifier_rooms == {"backend": ["src"], "tests": ["tests"]}
+    assert chain.classifier_rooms == "supamem_toml"
+
+
+def test_classifier_rooms_provenance_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No ``[supamem.classifier.rooms]`` block → defaults + ``default`` source."""
+    monkeypatch.delenv("SUPAMEM_CONFIG", raising=False)
+    cfg, chain = load_config(tmp_path)
+    assert chain.classifier_rooms == "default"
+    assert list(cfg.classifier_rooms.keys())[0] == "tests"
+    assert list(cfg.classifier_rooms.keys())[-1] == "backend"
