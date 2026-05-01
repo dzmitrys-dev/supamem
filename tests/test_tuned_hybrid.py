@@ -139,3 +139,99 @@ def test_load_retrieval_via_entry_points_returns_tuned_hybrid() -> None:
 def test_load_retrieval_unknown_raises() -> None:
     with pytest.raises(LookupError):
         load_retrieval("does_not_exist")
+
+
+# ── Plan 07-03 — where parameter threading (D-02, D-03) ────────────────────
+
+
+def _make_fake_backend(monkeypatch: pytest.MonkeyPatch) -> tuple[TunedHybridBackend, MagicMock]:
+    """Build a TunedHybridBackend with mocked client/dense/sparse for query inspection."""
+    import supamem.retrieval.tuned_hybrid as mod
+
+    fake_client = MagicMock()
+    fake_client.query_points.return_value = MagicMock(points=[])
+
+    fake_dense = MagicMock()
+    fake_dense.embed = lambda batch: iter([[0.1] * 4 for _ in batch])
+
+    class _SparseVec:
+        indices = [1]
+        values = [0.5]
+
+    fake_sparse = MagicMock()
+    fake_sparse.embed = lambda batch: iter([_SparseVec() for _ in batch])
+
+    monkeypatch.setattr(mod, "_SPARSE_AVAILABLE", True, raising=False)
+
+    backend = TunedHybridBackend(config=_cfg())
+    backend._client = fake_client
+    backend._dense = fake_dense
+    backend._sparse = fake_sparse
+    return backend, fake_client
+
+
+def test_query_threads_filter_to_both_prefetch_arms(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D-03: Filter built ONCE and threaded to BOTH dense + sparse Prefetch arms
+    AND top-level query_filter (defense-in-depth per RESEARCH §Pattern 3)."""
+    backend, fake_client = _make_fake_backend(monkeypatch)
+
+    backend.query("hello", k=5, where={"room": "backend"})
+
+    kwargs = fake_client.query_points.call_args.kwargs
+    # Top-level filter present
+    assert kwargs.get("query_filter") is not None
+    # Both prefetch arms got the SAME filter object (single construction)
+    prefetch = kwargs["prefetch"]
+    assert len(prefetch) == 2
+    assert prefetch[0].filter is not None
+    assert prefetch[1].filter is not None
+    assert prefetch[0].filter is prefetch[1].filter  # same Python object (D-03)
+    assert prefetch[0].filter is kwargs["query_filter"]
+
+
+def test_query_no_filter_when_where_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When where=None, query_filter must be None and Prefetch.filter unset/None."""
+    backend, fake_client = _make_fake_backend(monkeypatch)
+
+    backend.query("x", k=5)  # default where=None
+
+    kwargs = fake_client.query_points.call_args.kwargs
+    assert kwargs.get("query_filter") is None
+    for pf in kwargs["prefetch"]:
+        assert pf.filter is None
+
+
+def test_query_filter_shape_matches_match_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The captured Filter wraps a MatchValue with the expected key/value."""
+    import json
+
+    backend, fake_client = _make_fake_backend(monkeypatch)
+    backend.query("x", k=5, where={"room": "backend"})
+
+    qf = fake_client.query_points.call_args.kwargs["query_filter"]
+    body = json.loads(qf.model_dump_json(exclude_none=True))
+    assert body == {
+        "must": [{"key": "room", "match": {"value": "backend"}}],
+    }
+
+
+def test_dense_stub_accepts_where_kwarg() -> None:
+    from supamem.retrieval.dense import DenseBackend
+
+    b = DenseBackend(config=_cfg())
+    with pytest.raises(NotImplementedError):
+        b.query("x", k=5, where={"room": "backend"})
+
+
+def test_bm25_stub_accepts_where_kwarg() -> None:
+    from supamem.retrieval.bm25 import BM25Backend
+
+    b = BM25Backend(config=_cfg())
+    with pytest.raises(NotImplementedError):
+        b.query("x", k=5, where={"room": "backend"})
