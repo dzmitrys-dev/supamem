@@ -171,6 +171,18 @@ def test_index_transcripts_bare_flag_does_not_consume_next_arg(tmp_path) -> None
     assert "does not exist" not in r.stderr
 
 
+def test_transcript_entry_point_loadable() -> None:
+    """Plan 06-04 INGEST-02: transcript chunker registered + loadable via importlib.metadata."""
+    from importlib.metadata import entry_points
+
+    eps = entry_points(group="supamem.chunker")
+    names = {e.name for e in eps}
+    assert "transcript" in names, f"expected 'transcript' in {names!r}"
+    ep = next(e for e in eps if e.name == "transcript")
+    fn = ep.load()
+    assert callable(fn)
+
+
 def test_version_prints_current() -> None:
     """Test 6: --version prints styled banner with current __version__ + credit line."""
     from supamem import __version__
