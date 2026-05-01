@@ -289,6 +289,42 @@ supamem --version
 
 ---
 
+## 📜 转录(Transcript)摄取(v0.2.2a1+)
+
+supamem 可以把你的 **Claude Code 会话历史**作为问答抽屉式 chunk 索引到项目的 Markdown 语料中,让历史决策与工具调用轨迹出现在 `dual_memory_search` 结果里。默认关闭 —— 通过 `--transcripts` 显式启用。
+
+```bash
+# 从默认位置(~/.claude/projects/)索引 Claude Code 转录
+supamem index --transcripts
+
+# 或指向具体目录
+supamem index --transcripts /path/to/sessions/
+
+# 跳过常规项目语料,仅索引转录
+supamem index --transcripts --transcripts-only
+
+# 限定到近期会话(默认 180 天;--since 0 关闭过滤)
+supamem index --transcripts --since 30d
+```
+
+在 `.supamem/config.toml` 的 `[supamem.transcript]` 下配置:
+
+```toml
+[supamem.transcript]
+default_root           = "~/.claude/projects/"
+since_days             = 180
+tool_payload_max_chars = 2000
+chunk_soft_max_tokens  = 600
+include_paths_glob     = []
+exclude_paths_glob     = []   # 排除敏感会话,例如 ["**/banking-*.jsonl"]
+```
+
+> ⚠ **转录中可能包含密钥。** API key、token 以及其他凭据偶尔会被粘贴进 Claude Code 会话。v0.2.2a1 **不做任何脱敏** —— 在分享 `~/.cache/supamem` Qdrant collection 之前请先审查内容。通过 `exclude_paths_glob` 手动排除敏感会话。脱敏功能计划在 v0.3 通过未来的 `supamem.redactor` 插件组提供。
+
+当前支持的转录格式:**Claude Code JSONL**(Cursor SQLite 与 ChatGPT 导出延后到后续插件)。
+
+---
+
 ## 🪛 接入你的客户端
 
 <details>

@@ -296,6 +296,42 @@ sepas que está trabajando. Usa `--help` en cualquier subcomando para detalles.
 
 ---
 
+## 📜 Ingesta de transcripciones (v0.2.2a1+)
+
+supamem puede indexar tu **historial de sesiones de Claude Code** como chunks tipo cajón de Q+A junto al corpus Markdown de tu proyecto, exponiendo decisiones pasadas y trazas de uso de herramientas en `dual_memory_search`. Desactivado por defecto — actívalo con `--transcripts`.
+
+```bash
+# Indexa transcripciones de Claude Code desde la ubicación por defecto (~/.claude/projects/)
+supamem index --transcripts
+
+# O apunta a un directorio específico
+supamem index --transcripts /path/to/sessions/
+
+# Omite el corpus regular del proyecto e indexa solo transcripciones
+supamem index --transcripts --transcripts-only
+
+# Limita a sesiones recientes (por defecto: 180 días; --since 0 desactiva el filtro)
+supamem index --transcripts --since 30d
+```
+
+Configura bajo `[supamem.transcript]` en `.supamem/config.toml`:
+
+```toml
+[supamem.transcript]
+default_root           = "~/.claude/projects/"
+since_days             = 180
+tool_payload_max_chars = 2000
+chunk_soft_max_tokens  = 600
+include_paths_glob     = []
+exclude_paths_glob     = []   # excluye sesiones sensibles, p. ej. ["**/banking-*.jsonl"]
+```
+
+> ⚠ **Las transcripciones pueden contener secretos.** Claves de API, tokens y otras credenciales a veces acaban pegadas en sesiones de Claude Code. v0.2.2a1 **no incluye redacción** — revisa tu colección Qdrant en `~/.cache/supamem` antes de compartirla. Excluye manualmente sesiones sensibles con `exclude_paths_glob`. La redacción está planificada para v0.3 vía un futuro grupo de plugins `supamem.redactor`.
+
+Formatos de transcripción soportados actualmente: **JSONL de Claude Code** (Cursor SQLite y exportación de ChatGPT quedan diferidos a plugins posteriores).
+
+---
+
 ## 🪛 Cableando a tu cliente
 
 <details>

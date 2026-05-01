@@ -316,6 +316,48 @@ working. Use `--help` on any subcommand for details.
 
 ---
 
+## 📜 Transcript ingestion (v0.2.2a1+)
+
+supamem can index your **Claude Code session history** as Q+A drawer chunks alongside your
+project's Markdown corpus, surfacing past decisions and tool-use traces in `dual_memory_search`.
+Default-OFF — opt in with `--transcripts`.
+
+```bash
+# Index Claude Code transcripts from the default location (~/.claude/projects/)
+supamem index --transcripts
+
+# Or point at a specific directory
+supamem index --transcripts /path/to/sessions/
+
+# Skip the regular project corpus and only index transcripts
+supamem index --transcripts --transcripts-only
+
+# Limit to recent sessions (default: 180 days; --since 0 disables the filter)
+supamem index --transcripts --since 30d
+```
+
+Configure under `[supamem.transcript]` in `.supamem/config.toml`:
+
+```toml
+[supamem.transcript]
+default_root           = "~/.claude/projects/"
+since_days             = 180
+tool_payload_max_chars = 2000
+chunk_soft_max_tokens  = 600
+include_paths_glob     = []
+exclude_paths_glob     = []   # exclude sensitive sessions, e.g. ["**/banking-*.jsonl"]
+```
+
+> ⚠ **Transcripts may contain secrets.** API keys, tokens, and other credentials sometimes end up
+> pasted into Claude Code sessions. v0.2.2a1 ships **no redaction** — review your
+> `~/.cache/supamem` Qdrant collection before sharing it. Hand-exclude sensitive sessions via
+> `exclude_paths_glob`. Redaction is tracked for v0.3 via a future `supamem.redactor` plugin group.
+
+Currently supported transcript formats: **Claude Code JSONL** (Cursor SQLite and ChatGPT export
+are deferred to follow-on plugins).
+
+---
+
 ## 🪛 Wiring into your client
 
 <details>

@@ -290,6 +290,42 @@ supamem --version
 
 ---
 
+## 📜 トランスクリプトの取り込み(v0.2.2a1+)
+
+supamem は **Claude Code のセッション履歴**を Q+A 形式のドロワーチャンクとしてプロジェクトの Markdown コーパスと並べてインデックスでき、過去の決定やツール呼び出しの軌跡を `dual_memory_search` に登場させられます。既定はオフ —— `--transcripts` で明示的に有効化してください。
+
+```bash
+# 既定の場所(~/.claude/projects/)から Claude Code トランスクリプトを取り込む
+supamem index --transcripts
+
+# 特定のディレクトリを指す場合
+supamem index --transcripts /path/to/sessions/
+
+# 通常のプロジェクトコーパスを飛ばし、トランスクリプトのみを取り込む
+supamem index --transcripts --transcripts-only
+
+# 直近のセッションのみに限定(既定: 180 日; --since 0 でフィルタ無効)
+supamem index --transcripts --since 30d
+```
+
+`.supamem/config.toml` の `[supamem.transcript]` 配下で設定します:
+
+```toml
+[supamem.transcript]
+default_root           = "~/.claude/projects/"
+since_days             = 180
+tool_payload_max_chars = 2000
+chunk_soft_max_tokens  = 600
+include_paths_glob     = []
+exclude_paths_glob     = []   # 機微なセッションを除外、例: ["**/banking-*.jsonl"]
+```
+
+> ⚠ **トランスクリプトには機密が含まれる可能性があります。** API キーやトークンその他の認証情報が、たまたま Claude Code セッションに貼り付けられることがあります。v0.2.2a1 は **マスキング処理を行いません** —— 共有する前に `~/.cache/supamem` の Qdrant コレクションを必ず確認してください。`exclude_paths_glob` で機微なセッションを手動除外できます。マスキングは v0.3 で `supamem.redactor` プラグイングループとして提供予定です。
+
+現在サポートされているトランスクリプト形式: **Claude Code JSONL**(Cursor SQLite と ChatGPT エクスポートは後続プラグインに先送り)。
+
+---
+
 ## 🪛 クライアントへの配線
 
 <details>

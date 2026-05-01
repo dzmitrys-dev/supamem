@@ -295,6 +295,42 @@ supamem --version
 
 ---
 
+## 📜 Индексация транскриптов (v0.2.2a1+)
+
+supamem умеет индексировать **историю сессий Claude Code** в виде Q+A-чанков рядом с Markdown-корпусом проекта — прошлые решения и трассы вызовов инструментов начинают всплывать в `dual_memory_search`. По умолчанию выключено — включается флагом `--transcripts`.
+
+```bash
+# Индексировать транскрипты Claude Code из расположения по умолчанию (~/.claude/projects/)
+supamem index --transcripts
+
+# Или указать конкретный каталог
+supamem index --transcripts /path/to/sessions/
+
+# Пропустить обычный корпус проекта и индексировать только транскрипты
+supamem index --transcripts --transcripts-only
+
+# Ограничить недавними сессиями (по умолчанию: 180 дней; --since 0 отключает фильтр)
+supamem index --transcripts --since 30d
+```
+
+Настройки — в `[supamem.transcript]` файла `.supamem/config.toml`:
+
+```toml
+[supamem.transcript]
+default_root           = "~/.claude/projects/"
+since_days             = 180
+tool_payload_max_chars = 2000
+chunk_soft_max_tokens  = 600
+include_paths_glob     = []
+exclude_paths_glob     = []   # исключить чувствительные сессии, напр. ["**/banking-*.jsonl"]
+```
+
+> ⚠ **Транскрипты могут содержать секреты.** API-ключи, токены и другие учётные данные иногда оказываются вставленными в сессии Claude Code. v0.2.2a1 **никакой маскировки не выполняет** — перед тем как делиться коллекцией Qdrant из `~/.cache/supamem`, просмотрите её содержимое. Чувствительные сессии можно вручную исключить через `exclude_paths_glob`. Маскировка запланирована на v0.3 в виде будущей группы плагинов `supamem.redactor`.
+
+Поддерживаемые сейчас форматы транскриптов: **Claude Code JSONL** (Cursor SQLite и экспорт ChatGPT отложены до последующих плагинов).
+
+---
+
 ## 🪛 Подключение к клиенту
 
 <details>
