@@ -13,8 +13,11 @@ inside the production code path are what fail in red phase.
 """
 from __future__ import annotations
 
+import importlib.metadata as _ilm
 from typing import Any
 from unittest.mock import MagicMock
+
+import pytest
 
 from supamem.config import ResolvedConfig
 
@@ -84,3 +87,53 @@ def _mock_backend_with_long_chunks(
     ]
     monkeypatch.setattr(mod, "_get_backend", lambda cfg: fake)
     return fake
+
+
+# ---- Phase 8 fixtures (added by 08-00-PLAN) -----------------------------
+
+
+@pytest.fixture
+def tmp_cache_dir(tmp_path, monkeypatch):
+    """Isolate the supamem model cache to tmp_path/cache."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setenv("SUPAMEM_CACHE_DIR", str(cache))
+    return cache
+
+
+@pytest.fixture
+def network_blocked(monkeypatch):
+    """Force HF + transformers offline mode for the test process."""
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    monkeypatch.setenv("TRANSFORMERS_OFFLINE", "1")
+    yield
+
+
+@pytest.fixture
+def mock_reranker_entry_point(monkeypatch):
+    """Register tests._fixtures.mock_reranker:MockReranker as entry-point name='mock'."""
+    from tests._fixtures.mock_reranker import MockReranker
+
+    class _FakeEP:
+        def __init__(self, name, target):
+            self.name = name
+            self._target = target
+
+        def load(self):
+            return self._target
+
+    real = _ilm.entry_points
+    fake_eps = [_FakeEP("mock", MockReranker)]
+
+    def _patched(*, group=None, **kw):
+        if group == "supamem.reranker":
+            return fake_eps
+        return real(group=group, **kw) if group else real(**kw)
+
+    monkeypatch.setattr(_ilm, "entry_points", _patched)
+    try:
+        import supamem.rerankers as _rr
+        monkeypatch.setattr(_rr, "entry_points", _patched, raising=False)
+    except ImportError:
+        pass
+    return MockReranker
