@@ -18,8 +18,8 @@ installed, AI coding assistants gain persistent semantic memory across projects.
 
 ## Distribution
 
-- [PyPI](https://pypi.org/project/supamem/): Released via Trusted Publisher OIDC; `pip install supamem` or `uv tool install supamem`. Current version: v0.2.2a1 (alpha pre-release; v0.2.0 / v0.2.1 already shipped).
-- [CHANGELOG](CHANGELOG.md): Per-version release notes (v0.1.0 initial, v0.1.1 update-check + AGENTS.md, v0.1.2 project-tunable regress baselines, v0.1.3 dual_memory_write + qdrant aliases, v0.1.4 SessionStart banner + supamem live dashboard, v0.1.5 SessionStart wired by installer, v0.2.0 mcp.caps + multi-project install + agent-discipline hooks, v0.2.1 user-visible banner + drift signal, v0.2.2a1 transcript chunker plugin)
+- [PyPI](https://pypi.org/project/supamem/): Released via Trusted Publisher OIDC; `pip install supamem` or `uv tool install supamem`. Current version: v0.2.3a1 (alpha pre-release; v0.2.0 / v0.2.1 already shipped).
+- [CHANGELOG](CHANGELOG.md): Per-version release notes (v0.1.0 initial, v0.1.1 update-check + AGENTS.md, v0.1.2 project-tunable regress baselines, v0.1.3 dual_memory_write + qdrant aliases, v0.1.4 SessionStart banner + supamem live dashboard, v0.1.5 SessionStart wired by installer, v0.2.0 mcp.caps + multi-project install + agent-discipline hooks, v0.2.1 user-visible banner + drift signal, v0.2.2a1 transcript chunker plugin, v0.2.3a1 coding-path classifier + where filter)
 
 ## Translations
 
@@ -46,9 +46,9 @@ installed, AI coding assistants gain persistent semantic memory across projects.
 
 ## MCP tools (v0.1.3)
 
-- `dual_memory_search`: Hybrid (BM25+dense, RRF) retrieval over the project's Qdrant collection. Top-k, latency, summary. Response shape (v0.2.0+): each `Chunk` carries `text` (full intact payload) and `preview` (display-only excerpt capped at `mcp.caps.max_preview_chars`); top-level `SearchResult.clamped_to` is set when the server clamped requested `top_k`
+- `dual_memory_search(query, top_k=5, where=None)`: Hybrid (BM25+dense, RRF) retrieval over the project's Qdrant collection. Top-k, latency, summary. Response shape (v0.2.0+): each `Chunk` carries `text` (full intact payload) and `preview` (display-only excerpt capped at `mcp.caps.max_preview_chars`); top-level `SearchResult.clamped_to` is set when the server clamped requested `top_k`. v0.2.3a1+ accepts `where: dict[str, str | list[str]] | None` — optional Qdrant payload filter; AND across keys, OR within list values (`MatchAny`); single string → exact `MatchValue`. v1 documents `room` as the only key (one of: `backend`, `frontend`, `tests`, `docs`, `scripts`, `config`, `migrations`, `types`, or `null`). Examples: `where={"room": "backend"}` or `where={"room": ["backend", "tests"]}`. Unknown keys are passed through to Qdrant (forward-compat for Phase 9/11)
 - `dual_memory_write`: Persist agent-authored memory — writes Markdown to `<project>/.claude/insights/_agent/<slug>.md` with YAML frontmatter, immediately upserts into Qdrant (wait=True), idempotent on topic via UUIDv5
-- `qdrant_find` (alias of dual_memory_search): Backward-compat for users coming from upstream `mcp-server-qdrant`. Inherits the same caps and response shape as the canonical tool (D-17 alias parity)
+- `qdrant_find(query, top_k=5, where=None)` (alias of dual_memory_search): Backward-compat for users coming from upstream `mcp-server-qdrant`. Inherits the same caps, response shape, AND the v0.2.3a1+ `where` payload filter byte-identically (D-17 alias parity)
 - `qdrant_store` (alias of dual_memory_write): Same compat shim. Disable both aliases with `SUPAMEM_QDRANT_ALIASES=0`
 
 ## MCP response caps (v0.2.0+)
@@ -111,6 +111,32 @@ Format: `🧠 supamem ✓ v0.2.0 · <collection> · <N> chunks · audit <path>` 
 - New plugin entry-point: `transcript = "supamem.indexer.transcript.chunker:chunk_transcript"` under the `supamem.chunker` group. Signature: `chunk_transcript(text: str, *, source_path: Path, **kwargs) -> list[ChunkRecord]`.
 - Per-message-uuid dedupe in the manifest (`__transcripts__` key) — re-running on an unchanged corpus reports `0 new, 0 changed`. Editing one message purges-then-reinserts only that chunk.
 - ⚠ Transcripts may contain secrets — review your `~/.cache/supamem` Qdrant collection before sharing (no v1 redaction; see CHANGELOG security note for v0.2.2a1).
+
+## Coding-path classifier (v0.2.3a1+)
+
+Every indexed chunk gains a `payload.room` facet (string or `null`) via **exact path-component equality** — `set(Path(file_path).parts) ∩ set(keywords)` — never substring matching. A file at `data/chest_xray/img.png` is NEVER classified as `tests`. The `where` retrieval filter on `dual_memory_search` and `qdrant_find` (see MCP tools section) consumes this facet.
+
+- `payload.room` — single string or JSON `null`. ALWAYS present on every point (uniform schema, D-06). v1 values: `backend`, `frontend`, `tests`, `docs`, `scripts`, `config`, `migrations`, `types`, or `null`.
+- Priority is encoded by config order (first-match-wins, D-01a). Putting `tests` before `backend` makes `tests/backend/api_test.py` classify as `tests`.
+- Hash-drift sweep — `manifest.classifier_hash = sha256(json.dumps(rooms, sort_keys=False))` captures both content AND priority order. On every `supamem index` run, if the stored hash differs from the current config hash, supamem scrolls the collection in batches and `client.set_payload({"room": new_room}, points=[ids], wait=True)` per-room — pure metadata update, **zero re-embedding cost** (D-08, D-09).
+- Pre-v0.2.3 collections auto-migrate on first post-upgrade index invocation (missing `__classifier_hash__` → drift from null → one-time sweep).
+- `supamem doctor` surfaces the active rooms map with `[source: ...]` provenance, the stored `classifier_hash`, and a per-room histogram (including a `null` bucket for unmatched chunks) — D-07, D-16.
+
+`[supamem.classifier.rooms]` config table (default keyword map, priority order locked):
+
+```toml
+[supamem.classifier.rooms]
+tests      = ["tests", "test", "__tests__", "spec", "specs"]
+types      = ["types", "@types", "typings"]
+migrations = ["migrations", "alembic", "schema"]
+config     = ["config", "configs", ".github", "ci"]
+scripts    = ["scripts", "bin", "tools"]
+docs       = ["docs", "documentation"]
+frontend   = ["frontend", "web", "client", "ui", "components", "pages"]
+backend    = ["src", "backend", "api", "server", "lib"]
+```
+
+User TOML at `[supamem.classifier.rooms]` REPLACES the defaults dict (leaf-replace, not merge — matches the `transcript_*` precedent). Reordering rooms in the user config trips the sweep gate because `sort_keys=False` is intentional. Transcript chunks (chunker == "transcript") classify to `room = null` by construction — non-coding paths; filter them via the existing `payload.chunker` key instead.
 
 ## Architecture
 

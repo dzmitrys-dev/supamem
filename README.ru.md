@@ -1,6 +1,6 @@
 **Языки:** [English](README.md) · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [日本語](README.ja.md) · [Русский](README.ru.md)
 
-<!-- synced-with: README.md @ acc0dd7 -->
+<!-- synced-with: README.md @ ac5e38f -->
 
 > Перевод выполнен с помощью ИИ. Корректировки от носителей языка приветствуются — открывайте PR.
 
@@ -328,6 +328,50 @@ exclude_paths_glob     = []   # исключить чувствительные 
 > ⚠ **Транскрипты могут содержать секреты.** API-ключи, токены и другие учётные данные иногда оказываются вставленными в сессии Claude Code. v0.2.2a1 **никакой маскировки не выполняет** — перед тем как делиться коллекцией Qdrant из `~/.cache/supamem`, просмотрите её содержимое. Чувствительные сессии можно вручную исключить через `exclude_paths_glob`. Маскировка запланирована на v0.3 в виде будущей группы плагинов `supamem.redactor`.
 
 Поддерживаемые сейчас форматы транскриптов: **Claude Code JSONL** (Cursor SQLite и экспорт ChatGPT отложены до последующих плагинов).
+
+---
+
+## 🔎 Поиск с фильтром (v0.2.3a1+)
+
+Фильтруйте результаты поиска по категориям путей в коде через параметр `where`
+у `dual_memory_search` (и алиаса `qdrant_find`):
+
+```python
+# Только чанки, классифицированные как backend
+dual_memory_search(query="auth flow", where={"room": "backend"})
+
+# OR между несколькими room (Qdrant MatchAny)
+dual_memory_search(query="rate limit", where={"room": ["backend", "tests"]})
+```
+
+Каждый проиндексированный чанк несёт `payload.room` — одно из значений `backend`,
+`frontend`, `tests`, `docs`, `scripts`, `config`, `migrations`, `types` или `null`.
+Классификация выполняется по **точному совпадению компонента пути** (разбиение по `/`) —
+файл `data/chest_xray/img.png` **никогда** не будет отнесён к `tests`. Несколько ключей
+в `where` объединяются через AND; список значений внутри одного ключа — через OR.
+
+Переопределите карту ключевых слов по умолчанию в `.supamem/config.toml`:
+
+```toml
+[supamem.classifier.rooms]
+tests      = ["tests", "test", "__tests__"]
+backend    = ["src", "backend", "api"]
+frontend   = ["frontend", "web", "client", "components"]
+# Приоритет задаётся порядком ключей — побеждает первое совпадение.
+# Если поставить `tests` перед `backend`, файл tests/backend/api_test.py попадёт в `tests`.
+```
+
+`supamem doctor` показывает активную карту rooms с пометкой `[source: ...]`,
+сохранённый `classifier_hash` и гистограмму по room-ам (включая корзину `null`
+для чанков без совпадения).
+
+Изменение `[supamem.classifier.rooms]` запускает однократный **переклассификационный
+sweep** при следующем `supamem index` — `set_payload` Qdrant по каждому room,
+**нулевая стоимость переэмбеддинга**. Коллекции до v0.2.3 автоматически мигрируют
+при первом запуске `index` после обновления.
+
+Чанки транскриптов (chunker == `transcript`) по построению попадают в `room = null` —
+фильтруйте их через существующий ключ `payload.chunker`.
 
 ---
 

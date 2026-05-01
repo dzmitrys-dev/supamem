@@ -1,6 +1,6 @@
 **Idiomas:** [English](README.md) · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [日本語](README.ja.md) · [Русский](README.ru.md)
 
-<!-- synced-with: README.md @ acc0dd7 -->
+<!-- synced-with: README.md @ ac5e38f -->
 
 > Esta traducción fue generada con asistencia de IA. Las correcciones de hablantes nativos son bienvenidas vía PR.
 
@@ -329,6 +329,50 @@ exclude_paths_glob     = []   # excluye sesiones sensibles, p. ej. ["**/banking-
 > ⚠ **Las transcripciones pueden contener secretos.** Claves de API, tokens y otras credenciales a veces acaban pegadas en sesiones de Claude Code. v0.2.2a1 **no incluye redacción** — revisa tu colección Qdrant en `~/.cache/supamem` antes de compartirla. Excluye manualmente sesiones sensibles con `exclude_paths_glob`. La redacción está planificada para v0.3 vía un futuro grupo de plugins `supamem.redactor`.
 
 Formatos de transcripción soportados actualmente: **JSONL de Claude Code** (Cursor SQLite y exportación de ChatGPT quedan diferidos a plugins posteriores).
+
+---
+
+## 🔎 Recuperación con filtro (v0.2.3a1+)
+
+Filtra los resultados de recuperación por categoría de ruta de código mediante el parámetro
+`where` en `dual_memory_search` (y el alias `qdrant_find`):
+
+```python
+# Solo chunks clasificados como código backend
+dual_memory_search(query="auth flow", where={"room": "backend"})
+
+# OR entre varios rooms (Qdrant MatchAny)
+dual_memory_search(query="rate limit", where={"room": ["backend", "tests"]})
+```
+
+Cada chunk indexado lleva `payload.room` — uno de `backend`, `frontend`, `tests`, `docs`,
+`scripts`, `config`, `migrations`, `types` o `null`. La clasificación es **igualdad exacta
+por componente de ruta** (separando por `/`) — un fichero en `data/chest_xray/img.png`
+**nunca** se clasifica como `tests`. En `where`, múltiples claves se combinan con AND;
+los valores tipo lista dentro de una clave se combinan con OR.
+
+Sobrescribe el mapa de palabras clave por defecto en `.supamem/config.toml`:
+
+```toml
+[supamem.classifier.rooms]
+tests      = ["tests", "test", "__tests__"]
+backend    = ["src", "backend", "api"]
+frontend   = ["frontend", "web", "client", "components"]
+# La prioridad la determina el orden de las claves — gana la primera coincidencia.
+# Poner `tests` antes de `backend` hace que tests/backend/api_test.py se clasifique como `tests`.
+```
+
+`supamem doctor` muestra el mapa de rooms activo con la procedencia `[source: ...]`,
+el `classifier_hash` almacenado y un histograma por room (incluyendo un cubo `null`
+para los chunks sin coincidencia).
+
+Cambiar `[supamem.classifier.rooms]` desencadena un **barrido de reclasificación** único
+en el siguiente `supamem index` — `set_payload` de Qdrant por room, **coste cero de
+re-embedding**. Las colecciones anteriores a v0.2.3 se migran automáticamente en la
+primera invocación de `index` tras la actualización.
+
+Los chunks de transcripción (chunker == `transcript`) se clasifican como `room = null`
+por construcción — fíltralos mediante la clave existente `payload.chunker`.
 
 ---
 

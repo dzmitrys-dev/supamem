@@ -1,6 +1,6 @@
 **言語:** [English](README.md) · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [日本語](README.ja.md) · [Русский](README.ru.md)
 
-<!-- synced-with: README.md @ acc0dd7 -->
+<!-- synced-with: README.md @ ac5e38f -->
 
 > この翻訳は AI 支援によるものです。ネイティブスピーカーによる修正 PR を歓迎します。
 
@@ -323,6 +323,50 @@ exclude_paths_glob     = []   # 機微なセッションを除外、例: ["**/ba
 > ⚠ **トランスクリプトには機密が含まれる可能性があります。** API キーやトークンその他の認証情報が、たまたま Claude Code セッションに貼り付けられることがあります。v0.2.2a1 は **マスキング処理を行いません** —— 共有する前に `~/.cache/supamem` の Qdrant コレクションを必ず確認してください。`exclude_paths_glob` で機微なセッションを手動除外できます。マスキングは v0.3 で `supamem.redactor` プラグイングループとして提供予定です。
 
 現在サポートされているトランスクリプト形式: **Claude Code JSONL**(Cursor SQLite と ChatGPT エクスポートは後続プラグインに先送り)。
+
+---
+
+## 🔎 スコープ付き検索(v0.2.3a1+)
+
+`dual_memory_search`(および `qdrant_find` エイリアス)の `where` パラメータで、
+コードパスのカテゴリごとに検索結果を絞り込めます:
+
+```python
+# backend に分類されたチャンクだけを対象にする
+dual_memory_search(query="auth flow", where={"room": "backend"})
+
+# 複数の room にまたがる OR(Qdrant MatchAny)
+dual_memory_search(query="rate limit", where={"room": ["backend", "tests"]})
+```
+
+インデックス済みのすべてのチャンクは `payload.room` を保持します。値は `backend`、
+`frontend`、`tests`、`docs`、`scripts`、`config`、`migrations`、`types`、`null` の
+いずれかです。分類は **パスコンポーネントの厳密な等価判定**(`/` 区切り)で行われ、
+`data/chest_xray/img.png` のようなファイルは **絶対に** `tests` には分類されません。
+`where` 内の複数キーは AND、同一キー内のリスト値は OR です。
+
+`.supamem/config.toml` で既定のキーワードマップを上書きできます:
+
+```toml
+[supamem.classifier.rooms]
+tests      = ["tests", "test", "__tests__"]
+backend    = ["src", "backend", "api"]
+frontend   = ["frontend", "web", "client", "components"]
+# 優先度はキーの順序で表現されます —— 先勝ち(first match wins)。
+# `tests` を `backend` より前に置くと、tests/backend/api_test.py は `tests` に分類されます。
+```
+
+`supamem doctor` は、有効な rooms マップ(`[source: ...]` 由来表示付き)、保存された
+`classifier_hash`、room ごとのヒストグラム(マッチしないチャンク用の `null` バケット
+を含む)を表示します。
+
+`[supamem.classifier.rooms]` を変更すると、次回の `supamem index` 実行時に **再分類
+スイープ** が一度だけ走ります —— Qdrant の `set_payload` を room 単位で実行する
+だけなので、**再埋め込みコストはゼロ** です。v0.2.3 以前のコレクションは、アップ
+グレード後の最初の `index` 呼び出しで自動的に移行されます。
+
+トランスクリプト由来のチャンク(chunker == `transcript`)は構造上 `room = null` に
+分類されます —— 既存の `payload.chunker` キーで絞り込んでください。
 
 ---
 
