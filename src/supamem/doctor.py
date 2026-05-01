@@ -136,9 +136,16 @@ def run_doctor(*, redact_secrets: bool = True) -> int:
     # ── Section 2: Config chain ──────────────────────────────────────────
     console.print()
     console.print("[supamem.brand]Config chain[/supamem.brand]")
-    # Plain print so capsys / non-TTY environments capture the full line —
-    # rich's soft_wrap still respects the 80-col default in pytest.
-    print(format_chain(cfg, chain, redact_secrets=redact_secrets))
+    # Use console with soft_wrap=True + no_wrap=True so the full
+    # "key = value [source: ...]" line stays on one row even under
+    # pytest's narrow default width — capsys captures stdout regardless.
+    console.print(
+        format_chain(cfg, chain, redact_secrets=redact_secrets),
+        soft_wrap=True,
+        no_wrap=True,
+        highlight=False,
+        markup=False,
+    )
 
     # ── Section 2b: MCP caps (D-12) ──────────────────────────────────────
     console.print()
