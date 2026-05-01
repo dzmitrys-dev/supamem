@@ -292,6 +292,10 @@ def _index_records(
     if not records:
         return 0
     abs_path = str(path.resolve())
+    # classify_room depends only on abs_path — lift it out of the per-chunk
+    # loop. A chunker can still override via metadata["room"] because the
+    # **rec.metadata spread happens AFTER "room" in the payload literal.
+    default_room = classify_room(abs_path, classifier_rooms)
     points: list[Any] = []
     for idx, rec in enumerate(records):
         if _token_count(rec.text) < CHUNK_MIN_TOKENS and not is_transcript:
@@ -327,7 +331,7 @@ def _index_records(
             "chunk_idx": idx,
             "content_hash": content_hash,
             "document": rec.text,
-            "room": classify_room(abs_path, classifier_rooms),
+            "room": default_room,
             **rec.metadata,
         }
         points.append(
