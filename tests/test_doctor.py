@@ -99,6 +99,30 @@ def test_doctor_prints_each_config_field_with_source(
     assert "collection" in out
 
 
+def test_doctor_shows_transcript_config(
+    home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Plan 06-04 Task 01: ``supamem doctor`` surfaces all 6 transcript keys (D-31)."""
+    import supamem.doctor as mod
+
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: False)
+    mod.run_doctor()
+    out = capsys.readouterr().out
+    assert "Transcript config" in out
+    for key in (
+        "default_root",
+        "since_days",
+        "tool_payload_max_chars",
+        "chunk_soft_max_tokens",
+        "include_paths_glob",
+        "exclude_paths_glob",
+    ):
+        assert key in out, f"expected {key!r} in doctor output"
+    assert "[source: default]" in out
+
+
 def test_doctor_no_drift_no_qdrant_means_exit_1(
     home: Path,
     monkeypatch: pytest.MonkeyPatch,

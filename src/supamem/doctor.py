@@ -156,6 +156,34 @@ def run_doctor(*, redact_secrets: bool = True) -> int:
         f"[source: {chain.mcp_caps_max_preview_chars}]"
     )
 
+    # ── Section 2c: Transcript config (Phase 6 D-31) ─────────────────────
+    console.print()
+    console.print("[supamem.brand]Transcript config[/supamem.brand]")
+    ok(
+        f"default_root            = {cfg.transcript_default_root}  "
+        f"[source: {chain.transcript_default_root}]"
+    )
+    ok(
+        f"since_days              = {cfg.transcript_since_days}  "
+        f"[source: {chain.transcript_since_days}]"
+    )
+    ok(
+        f"tool_payload_max_chars  = {cfg.transcript_tool_payload_max_chars}  "
+        f"[source: {chain.transcript_tool_payload_max_chars}]"
+    )
+    ok(
+        f"chunk_soft_max_tokens   = {cfg.transcript_chunk_soft_max_tokens}  "
+        f"[source: {chain.transcript_chunk_soft_max_tokens}]"
+    )
+    ok(
+        f"include_paths_glob      = {cfg.transcript_include_paths_glob}  "
+        f"[source: {chain.transcript_include_paths_glob}]"
+    )
+    ok(
+        f"exclude_paths_glob      = {cfg.transcript_exclude_paths_glob}  "
+        f"[source: {chain.transcript_exclude_paths_glob}]"
+    )
+
     # ── Section 3: Installed clients drift ───────────────────────────────
     console.print()
     console.print("[supamem.brand]Installed clients[/supamem.brand]")

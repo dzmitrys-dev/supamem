@@ -69,6 +69,50 @@ def test_mcp_caps_toml_partial_table(
     assert chain.mcp_caps_max_preview_chars == "default"
 
 
+def test_transcript_defaults() -> None:
+    """``ResolvedConfig`` exposes the six transcript fields at documented defaults (D-30)."""
+    cfg = ResolvedConfig()
+    assert cfg.transcript_default_root == "~/.claude/projects/"
+    assert cfg.transcript_since_days == 180
+    assert cfg.transcript_tool_payload_max_chars == 2000
+    assert cfg.transcript_chunk_soft_max_tokens == 600
+    assert cfg.transcript_include_paths_glob == []
+    assert cfg.transcript_exclude_paths_glob == []
+
+
+def test_transcript_toml_load(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``[supamem.transcript]`` table values flow into all six flat fields and
+    ``ConfigChain`` records ``supamem_toml`` source attribution (D-30, D-32)."""
+    monkeypatch.delenv("SUPAMEM_CONFIG", raising=False)
+    cfg_dir = tmp_path / ".supamem"
+    cfg_dir.mkdir()
+    (cfg_dir / "config.toml").write_text(
+        "[supamem.transcript]\n"
+        'default_root = "/custom/sessions/"\n'
+        "since_days = 30\n"
+        "tool_payload_max_chars = 4000\n"
+        "chunk_soft_max_tokens = 800\n"
+        'include_paths_glob = ["**/projects/**"]\n'
+        'exclude_paths_glob = ["**/secret/**"]\n',
+        encoding="utf-8",
+    )
+    cfg, chain = load_config(tmp_path)
+    assert cfg.transcript_default_root == "/custom/sessions/"
+    assert cfg.transcript_since_days == 30
+    assert cfg.transcript_tool_payload_max_chars == 4000
+    assert cfg.transcript_chunk_soft_max_tokens == 800
+    assert cfg.transcript_include_paths_glob == ["**/projects/**"]
+    assert cfg.transcript_exclude_paths_glob == ["**/secret/**"]
+    assert chain.transcript_default_root == "supamem_toml"
+    assert chain.transcript_since_days == "supamem_toml"
+    assert chain.transcript_tool_payload_max_chars == "supamem_toml"
+    assert chain.transcript_chunk_soft_max_tokens == "supamem_toml"
+    assert chain.transcript_include_paths_glob == "supamem_toml"
+    assert chain.transcript_exclude_paths_glob == "supamem_toml"
+
+
 def test_existing_eval_table_still_loads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

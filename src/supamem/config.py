@@ -59,6 +59,15 @@ class ResolvedConfig:
     mcp_caps_max_top_k: int = 25
     mcp_caps_max_query_chars: int = 250
     mcp_caps_max_preview_chars: int = 200
+    # Transcript ingestion — Phase 6 D-30 / D-32. Flat fields populated from
+    # the [supamem.transcript] TOML table via _NESTED_TABLES. The default_root
+    # is stored byte-stable (unexpanded ~) and resolved by the CLI consumer.
+    transcript_default_root: str = "~/.claude/projects/"
+    transcript_since_days: int = 180
+    transcript_tool_payload_max_chars: int = 2000
+    transcript_chunk_soft_max_tokens: int = 600
+    transcript_include_paths_glob: list[str] = field(default_factory=list)
+    transcript_exclude_paths_glob: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -80,6 +89,12 @@ class ConfigChain:
     mcp_caps_max_top_k: Source = "default"
     mcp_caps_max_query_chars: Source = "default"
     mcp_caps_max_preview_chars: Source = "default"
+    transcript_default_root: Source = "default"
+    transcript_since_days: Source = "default"
+    transcript_tool_payload_max_chars: Source = "default"
+    transcript_chunk_soft_max_tokens: Source = "default"
+    transcript_include_paths_glob: Source = "default"
+    transcript_exclude_paths_glob: Source = "default"
 
 
 _LEGACY_ENV: dict[str, str] = {
@@ -110,6 +125,18 @@ _NESTED_TABLES: list[tuple[str, dict[str, str]]] = [
             "max_top_k": "mcp_caps_max_top_k",
             "max_query_chars": "mcp_caps_max_query_chars",
             "max_preview_chars": "mcp_caps_max_preview_chars",
+        },
+    ),
+    # Phase 6 D-30 — [supamem.transcript] table → flat transcript_* fields.
+    (
+        "transcript",
+        {
+            "default_root": "transcript_default_root",
+            "since_days": "transcript_since_days",
+            "tool_payload_max_chars": "transcript_tool_payload_max_chars",
+            "chunk_soft_max_tokens": "transcript_chunk_soft_max_tokens",
+            "include_paths_glob": "transcript_include_paths_glob",
+            "exclude_paths_glob": "transcript_exclude_paths_glob",
         },
     ),
 ]

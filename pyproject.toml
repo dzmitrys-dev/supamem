@@ -48,6 +48,7 @@ bm25 = "supamem.embedders.bm25:BM25Embedder"
 
 [project.entry-points."supamem.chunker"]
 markdown_header = "supamem.indexer.chunker:chunk_markdown"
+transcript = "supamem.indexer.transcript.chunker:chunk_transcript"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/supamem"]
