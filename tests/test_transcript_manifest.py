@@ -115,6 +115,52 @@ def test_legacy_roundtrip_with_transcripts(tmp_path: Path) -> None:
     assert m2.transcripts == m.transcripts
 
 
+# ───── Phase 7 (Plan 07-02 Task 1) — classifier_hash reserved key ─────────
+
+
+def test_manifest_classifier_hash_default_none(tmp_path: Path) -> None:
+    """Empty manifest.json → classifier_hash defaults to None (R-04 backward compat)."""
+    p = tmp_path / "manifest.json"
+    p.write_text("{}", encoding="utf-8")
+    m = Manifest.load(p)
+    assert m.classifier_hash is None
+
+
+def test_manifest_classifier_hash_roundtrip(tmp_path: Path) -> None:
+    """Save with classifier_hash set → load preserves it (D-10)."""
+    p = tmp_path / "manifest.json"
+    m = Manifest(entries={}, transcripts={}, classifier_hash="abc123")
+    m.save(p)
+    m2 = Manifest.load(p)
+    assert m2.classifier_hash == "abc123"
+
+
+def test_manifest_byte_stable_when_classifier_hash_none(tmp_path: Path) -> None:
+    """Conditional emit: no __classifier_hash__ key when value is None.
+
+    Mirrors the __transcripts__ byte-stability lock so a Phase-6-era manifest
+    (no classifier hash) round-trips byte-identical bytes.
+    """
+    p = tmp_path / "manifest.json"
+    m = Manifest(entries={"foo.py": {"prod": "x", "tuned": "y"}}, transcripts={})
+    m.save(p)
+    body = p.read_text(encoding="utf-8")
+    assert "__classifier_hash__" not in body
+
+
+def test_manifest_entries_filter_skips_classifier_hash(tmp_path: Path) -> None:
+    """load() must NOT leak __classifier_hash__ into entries dict (D-10)."""
+    p = tmp_path / "manifest.json"
+    p.write_text(
+        '{"foo.py": {"prod": "x", "tuned": "y"}, "__classifier_hash__": "abc"}',
+        encoding="utf-8",
+    )
+    m = Manifest.load(p)
+    assert "__classifier_hash__" not in m.entries
+    assert "foo.py" in m.entries
+    assert m.classifier_hash == "abc"
+
+
 def test_double_underscore_namespace_does_not_collide(tmp_path: Path) -> None:
     """Only the literal key ``__transcripts__`` is special; other ``__x__``
     keys are filtered out (they should never appear; this guards against
