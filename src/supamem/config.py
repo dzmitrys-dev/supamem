@@ -68,6 +68,29 @@ class ResolvedConfig:
     transcript_chunk_soft_max_tokens: int = 600
     transcript_include_paths_glob: list[str] = field(default_factory=list)
     transcript_exclude_paths_glob: list[str] = field(default_factory=list)
+    # Phase 7 D-14 / D-15 — coding-path classifier rooms. Defaults ship in
+    # D-01a priority order (most-specific-first); first-match-wins by dict
+    # insertion order (PEP 468). User TOML at [supamem.classifier.rooms]
+    # REPLACES this map (matches transcript_include_paths_glob precedent).
+    classifier_rooms: dict[str, list[str]] = field(
+        default_factory=lambda: {
+            "tests": ["tests", "test", "__tests__", "spec", "specs"],
+            "types": ["types", "@types", "typings"],
+            "migrations": ["migrations", "alembic", "schema"],
+            "config": ["config", "configs", ".github", "ci"],
+            "scripts": ["scripts", "bin", "tools"],
+            "docs": ["docs", "documentation"],
+            "frontend": [
+                "frontend",
+                "web",
+                "client",
+                "ui",
+                "components",
+                "pages",
+            ],
+            "backend": ["src", "backend", "api", "server", "lib"],
+        }
+    )
 
 
 @dataclass
@@ -95,6 +118,7 @@ class ConfigChain:
     transcript_chunk_soft_max_tokens: Source = "default"
     transcript_include_paths_glob: Source = "default"
     transcript_exclude_paths_glob: Source = "default"
+    classifier_rooms: Source = "default"
 
 
 _LEGACY_ENV: dict[str, str] = {
@@ -139,6 +163,10 @@ _NESTED_TABLES: list[tuple[str, dict[str, str]]] = [
             "exclude_paths_glob": "transcript_exclude_paths_glob",
         },
     ),
+    # Phase 7 D-15 — [supamem.classifier.rooms] table → flat
+    # classifier_rooms field. Leaf is dict[str, list[str]]; _apply_nested
+    # setattr is type-agnostic (verified RESEARCH R-06).
+    ("classifier", {"rooms": "classifier_rooms"}),
 ]
 
 
