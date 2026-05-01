@@ -64,7 +64,10 @@ def test_rust_src_main_classifies_backend() -> None:
 def test_go_cmd_layout_returns_none() -> None:
     # Documents that 'cmd' is intentionally NOT a default keyword — Go projects
     # need user-configured rooms; tracked as known gap, not a bug.
-    assert classify_room("cmd/server/main.go", DEFAULT_ROOMS) is None
+    # NOTE: ``cmd/server/main.go`` would match backend via the ``server``
+    # keyword (it's in backend defaults). Use a Go layout with no matching
+    # component to demonstrate the gap honestly.
+    assert classify_room("cmd/myapp/main.go", DEFAULT_ROOMS) is None
 
 
 def test_docs_match() -> None:
