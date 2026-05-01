@@ -16,11 +16,12 @@ from __future__ import annotations
 
 import math
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
 
 from qdrant_client.http import models as qmodels
 
 from supamem.config import ResolvedConfig
+from supamem.retrieval.filters import WhereDict, build_qdrant_filter
 from supamem.retrieval.types import RetrievedChunk
 
 try:
@@ -125,10 +126,22 @@ class TunedHybridBackend:
             self._sparse = SparseTextEmbedding(DEFAULT_SPARSE_MODEL)
         return self._client, self._dense, self._sparse
 
-    def query(self, text: str, k: int = 5) -> list[RetrievedChunk]:
+    def query(
+        self,
+        text: str,
+        k: int = 5,
+        *,
+        where: Optional[WhereDict] = None,
+    ) -> list[RetrievedChunk]:
         client, dense, sparse = self._ensure()
         dense_q = [float(x) for x in next(dense.embed([text]))]
         sparse_q = next(sparse.embed([text]))
+
+        # D-03: build Filter ONCE; thread the SAME object to both Prefetch
+        # arms AND top-level query_filter (defense-in-depth per RESEARCH
+        # §Pattern 3 — applying it to only one arm causes RRF fusion to
+        # drown filtered hits in unfiltered ones, RESEARCH Pitfall 5).
+        qf = build_qdrant_filter(where)
 
         resp = client.query_points(
             collection_name=self.config.collection,
@@ -137,6 +150,7 @@ class TunedHybridBackend:
                     query=dense_q,
                     using=DENSE_VECTOR_NAME,
                     limit=PREFETCH_LIMIT,
+                    filter=qf,
                 ),
                 qmodels.Prefetch(
                     query=qmodels.SparseVector(
@@ -145,9 +159,11 @@ class TunedHybridBackend:
                     ),
                     using=SPARSE_VECTOR_NAME,
                     limit=PREFETCH_LIMIT,
+                    filter=qf,
                 ),
             ],
             query=qmodels.FusionQuery(fusion=qmodels.Fusion.RRF),
+            query_filter=qf,
             limit=max(k * 2, 10),
             with_payload=True,
             with_vectors=True,
