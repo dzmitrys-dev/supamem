@@ -187,3 +187,65 @@ def test_run_index_returns_zero_on_no_sources(tmp_path: Path) -> None:
     cfg = ResolvedConfig(sources=[], cache_dir=str(tmp_path / "cache"))
     rc = run_index(target="tuned", force=False, sources=[], config=cfg)
     assert rc == 0
+
+
+# ───── Plan 06-04 B2 — _parse_since + _filter_jsonl_by_since ──────────────
+
+
+def test_parse_since_supports_d_and_h() -> None:
+    """B2 / D-21: ``--since`` accepts Nd / Nh; 0 disables; None → default_days."""
+    from supamem.cli import _parse_since
+
+    assert _parse_since("180d", default_days=180) == 180 * 86400
+    assert _parse_since("24h", default_days=180) == 24 * 3600
+    assert _parse_since(None, default_days=180) == 180 * 86400
+    assert _parse_since("0", default_days=180) is None
+    assert _parse_since("0d", default_days=180) is None
+    assert _parse_since("0h", default_days=180) is None
+
+
+def test_parse_since_rejects_malformed() -> None:
+    """T-06-x10: malformed --since raises typer.BadParameter."""
+    import typer
+
+    from supamem.cli import _parse_since
+
+    with pytest.raises(typer.BadParameter):
+        _parse_since("nope", default_days=180)
+    with pytest.raises(typer.BadParameter):
+        _parse_since("30days", default_days=180)
+
+
+def test_filter_jsonl_by_since_drops_old_files(tmp_path: Path) -> None:
+    """B2: mtime-filter excludes JSONL files older than the recency window."""
+    import os
+    import time
+
+    from supamem.cli import _filter_jsonl_by_since
+
+    recent = tmp_path / "recent.jsonl"
+    recent.write_text("{}")
+    old = tmp_path / "old.jsonl"
+    old.write_text("{}")
+    old_mtime = time.time() - (30 * 86400)
+    os.utime(old, (old_mtime, old_mtime))
+    kept = _filter_jsonl_by_since([recent, old], 7 * 86400.0)
+    assert recent in kept
+    assert old not in kept
+
+
+def test_filter_jsonl_by_since_disabled_keeps_all(tmp_path: Path) -> None:
+    """B2: window_seconds=None disables the filter (--since=0 path)."""
+    import os
+    import time
+
+    from supamem.cli import _filter_jsonl_by_since
+
+    a = tmp_path / "a.jsonl"
+    a.write_text("{}")
+    b = tmp_path / "b.jsonl"
+    b.write_text("{}")
+    old_mtime = time.time() - (365 * 86400)
+    os.utime(b, (old_mtime, old_mtime))
+    kept = _filter_jsonl_by_since([a, b], None)
+    assert set(kept) == {a, b}

@@ -1,13 +1,106 @@
 """supamem CLI — Typer app dispatching to subcommands."""
 from __future__ import annotations
 
+import re
+import time
 from enum import Enum
+from pathlib import Path
 from typing import Optional
 
 import typer
 
 from supamem import __version__
 from supamem.console import CREDIT_LINE, console, err_console
+
+# Phase 6 B1 / D-10 — sentinel for TRUE bare-flag UX on `--transcripts`.
+# Three distinguishable states for the option:
+#   None                          → flag absent; do not index transcripts
+#   _TRANSCRIPTS_BARE_SENTINEL    → bare flag; resolve to cfg.transcript_default_root
+#   any other str                 → explicit user-provided path
+#
+# Implementation note: Typer 0.15-0.26 silently drops ``flag_value`` when
+# generating the Click option (typer.main.get_click_param ignores it for
+# non-bool params), so the Click "optional value" pattern from
+# ``@click.option(is_flag=False, flag_value=...)`` is not reachable through
+# Typer. We instead pre-process ``sys.argv`` in ``main()`` to substitute the
+# sentinel for a bare ``--transcripts`` BEFORE Typer parses, preserving the
+# D-10 user-facing UX (``supamem index --transcripts`` is a real bare flag,
+# ``--transcripts /path`` keeps explicit-value semantics, and the next arg
+# starting with ``-`` is NOT consumed by ``--transcripts``).
+# End users never see the sentinel — README/llms.txt examples show only
+# ``--transcripts`` (bare) or ``--transcripts <path>``.
+_TRANSCRIPTS_BARE_SENTINEL = "__SUPAMEM_DEFAULT__"
+
+
+def _rewrite_bare_transcripts_argv(argv: list[str]) -> list[str]:
+    """Rewrite a bare ``--transcripts`` to ``--transcripts <sentinel>`` (B1).
+
+    A bare flag is detected when ``--transcripts`` appears with NO following
+    token, OR with a following token that starts with ``-`` (i.e. another
+    flag). In both cases we inject the sentinel so Typer's standard
+    ``Optional[str]`` parsing receives a real value and does not fail with
+    "Option '--transcripts' requires an argument."
+
+    Pure function over a copy of argv — mutation is contained to ``main()``.
+    """
+    out: list[str] = []
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
+        if tok == "--transcripts":
+            nxt = argv[i + 1] if i + 1 < len(argv) else None
+            if nxt is None or nxt.startswith("-"):
+                out.append("--transcripts")
+                out.append(_TRANSCRIPTS_BARE_SENTINEL)
+                i += 1
+                continue
+        # Also handle ``--transcripts=`` (empty explicit value) → sentinel.
+        if tok == "--transcripts=":
+            out.append("--transcripts")
+            out.append(_TRANSCRIPTS_BARE_SENTINEL)
+            i += 1
+            continue
+        out.append(tok)
+        i += 1
+    return out
+
+
+def _parse_since(value: str | None, *, default_days: int) -> float | None:
+    """Parse ``--since`` into a seconds-window or None to disable (B2, D-21).
+
+    - ``None`` → ``default_days * 86400`` (config default).
+    - ``"0"`` / ``"0d"`` / ``"0h"`` → None (filter disabled — index all sessions).
+    - ``"180d"`` → ``180 * 86400`` seconds.
+    - ``"24h"``  → ``24 * 3600`` seconds.
+    - Anything else → ``typer.BadParameter`` (T-06-x10 mitigation).
+    """
+    if value is None:
+        return float(default_days) * 86400.0
+    v = value.strip().lower()
+    if v in ("0", "0d", "0h"):
+        return None
+    m = re.fullmatch(r"(\d+)([dh])", v)
+    if not m:
+        raise typer.BadParameter(f"--since must be Nd or Nh (got {value!r})")
+    n, unit = int(m.group(1)), m.group(2)
+    return float(n) * (86400.0 if unit == "d" else 3600.0)
+
+
+def _filter_jsonl_by_since(
+    paths: list[Path], window_seconds: float | None
+) -> list[Path]:
+    """Drop JSONL paths whose mtime is older than the recency window (B2)."""
+    if window_seconds is None:
+        return list(paths)
+    cutoff = time.time() - window_seconds
+    keep = [p for p in paths if p.stat().st_mtime >= cutoff]
+    skipped = len(paths) - len(keep)
+    if skipped:
+        err_console.print(
+            f"Filtered {skipped} sessions older than the --since window "
+            f"(use --since=0 to disable)."
+        )
+    return keep
 
 app = typer.Typer(
     name="supamem",
@@ -71,6 +164,32 @@ def cmd_index(
     target: str = typer.Option("tuned", "--target", help="Retrieval target (e.g. tuned, dense, bm25)."),
     force: bool = typer.Option(False, "--force", help="Re-embed even if manifest is current."),
     snapshot: Optional[str] = typer.Option(None, "--snapshot", help="Path to snapshot artifact (e.g. cursor)."),
+    transcripts: Optional[str] = typer.Option(
+        None,
+        "--transcripts",
+        help=(
+            "Index Claude Code session JSONL. Bare flag → cfg.transcript_default_root "
+            "(default ~/.claude/projects/). Pass an explicit directory to override."
+        ),
+        # B1 / D-10: bare-flag UX is implemented at the argv layer
+        # (_rewrite_bare_transcripts_argv) because Typer 0.15-0.26 silently
+        # drops Click's ``is_flag=False, flag_value=...`` pattern. The
+        # sentinel ``_TRANSCRIPTS_BARE_SENTINEL`` flows through Typer as a
+        # plain string value and is recognized in the function body below.
+    ),
+    transcripts_only: bool = typer.Option(
+        False,
+        "--transcripts-only",
+        help="Skip the default project corpus; index transcripts only.",
+    ),
+    since: Optional[str] = typer.Option(
+        None,
+        "--since",
+        help=(
+            "Recency window for transcript ingestion (e.g. 180d, 24h, 0 to disable). "
+            "Default: cfg.transcript_since_days."
+        ),
+    ),
 ) -> None:
     """Embed dev memories into Qdrant using the locked tuned-hybrid pipeline."""
     from supamem.config import load_config
@@ -84,8 +203,42 @@ def cmd_index(
         info(f"snapshot → cursor ({cfg.collection})")
         raise typer.Exit(run_snapshot(config=cfg))
 
+    # ── Phase 6 B1 / D-10 — resolve --transcripts three-state value ──────
+    transcript_root: Optional[Path] = None
+    jsonl_paths: list[Path] = []
+    if transcripts is not None:
+        if transcripts == _TRANSCRIPTS_BARE_SENTINEL:
+            root_str = cfg.transcript_default_root  # bare flag → config default
+        else:
+            root_str = transcripts  # explicit path
+        transcript_root = Path(root_str).expanduser().resolve()
+        if not transcript_root.exists() or not transcript_root.is_dir():
+            err_console.print(
+                f"[supamem.error]error[/]: --transcripts path does not exist or "
+                f"is not a directory: {transcript_root}\n"
+                f"  hint: pass an existing directory containing Claude Code "
+                f"session JSONL, or omit --transcripts to skip transcript ingestion."
+            )
+            raise typer.Exit(2)  # actionable, non-zero per INGEST-05
+        # D-24 first-run UX warning
+        err_console.print(
+            "[supamem.warn]⚠[/] First-run transcript indexing may take several minutes "
+            "for users with large session histories. Tune with --since=<N>d "
+            "or [supamem.transcript] since_days in config.toml."
+        )
+        # B2 — apply --since mtime filter before reaching run_index.
+        window = _parse_since(since, default_days=cfg.transcript_since_days)
+        jsonl_paths = sorted(transcript_root.rglob("*.jsonl"))
+        jsonl_paths = _filter_jsonl_by_since(jsonl_paths, window)
+
+    sources = list(cfg.sources)
+    if transcripts_only:
+        sources = []
+    if transcript_root is not None:
+        sources.extend(str(p) for p in jsonl_paths)
+
     info(f"indexing → {cfg.collection} (target={target}, force={force})")
-    raise typer.Exit(run_index(target=target, force=force, sources=cfg.sources, config=cfg))
+    raise typer.Exit(run_index(target=target, force=force, sources=sources, config=cfg))
 
 
 @app.command("mcp-server")
@@ -380,9 +533,15 @@ def main() -> None:
     # Fire-and-forget update probe — writes cache for *next* invocation. Skipped
     # when env vars opt out, when stderr is non-TTY (piped/redirected output),
     # or when the in-process probe fails for any reason. Never blocks.
+    import sys
+
     from supamem.update_check import get_pending_notification, start_background_check
 
     start_background_check(__version__)
+    # B1 / D-10 — preprocess argv so a bare ``--transcripts`` carries the
+    # sentinel value (Typer cannot natively express Click's optional-value
+    # pattern; see _rewrite_bare_transcripts_argv docstring).
+    sys.argv = [sys.argv[0], *_rewrite_bare_transcripts_argv(sys.argv[1:])]
     try:
         app()
     finally:

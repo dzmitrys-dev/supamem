@@ -6,17 +6,19 @@ import subprocess
 import sys
 
 
-def _run(*args: str) -> subprocess.CompletedProcess[str]:
+def _run(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     # Force plain output: capture_output makes stdout non-TTY, but CI may also set
     # FORCE_COLOR or COLUMNS; pin a deterministic env so Rich disables ANSI escapes
     # and uses a wide width — keeps "subcommand" / "--flag" tokens unwrapped in --help.
-    env = {**os.environ, "NO_COLOR": "1", "TERM": "dumb", "COLUMNS": "200"}
-    env.pop("FORCE_COLOR", None)
+    base_env = {**os.environ, "NO_COLOR": "1", "TERM": "dumb", "COLUMNS": "200"}
+    base_env.pop("FORCE_COLOR", None)
+    if env:
+        base_env.update(env)
     return subprocess.run(
         [sys.executable, "-m", "supamem", *args],
         capture_output=True,
         text=True,
-        env=env,
+        env=base_env,
     )
 
 
@@ -85,6 +87,88 @@ def test_doctor_shows_caps() -> None:
     for default in ("25", "250", "200"):
         assert default in out, f"expected default {default!r} in doctor output, got: {out!r}"
     assert "[source:" in out, f"expected provenance tag '[source: ...]' in output, got: {out!r}"
+
+
+def test_index_transcripts_help_lists_flag() -> None:
+    """Plan 06-04: index --help advertises --transcripts and --since (B1, B2)."""
+    r = _run("index", "--help")
+    assert r.returncode == 0, r.stderr
+    assert "--transcripts" in r.stdout
+    assert "--since" in r.stdout
+    assert "--transcripts-only" in r.stdout
+
+
+def test_index_transcripts_nonexistent_path_fails(tmp_path) -> None:
+    """INGEST-05: bad --transcripts path exits non-zero with actionable error."""
+    bogus = tmp_path / "nonexistent"
+    r = _run("index", "--transcripts", str(bogus))
+    assert r.returncode != 0
+    combined = r.stderr + r.stdout
+    assert "does not exist" in combined
+
+
+def test_index_transcripts_explicit_path(tmp_path) -> None:
+    """Explicit --transcripts <dir> resolves and proceeds (Qdrant fail-soft acceptable)."""
+    jsonl = tmp_path / "session.jsonl"
+    jsonl.write_text(
+        '{"type":"user","uuid":"u1","sessionId":"s1","isSidechain":false,'
+        '"message":{"role":"user","content":"hi"}}\n'
+        '{"type":"assistant","uuid":"a1","sessionId":"s1","isSidechain":false,'
+        '"message":{"role":"assistant","content":[{"type":"text","text":"hello"}]}}\n'
+    )
+    r = _run("index", "--transcripts", str(tmp_path), "--transcripts-only")
+    # Fail-soft on Qdrant absence is acceptable; we just must not get a Typer parse error (2).
+    assert r.returncode in (0, 1)
+    # If Typer rejected the args, "Usage:" would appear in stderr.
+    assert "Usage:" not in r.stderr or r.returncode == 0
+
+
+def test_index_transcripts_bare_flag_routes_to_default_root(tmp_path) -> None:
+    """B1 / D-10: bare --transcripts (no value) routes to cfg.transcript_default_root.
+
+    The sentinel must NOT be exposed and the bare flag must NOT require a value.
+    We override transcript_default_root via SUPAMEM_CONFIG so the test does not
+    depend on a real ~/.claude/projects/ tree.
+    """
+    cfg_dir = tmp_path / ".supamem"
+    cfg_dir.mkdir()
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    cfg_path = cfg_dir / "config.toml"
+    cfg_path.write_text(
+        f'[supamem.transcript]\ndefault_root = "{sessions}"\n',
+        encoding="utf-8",
+    )
+    r = _run("index", "--transcripts", env={"SUPAMEM_CONFIG": str(cfg_path)})
+    # Not 2 (Typer parse error) — bare flag must be accepted as a real flag.
+    assert r.returncode in (0, 1), f"unexpected exit {r.returncode}: {r.stderr}"
+    # default_root resolved cleanly to the existing tmp_path/sessions dir.
+    assert "does not exist" not in r.stderr
+
+
+def test_index_transcripts_bare_flag_does_not_consume_next_arg(tmp_path) -> None:
+    """Guard against ``is_flag=False, flag_value=...`` regressions where bare
+    ``--transcripts`` might accidentally swallow the next argument as its value.
+    """
+    cfg_dir = tmp_path / ".supamem"
+    cfg_dir.mkdir()
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    cfg_path = cfg_dir / "config.toml"
+    cfg_path.write_text(
+        f'[supamem.transcript]\ndefault_root = "{sessions}"\n',
+        encoding="utf-8",
+    )
+    # Bare --transcripts followed by --transcripts-only: must parse as TWO flags,
+    # NOT as --transcripts="--transcripts-only" (which would yield "does not exist").
+    r = _run(
+        "index",
+        "--transcripts",
+        "--transcripts-only",
+        env={"SUPAMEM_CONFIG": str(cfg_path)},
+    )
+    assert r.returncode in (0, 1), f"unexpected exit {r.returncode}: {r.stderr}"
+    assert "does not exist" not in r.stderr
 
 
 def test_version_prints_current() -> None:
