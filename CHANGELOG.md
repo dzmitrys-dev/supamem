@@ -2,6 +2,66 @@
 
 All notable changes to `supamem` will be documented in this file.
 
+## [0.2.3a1] — 2026-05-01
+
+First alpha of the v0.2.3 line. Ships the **coding-path classifier**
+(Phase 7 of the v0.2.0 milestone train) — every indexed chunk now
+carries a `payload.room` facet that `dual_memory_search` and
+`qdrant_find` can filter on via the new `where` parameter.
+
+### Added
+
+- Coding-path classifier: every indexed chunk gains `payload.room` via
+  exact path-component equality (`set(Path.parts) ∩ set(keywords)`),
+  never substring matching. `data/chest_xray/img.png` is NEVER
+  classified as `tests`. Defaults cover backend, frontend, tests, docs,
+  scripts, config, migrations, types in priority order
+  (CLASS-01, CLASS-02).
+- `[supamem.classifier.rooms]` TOML config table — override the default
+  keyword map per-project; priority is encoded by config order
+  (first-match-wins, D-01a). User TOML REPLACES the defaults dict
+  (leaf-replace, mirrors `transcript_*` precedent).
+- `where` parameter on `dual_memory_search` and `qdrant_find` MCP tools
+  (D-17 alias parity): `where={"room": "backend"}` filters retrieval to
+  that scope; `where={"room": ["backend", "tests"]}` is OR-within-key
+  (Qdrant `MatchAny`); multiple keys are AND. Single Qdrant `Filter`
+  built once at the retrieval boundary and threaded to BOTH dense and
+  sparse Prefetch arms PLUS the top-level `query_filter`
+  (defense-in-depth, D-03). v1 documents `room` as the only key;
+  unknown keys pass through to Qdrant for forward-compat with Phase
+  9/11 (CLASS-03).
+- `payload.room` is ALWAYS present (string or JSON `null`) on every
+  point — uniform schema (D-06). Transcript chunks classify to
+  `room = null` by construction (filter via existing `payload.chunker`).
+- `supamem doctor` surfaces the active classifier rooms map with
+  `[source: ...]` provenance, the stored `classifier_hash`, and a
+  per-room histogram (including a `null` bucket for unmatched chunks).
+- Hash-drift sweep: `manifest.classifier_hash = sha256(json.dumps(rooms,
+  sort_keys=False))` captures both content AND priority order. On every
+  `supamem index` run, if the stored hash differs from the current
+  config hash, supamem scrolls the collection in batches and
+  `client.set_payload({"room": new_room}, points=[ids], wait=True)`
+  per-room — pure metadata update, **zero re-embedding cost** (D-08).
+
+### Changed
+
+- Manifest gains `__classifier_hash__` reserved top-level key
+  (additive; emitted only when not None, byte-stable round-trip when
+  unset — mirrors `__transcripts__` precedent from Phase 6).
+- `tuned_hybrid` retrieval threads the `where`-derived `qmodels.Filter`
+  to BOTH dense and sparse Prefetch arms via a single construction
+  site (`src/supamem/retrieval/filters.py`) — anti-drift, no duplicated
+  filter logic across arms.
+
+### Notes
+
+- Pre-0.2.3 collections auto-migrate on first post-upgrade
+  `supamem index` invocation: missing `__classifier_hash__` is treated
+  as drift from null, triggering a one-time sweep that stamps every
+  existing chunk with a `room` value.
+- No new dependencies. `qdrant-client`, `mcp`, `pydantic` versions
+  unchanged.
+
 ## [0.2.2a1] — 2026-05-01
 
 First alpha of the v0.2.2 line. Ships the **transcript chunker plugin**

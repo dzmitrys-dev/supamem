@@ -332,6 +332,50 @@ Formatos de transcripción soportados actualmente: **JSONL de Claude Code** (Cur
 
 ---
 
+## 🔎 Recuperación con filtro (v0.2.3a1+)
+
+Filtra los resultados de recuperación por categoría de ruta de código mediante el parámetro
+`where` en `dual_memory_search` (y el alias `qdrant_find`):
+
+```python
+# Solo chunks clasificados como código backend
+dual_memory_search(query="auth flow", where={"room": "backend"})
+
+# OR entre varios rooms (Qdrant MatchAny)
+dual_memory_search(query="rate limit", where={"room": ["backend", "tests"]})
+```
+
+Cada chunk indexado lleva `payload.room` — uno de `backend`, `frontend`, `tests`, `docs`,
+`scripts`, `config`, `migrations`, `types` o `null`. La clasificación es **igualdad exacta
+por componente de ruta** (separando por `/`) — un fichero en `data/chest_xray/img.png`
+**nunca** se clasifica como `tests`. En `where`, múltiples claves se combinan con AND;
+los valores tipo lista dentro de una clave se combinan con OR.
+
+Sobrescribe el mapa de palabras clave por defecto en `.supamem/config.toml`:
+
+```toml
+[supamem.classifier.rooms]
+tests      = ["tests", "test", "__tests__"]
+backend    = ["src", "backend", "api"]
+frontend   = ["frontend", "web", "client", "components"]
+# La prioridad la determina el orden de las claves — gana la primera coincidencia.
+# Poner `tests` antes de `backend` hace que tests/backend/api_test.py se clasifique como `tests`.
+```
+
+`supamem doctor` muestra el mapa de rooms activo con la procedencia `[source: ...]`,
+el `classifier_hash` almacenado y un histograma por room (incluyendo un cubo `null`
+para los chunks sin coincidencia).
+
+Cambiar `[supamem.classifier.rooms]` desencadena un **barrido de reclasificación** único
+en el siguiente `supamem index` — `set_payload` de Qdrant por room, **coste cero de
+re-embedding**. Las colecciones anteriores a v0.2.3 se migran automáticamente en la
+primera invocación de `index` tras la actualización.
+
+Los chunks de transcripción (chunker == `transcript`) se clasifican como `room = null`
+por construcción — fíltralos mediante la clave existente `payload.chunker`.
+
+---
+
 ## 🪛 Cableando a tu cliente
 
 <details>

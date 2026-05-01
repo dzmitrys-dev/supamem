@@ -325,6 +325,46 @@ exclude_paths_glob     = []   # 排除敏感会话,例如 ["**/banking-*.jsonl"]
 
 ---
 
+## 🔎 范围化检索(v0.2.3a1+)
+
+通过 `dual_memory_search`(以及 `qdrant_find` 别名)上的 `where` 参数,按代码路径分类过滤检索结果:
+
+```python
+# 仅检索归类为 backend 的代码块
+dual_memory_search(query="auth flow", where={"room": "backend"})
+
+# 跨多个 room 取并集(Qdrant MatchAny)
+dual_memory_search(query="rate limit", where={"room": ["backend", "tests"]})
+```
+
+每个被索引的 chunk 都会携带 `payload.room`,取值为 `backend`、`frontend`、`tests`、`docs`、
+`scripts`、`config`、`migrations`、`types` 或 `null` 之一。分类基于**精确路径分量相等**
+(按 `/` 切分)—— 像 `data/chest_xray/img.png` 这样的文件**绝不会**被错分为 `tests`。
+`where` 中多个 key 之间是 AND,同一个 key 下的列表值之间是 OR。
+
+在 `.supamem/config.toml` 中覆盖默认关键词映射:
+
+```toml
+[supamem.classifier.rooms]
+tests      = ["tests", "test", "__tests__"]
+backend    = ["src", "backend", "api"]
+frontend   = ["frontend", "web", "client", "components"]
+# 优先级由 key 的顺序决定 —— 先匹配优先。
+# 将 `tests` 排在 `backend` 之前会让 tests/backend/api_test.py 归类为 `tests`。
+```
+
+`supamem doctor` 会展示当前生效的 rooms 映射(带 `[source: ...]` 来源标注)、已存储的
+`classifier_hash`,以及每个 room 的分布直方图(包括未匹配 chunk 的 `null` 桶)。
+
+修改 `[supamem.classifier.rooms]` 会在下一次 `supamem index` 时触发一次性**重分类扫描** ——
+通过 Qdrant `set_payload` 按 room 批量更新,**零重新嵌入成本**。v0.2.3 之前的旧 collection
+会在升级后首次 `index` 时自动迁移。
+
+转录类 chunk(chunker == `transcript`)按设计归类为 `room = null` —— 请通过现有的
+`payload.chunker` key 过滤它们。
+
+---
+
 ## 🪛 接入你的客户端
 
 <details>

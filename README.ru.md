@@ -331,6 +331,50 @@ exclude_paths_glob     = []   # исключить чувствительные 
 
 ---
 
+## 🔎 Поиск с фильтром (v0.2.3a1+)
+
+Фильтруйте результаты поиска по категориям путей в коде через параметр `where`
+у `dual_memory_search` (и алиаса `qdrant_find`):
+
+```python
+# Только чанки, классифицированные как backend
+dual_memory_search(query="auth flow", where={"room": "backend"})
+
+# OR между несколькими room (Qdrant MatchAny)
+dual_memory_search(query="rate limit", where={"room": ["backend", "tests"]})
+```
+
+Каждый проиндексированный чанк несёт `payload.room` — одно из значений `backend`,
+`frontend`, `tests`, `docs`, `scripts`, `config`, `migrations`, `types` или `null`.
+Классификация выполняется по **точному совпадению компонента пути** (разбиение по `/`) —
+файл `data/chest_xray/img.png` **никогда** не будет отнесён к `tests`. Несколько ключей
+в `where` объединяются через AND; список значений внутри одного ключа — через OR.
+
+Переопределите карту ключевых слов по умолчанию в `.supamem/config.toml`:
+
+```toml
+[supamem.classifier.rooms]
+tests      = ["tests", "test", "__tests__"]
+backend    = ["src", "backend", "api"]
+frontend   = ["frontend", "web", "client", "components"]
+# Приоритет задаётся порядком ключей — побеждает первое совпадение.
+# Если поставить `tests` перед `backend`, файл tests/backend/api_test.py попадёт в `tests`.
+```
+
+`supamem doctor` показывает активную карту rooms с пометкой `[source: ...]`,
+сохранённый `classifier_hash` и гистограмму по room-ам (включая корзину `null`
+для чанков без совпадения).
+
+Изменение `[supamem.classifier.rooms]` запускает однократный **переклассификационный
+sweep** при следующем `supamem index` — `set_payload` Qdrant по каждому room,
+**нулевая стоимость переэмбеддинга**. Коллекции до v0.2.3 автоматически мигрируют
+при первом запуске `index` после обновления.
+
+Чанки транскриптов (chunker == `transcript`) по построению попадают в `room = null` —
+фильтруйте их через существующий ключ `payload.chunker`.
+
+---
+
 ## 🪛 Подключение к клиенту
 
 <details>

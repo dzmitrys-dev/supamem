@@ -358,6 +358,48 @@ are deferred to follow-on plugins).
 
 ---
 
+## 🔎 Scoped retrieval (v0.2.3a1+)
+
+Filter retrieval by coding-shaped category via the `where` parameter on
+`dual_memory_search` (and the `qdrant_find` alias):
+
+```python
+# Only chunks classified as backend code
+dual_memory_search(query="auth flow", where={"room": "backend"})
+
+# OR across rooms (Qdrant MatchAny)
+dual_memory_search(query="rate limit", where={"room": ["backend", "tests"]})
+```
+
+Every indexed chunk carries `payload.room` — one of `backend`, `frontend`,
+`tests`, `docs`, `scripts`, `config`, `migrations`, `types`, or `null`.
+Classification is **exact path-component equality** (split on `/`) — a file
+at `data/chest_xray/img.png` is NEVER classified as `tests`. Multiple keys
+in `where` are AND; list values within a key are OR.
+
+Override the default keyword map in `.supamem/config.toml`:
+
+```toml
+[supamem.classifier.rooms]
+tests      = ["tests", "test", "__tests__"]
+backend    = ["src", "backend", "api"]
+frontend   = ["frontend", "web", "client", "components"]
+# Priority is encoded by key order — first match wins.
+# Putting `tests` before `backend` makes tests/backend/api_test.py classify as `tests`.
+```
+
+`supamem doctor` surfaces the active rooms map with `[source: ...]` provenance,
+the stored `classifier_hash`, and a per-room histogram (including a `null` bucket).
+
+Changing `[supamem.classifier.rooms]` triggers a one-time **re-classify sweep** on
+the next `supamem index` — Qdrant `set_payload` per-room, **zero re-embedding cost**.
+Pre-v0.2.3 collections auto-migrate on first post-upgrade index invocation.
+
+Transcript chunks (chunker == `transcript`) classify to `room = null` by construction —
+filter them via the existing `payload.chunker` key.
+
+---
+
 ## 🪛 Wiring into your client
 
 <details>
