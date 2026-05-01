@@ -189,6 +189,187 @@ def test_run_index_returns_zero_on_no_sources(tmp_path: Path) -> None:
     assert rc == 0
 
 
+# ───── Plan 07-02 — payload.room classification at index time ─────────────
+
+
+def _wire_indexer_mocks(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    """Stand up fake Qdrant + fake embedders for indexer integration tests."""
+    fake_client = MagicMock()
+    fake_client.get_collections.return_value = MagicMock(collections=[])
+    # Default scroll: return no points → sweep is a no-op when invoked.
+    fake_client.scroll.return_value = ([], None)
+    fake_dense = MagicMock()
+    fake_dense.embed = lambda batch: iter([[0.1] * 384 for _ in batch])
+
+    class _SparseVec:
+        def __init__(self) -> None:
+            self.indices = [1, 2, 3]
+            self.values = [0.5, 0.4, 0.3]
+
+    fake_sparse = MagicMock()
+    fake_sparse.embed = lambda batch: iter([_SparseVec() for _ in batch])
+
+    import supamem.indexer as indexer_mod
+
+    monkeypatch.setattr(
+        indexer_mod, "QdrantClient", lambda *a, **k: fake_client, raising=False
+    )
+    monkeypatch.setattr(
+        indexer_mod, "build_dense_embedder", lambda *a, **k: fake_dense, raising=False
+    )
+    monkeypatch.setattr(
+        indexer_mod, "build_sparse_embedder", lambda *a, **k: fake_sparse, raising=False
+    )
+    return fake_client
+
+
+def _collect_upserted_points(fake_client: MagicMock) -> list[Any]:
+    out: list[Any] = []
+    for call in fake_client.upsert.call_args_list:
+        pts = call.kwargs.get("points") or (call.args[1] if len(call.args) > 1 else [])
+        out.extend(pts)
+    return out
+
+
+def test_indexer_payload_room_present_for_backend_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """File under ``src/`` → payload['room'] == 'backend' (D-06 + D-11)."""
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    para = " ".join(["lorem"] * 30)
+    body = f"# H\n{para}\n## Sub\n{para}\n"
+    src = src_dir / "foo.md"
+    src.write_text(body, encoding="utf-8")
+
+    fake_client = _wire_indexer_mocks(monkeypatch)
+    cfg = ResolvedConfig(
+        sources=[str(src)],
+        cache_dir=str(tmp_path / "cache"),
+        collection="test_room",
+    )
+    run_index(target="tuned", force=True, sources=[str(src)], config=cfg)
+
+    points = _collect_upserted_points(fake_client)
+    assert points, "expected at least one upserted point"
+    for point in points:
+        assert "room" in point.payload, "payload.room MUST be present (D-06)"
+        assert point.payload["room"] == "backend"
+
+
+def test_indexer_payload_room_null_for_unmatched_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """File under ``data/`` (no default keyword) → payload['room'] is None."""
+    data_dir = tmp_path / "data" / "chest_xray"
+    data_dir.mkdir(parents=True)
+    para = " ".join(["lorem"] * 30)
+    body = f"# H\n{para}\n"
+    src = data_dir / "notes.md"
+    src.write_text(body, encoding="utf-8")
+
+    fake_client = _wire_indexer_mocks(monkeypatch)
+    cfg = ResolvedConfig(
+        sources=[str(src)],
+        cache_dir=str(tmp_path / "cache"),
+        collection="test_room",
+    )
+    run_index(target="tuned", force=True, sources=[str(src)], config=cfg)
+
+    points = _collect_upserted_points(fake_client)
+    assert points
+    for point in points:
+        assert "room" in point.payload, "payload.room MUST always be present (D-06)"
+        assert point.payload["room"] is None
+
+
+def test_indexer_payload_room_for_tests_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``tests/`` path component → payload['room'] == 'tests' (D-01a priority)."""
+    tdir = tmp_path / "tests"
+    tdir.mkdir()
+    para = " ".join(["lorem"] * 30)
+    body = f"# H\n{para}\n"
+    src = tdir / "spec.md"
+    src.write_text(body, encoding="utf-8")
+
+    fake_client = _wire_indexer_mocks(monkeypatch)
+    cfg = ResolvedConfig(
+        sources=[str(src)],
+        cache_dir=str(tmp_path / "cache"),
+        collection="test_room",
+    )
+    run_index(target="tuned", force=True, sources=[str(src)], config=cfg)
+
+    points = _collect_upserted_points(fake_client)
+    assert points
+    for point in points:
+        assert point.payload["room"] == "tests"
+
+
+def test_indexer_hash_drift_writes_classifier_hash_to_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """First post-upgrade run: manifest.classifier_hash starts None, ends == current.
+
+    Locks D-08 + D-10 + R-04: missing __classifier_hash__ → drift from None →
+    sweep runs (no-op here because scroll returns []) → post-sweep manifest
+    persists the new hash so subsequent runs are zero-overhead.
+    """
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    para = " ".join(["lorem"] * 30)
+    body = f"# H\n{para}\n"
+    src = src_dir / "doc.md"
+    src.write_text(body, encoding="utf-8")
+
+    fake_client = _wire_indexer_mocks(monkeypatch)
+    cfg = ResolvedConfig(
+        sources=[str(src)],
+        cache_dir=str(tmp_path / "cache"),
+        collection="test_room",
+    )
+    run_index(target="tuned", force=True, sources=[str(src)], config=cfg)
+
+    # First run triggered the drift gate (None != current); scroll was called.
+    assert fake_client.scroll.called, "expected sweep on classifier_hash drift"
+    manifest_path = tmp_path / "cache" / "manifest.json"
+    assert manifest_path.exists()
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert "__classifier_hash__" in raw
+    assert isinstance(raw["__classifier_hash__"], str)
+    assert len(raw["__classifier_hash__"]) == 64  # sha256 hex
+
+
+def test_indexer_no_sweep_when_classifier_hash_stable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Second invocation with unchanged config → ZERO scroll calls (D-08)."""
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    para = " ".join(["lorem"] * 30)
+    body = f"# H\n{para}\n"
+    src = src_dir / "doc.md"
+    src.write_text(body, encoding="utf-8")
+
+    fake_client = _wire_indexer_mocks(monkeypatch)
+    cfg = ResolvedConfig(
+        sources=[str(src)],
+        cache_dir=str(tmp_path / "cache"),
+        collection="test_room",
+    )
+    # First run: writes classifier_hash to manifest.
+    run_index(target="tuned", force=True, sources=[str(src)], config=cfg)
+    fake_client.reset_mock()
+
+    # Second run: hash matches → sweep gate does NOT fire.
+    run_index(target="tuned", force=True, sources=[str(src)], config=cfg)
+    assert not fake_client.scroll.called, (
+        "second run with stable classifier_hash MUST NOT scroll"
+    )
+
+
 # ───── Plan 06-04 B2 — _parse_since + _filter_jsonl_by_since ──────────────
 
 
