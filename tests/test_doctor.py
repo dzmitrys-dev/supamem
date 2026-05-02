@@ -199,3 +199,192 @@ def test_doctor_no_drift_no_qdrant_means_exit_1(
     monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: False)
     rc = mod.run_doctor()
     assert rc == 1
+
+
+# ───── Plan 08-03 — Reranker panel + partial-download warning (D-DOCTOR-01/02) ─
+
+
+def _seed_healthy_manifest(cache_dir: Path, model_id: str) -> Path:
+    """Create a snapshot dir with two small files + a matching manifest."""
+    import json as _json
+    slug = model_id.replace("/", "--")
+    snap = cache_dir / "models" / f"models--{slug}" / "snapshots" / "abc123"
+    snap.mkdir(parents=True)
+    f1 = snap / "config.json"
+    f1.write_text('{"k":"v"}', encoding="utf-8")
+    f2 = snap / "model.safetensors"
+    f2.write_bytes(b"\x00" * 64)
+    manifest = {
+        "files": {
+            "config.json": f1.stat().st_size,
+            "model.safetensors": f2.stat().st_size,
+        },
+        "total_bytes": f1.stat().st_size + f2.stat().st_size,
+        "schema": 1,
+    }
+    (snap / "_expected_manifest.json").write_text(_json.dumps(manifest, indent=2))
+    return snap
+
+
+def test_doctor_reranker_panel_healthy(
+    home: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """D-DOCTOR-01: panel surfaces name, model_id, cache_path, size, device."""
+    import supamem.doctor as mod
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setenv("SUPAMEM_CACHE_DIR", str(cache))
+    _seed_healthy_manifest(cache, "mixedbread-ai/mxbai-rerank-base-v2")
+
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: False)
+    rc = mod.run_doctor()
+    out = capsys.readouterr().out
+
+    assert "Reranker" in out, "Reranker panel header missing"
+    assert "mxbai_v2" in out, "active reranker name missing"
+    assert "mixedbread-ai/mxbai-rerank-base-v2" in out, "model_id missing"
+    assert "cache_path" in out
+    assert "device" in out
+    # No partial-download → reranker_drift must NOT bump rc on its own.
+    # rc==1 is from qdrant_unreachable in this test, which is fine.
+    assert rc == 1  # qdrant unreachable, not reranker drift
+
+
+def test_doctor_reranker_panel_partial_download(
+    home: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """D-DOCTOR-02: deleting half the model files surfaces warn + names ``supamem repair`` + rc=1.
+
+    Test pins ``qdrant_up=True`` and a present collection so any rc=1 is
+    UNAMBIGUOUSLY attributable to the new ``reranker_drift`` accumulator
+    (B2 fix: drift contributes to the existing rc expression on line ~295).
+    """
+    import supamem.doctor as mod
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setenv("SUPAMEM_CACHE_DIR", str(cache))
+    snap = _seed_healthy_manifest(cache, "mixedbread-ai/mxbai-rerank-base-v2")
+    # Delete half the files (drop model.safetensors → ~99% of bytes gone).
+    (snap / "model.safetensors").unlink()
+
+    # Pin Qdrant up + collection present so drift attribution is unambiguous.
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: True)
+    monkeypatch.setattr(
+        mod, "_collection_health",
+        lambda client, name: {"present": True, "sparse": True},
+    )
+
+    class _OkClient:
+        def __init__(self, *a, **kw) -> None:
+            pass
+
+        def get_collection(self, *a, **kw):
+            class _Info:
+                class config:
+                    class params:
+                        sparse_vectors = {"sparse": object()}
+            return _Info()
+
+        def count(self, *a, **kw):
+            class _C:
+                count = 0
+            return _C()
+
+    monkeypatch.setattr(
+        "qdrant_client.QdrantClient", lambda *a, **kw: _OkClient(), raising=False
+    )
+
+    rc = mod.run_doctor()
+    out = capsys.readouterr().out
+
+    assert "Reranker" in out
+    assert "supamem repair" in out, "warn must name `supamem repair` for actionability"
+    assert rc == 1, (
+        "partial-download MUST contribute to rc accumulator (B2 fix)"
+    )
+
+
+def test_doctor_reranker_p50_p95_verifiable(
+    home: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """W3 fix: p50/p95 doctor field MUST be verifiable.
+
+    Pre-load N=20 latency samples; assert ONE of:
+    - **Deque path:** printed ``rerank_p50_ms`` matches ``statistics.median(samples)``
+      to within 0.5 ms.
+    - **Welford-mean path:** printed line carries the literal substring ``"approx"``
+      so users know the value is mean-derived, not a true percentile.
+    """
+    import statistics
+    import supamem.doctor as mod
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setenv("SUPAMEM_CACHE_DIR", str(cache))
+    _seed_healthy_manifest(cache, "mixedbread-ai/mxbai-rerank-base-v2")
+
+    samples = [10.0 * (i + 1) for i in range(20)]  # 10, 20, ..., 200
+    expected_p50 = statistics.median(samples)  # 105.0
+
+    # Inject samples through whichever telemetry surface the doctor panel reads.
+    # Try the deque path first (preferred per Plan 08-03 Step 2b.i); fall back
+    # to seeding the Welford aggregate file.
+    from supamem.stats import counter as counter_mod
+    deque_seeded = False
+    if hasattr(counter_mod, "_LATENCY_DEQUES") and hasattr(
+        counter_mod, "get_latency_samples"
+    ):
+        # Deque path — clear + seed.
+        d = counter_mod._LATENCY_DEQUES[("rerank", "rerank_latency_ms")]
+        d.clear()
+        for s in samples:
+            d.append(s)
+        deque_seeded = True
+    else:
+        # Welford-mean path — write aggregate file directly.
+        import json as _json
+        agg_path = Path.home() / ".cache" / "supamem" / "aggregates.json"
+        agg_path.parent.mkdir(parents=True, exist_ok=True)
+        n = len(samples)
+        s_sum = sum(samples)
+        s_sumsq = sum(v * v for v in samples)
+        agg_path.write_text(_json.dumps({
+            "rerank:rerank_latency_ms": {
+                "sum": s_sum, "sumsq": s_sumsq, "count": n,
+                "min": min(samples), "max": max(samples),
+            }
+        }))
+
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: False)
+    mod.run_doctor()
+    out = capsys.readouterr().out
+
+    assert "rerank" in out.lower(), "rerank latency line must appear in panel"
+
+    if deque_seeded:
+        # Deque path → printed p50 must match statistics.median to 0.5 ms.
+        # Locate the rerank_p50_ms value in output.
+        import re
+        m = re.search(r"rerank_p50_ms\s*[=≈]?\s*([\d.]+)", out)
+        assert m, f"could not parse rerank_p50_ms from output:\n{out}"
+        printed = float(m.group(1))
+        assert abs(printed - expected_p50) <= 0.5, (
+            f"p50 drift: printed {printed} vs expected {expected_p50}"
+        )
+    else:
+        # Welford path → must carry literal "approx" so users know it's not a true percentile.
+        assert "approx" in out, (
+            "Welford-mean path MUST label the line with literal 'approx' "
+            "so users know the value is mean-derived (W3 verifiability)"
+        )

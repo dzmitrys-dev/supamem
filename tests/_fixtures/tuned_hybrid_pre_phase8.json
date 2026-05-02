@@ -1,0 +1,57 @@
+[
+  {
+    "id": "d1",
+    "text": "alpha one",
+    "score": 0.9843708982397964,
+    "source_path": "a.md",
+    "file_path": null,
+    "headers": null,
+    "payload": {
+      "document": "alpha one",
+      "source": "a.md",
+      "updated_at": "2026-04-01T00:00:00+00:00"
+    },
+    "rerank_score": null
+  },
+  {
+    "id": "d2",
+    "text": "beta two",
+    "score": 0.9200000000000433,
+    "source_path": "b.md",
+    "file_path": null,
+    "headers": null,
+    "payload": {
+      "document": "beta two",
+      "source": "b.md",
+      "updated_at": "2024-01-01T00:00:00+00:00"
+    },
+    "rerank_score": null
+  },
+  {
+    "id": "d4",
+    "text": "gamma three",
+    "score": 0.8,
+    "source_path": "d.md",
+    "file_path": null,
+    "headers": null,
+    "payload": {
+      "document": "gamma three",
+      "source": "d.md"
+    },
+    "rerank_score": null
+  },
+  {
+    "id": "d5",
+    "text": "delta four",
+    "score": 0.7000010062700962,
+    "source_path": "e.md",
+    "file_path": null,
+    "headers": null,
+    "payload": {
+      "document": "delta four",
+      "source": "e.md",
+      "updated_at": "2025-06-01T00:00:00+00:00"
+    },
+    "rerank_score": null
+  }
+]
