@@ -131,6 +131,7 @@ def run_init(
     qdrant_url: Optional[str] = None,
     force: bool = False,
     skip_models: bool = False,
+    skip_patch_agents: bool = False,
 ) -> int:
     """Greenfield bootstrap. Returns 0 on success, non-zero on hard failure."""
     cwd = cwd.resolve()
@@ -166,6 +167,13 @@ def run_init(
             log.debug("model pre-fetch skipped: %r", exc)
     else:
         info("--skip-models: skipping ML model pre-fetch")
+
+    # ── 1c. Patch subagent reachability (D-LOCK-01..03, Phase 08.1) ────────
+    # AFTER models, BEFORE next-step prompt. Lazy import avoids any potential
+    # circular dep with install/__init__.py. Scans BOTH ~/.claude/agents/ AND
+    # the new project's .claude/agents/ (D-LOCK-03).
+    from supamem.install import _maybe_patch_agents  # noqa: PLC0415
+    _maybe_patch_agents(skip_patch_agents)
 
     # ── 2. Slug + collection name ──────────────────────────────────────────
     slug = _slugify(cwd.name)

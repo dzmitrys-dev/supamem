@@ -60,6 +60,30 @@ def _maybe_prepare_models(skip_models: bool) -> None:
         log.debug("model pre-fetch skipped: %r", exc)
 
 
+def _maybe_patch_agents(skip_patch_agents: bool) -> None:
+    """Idempotently patch ``~/.claude/agents/`` + ``<project>/.claude/agents/`` whitelists.
+
+    Per D-LOCK-01..03 + D-FAIL-03, mirrors ``_maybe_prepare_models`` swallow shape:
+    failures are non-fatal — install always exits 0. Ordering invariant: this MUST
+    be called AFTER ``_maybe_prepare_models`` (slow network first; fast filesystem
+    second per RESEARCH.md "Wiring" rationale).
+    """
+    if skip_patch_agents:
+        info("--skip-patch-agents: skipping subagent reachability patch")
+        return
+    try:
+        from supamem.install.agent_patcher import patch_all  # noqa: PLC0415
+
+        summary = patch_all(skip=False)
+        n = len(summary.patched)
+        if n > 0:
+            ok(f"patched {n} subagent file(s) for supamem reachability")
+    except Exception as exc:  # noqa: BLE001 — patcher pathologies must not block install
+        log.debug("agent patch skipped: %r", exc)
+        from supamem.console import warn as _warn  # noqa: PLC0415
+        _warn(f"subagent patcher skipped: {exc!r} — run `supamem repair` later")
+
+
 def install(
     client: Optional[str],
     *,
@@ -67,6 +91,7 @@ def install(
     scope: str = "project",
     enforce_search: bool = False,
     skip_models: bool = False,
+    skip_patch_agents: bool = False,
 ) -> int:
     """Install supamem into the named client (or auto-detect).
 
@@ -97,7 +122,10 @@ def install(
         ok(f"synced {len(written)} share artifact(s)")
 
     # Eager-fetch ML prerequisites BEFORE client dispatch (D-FETCH-01).
+    # Order: models first (slow network), patcher second (fast filesystem) —
+    # per RESEARCH.md "Wiring" rationale (Phase 08.1 D-LOCK-01..03 + D-FAIL-03).
     _maybe_prepare_models(skip_models)
+    _maybe_patch_agents(skip_patch_agents)
 
     if client == "claude-code":
         from supamem.install import claude_code
@@ -157,6 +185,7 @@ def repair(
     dry_run: bool = False,
     enforce_search: bool = False,
     skip_models: bool = False,
+    skip_patch_agents: bool = False,
 ) -> int:
     """Re-install at project scope and strip stale GLOBAL supamem entries.
 
@@ -217,6 +246,7 @@ def repair(
             scope="project",
             enforce_search=enforce_search,
             skip_models=skip_models,
+            skip_patch_agents=skip_patch_agents,
         )
         if install_rc != 0:
             rc_overall = install_rc
