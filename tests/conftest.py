@@ -14,6 +14,7 @@ inside the production code path are what fail in red phase.
 from __future__ import annotations
 
 import importlib.metadata as _ilm
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -137,3 +138,95 @@ def mock_reranker_entry_point(monkeypatch):
     except ImportError:
         pass
     return MockReranker
+
+
+# ---- Phase 9 helpers (added by 09-01-PLAN) ------------------------------
+#
+# Forward-compat helpers for Phase 9 per-source temporal validity (TEMP-01,
+# TEMP-02, TEMP-03). The four ``recency_per_source_transcript_*`` and
+# ``temporal_retention_days`` fields do NOT yet exist on ``ResolvedConfig``
+# (Plan 02 wires them). Like ``_cfg_with_caps``, we attach them via setattr
+# so RED tests can construct configs with these knobs BEFORE the production
+# fields land — collection stays clean either way.
+#
+# Decision references (see .planning/phases/09-per-source-temporal-validity):
+# - D-CONFIG-01: flat-field naming ``recency_per_source_transcript_*`` and
+#   ``temporal_retention_days``.
+# - D-CONFIG-02: validators reject α∉[0,1], hl≤0, retention<0 at boot
+#   (Plan 02 lands the gate; tests here exercise the helper shape only).
+
+
+def _cfg_with_temporal(
+    *,
+    retention_days: int = 90,
+    decay_enabled: bool = False,
+    half_life_days: float = 14.0,
+    alpha: float = 0.7,
+    **overrides: Any,
+) -> ResolvedConfig:
+    """Build a ``ResolvedConfig`` with the four Phase 9 temporal knobs setattr-applied.
+
+    Mirrors :func:`_cfg_with_caps` exactly: known dataclass fields are
+    routed into the constructor, unknown ones (and the four temporal knobs)
+    are setattr'd post-construction so the helper works on RED-phase
+    configs (before Plan 02 lands the real fields) AND on GREEN-phase
+    configs (where setattr on an existing dataclass field is a normal
+    assignment).
+
+    Decisions: D-CONFIG-01 (flat fields), D-DECAY-01 (defaults α=0.7,
+    hl=14d), D-GC-DEFAULT-01 (retention_days=90).
+    """
+    base: dict[str, Any] = {
+        "qdrant_url": "http://localhost:6333",
+        "collection": "test_temporal",
+    }
+    known = set(ResolvedConfig.__dataclass_fields__)
+    extras: dict[str, Any] = {}
+    for k, v in overrides.items():
+        if k in known:
+            base[k] = v
+        else:
+            extras[k] = v
+    cfg = ResolvedConfig(**base)
+    setattr(cfg, "recency_per_source_transcript_enabled", decay_enabled)
+    setattr(cfg, "recency_per_source_transcript_half_life_days", half_life_days)
+    setattr(cfg, "recency_per_source_transcript_alpha", alpha)
+    setattr(cfg, "temporal_retention_days", retention_days)
+    for k, v in extras.items():
+        setattr(cfg, k, v)
+    return cfg
+
+
+def make_temporal_qdrant_mock() -> MagicMock:
+    """Build a MagicMock Qdrant client wired for Phase 9 helper tests.
+
+    Pre-configures the methods Phase 9 helpers exercise:
+
+    - ``scroll(...)`` returns ``([], None)`` by default (empty page,
+      offset=None terminates the pagination loop). Tests override
+      ``client.scroll.return_value`` or ``.side_effect`` for multi-page cases.
+    - ``count(count_filter=...)`` returns ``SimpleNamespace(count=0)`` —
+      mirrors the real ``CountResult.count`` attribute access pattern in
+      ``doctor.py`` (Phase 7 D-07 room histogram precedent).
+    - ``set_payload(...)`` / ``delete(...)`` / ``create_payload_index(...)``
+      return None (typical mutating-RPC shape).
+
+    Cross-references (see 09-RESEARCH.md):
+    - §R-1: ``IsEmptyCondition`` — IsNullCondition does NOT match missing
+      payload fields in Qdrant 1.10+, so the temporal sub-filter MUST use
+      IsEmpty for live-chunk detection (legacy pre-Phase-9 points).
+    - §R-3: ``create_payload_index`` with ``field_schema=DATETIME`` — first
+      ``create_payload_index`` call site in the codebase; idempotent on
+      re-creation per qdrant-client semantics.
+    - §R-5: ``delete(points_selector=PointIdsList(points=ids))`` — Form A
+      (scroll → batch IDs → delete by id list), chosen over server-side
+      ``delete(filter=...)`` so the GC count remains visible to doctor +
+      Welford counters.
+    """
+    client = MagicMock()
+    client.scroll.return_value = ([], None)
+    client.count.return_value = SimpleNamespace(count=0)
+    client.set_payload.return_value = None
+    client.delete.return_value = None
+    client.create_payload_index.return_value = None
+    return client
