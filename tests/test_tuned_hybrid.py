@@ -194,31 +194,57 @@ def test_query_threads_filter_to_both_prefetch_arms(
 def test_query_no_filter_when_where_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """When where=None, query_filter must be None and Prefetch.filter unset/None."""
+    """When where=None, query_filter contains ONLY the always-on temporal clause.
+
+    Phase 9 D-FILTER-01: ``build_qdrant_filter(None)`` now produces a Filter
+    wrapping the IsEmpty(valid_to) ∨ DatetimeRange(gt=now) sub-filter so that
+    every retrieval path inherits temporal validity for free. The tuned_hybrid
+    backend MUST propagate that filter to ``query_filter`` AND to both Prefetch
+    arms (D-03 single construction site).
+    """
+    from qdrant_client.http import models as qmodels
+
     backend, fake_client = _make_fake_backend(monkeypatch)
 
     backend.query("x", k=5)  # default where=None
 
     kwargs = fake_client.query_points.call_args.kwargs
-    assert kwargs.get("query_filter") is None
+    qf = kwargs.get("query_filter")
+    assert qf is not None
+    assert qf.must is not None and len(qf.must) == 1
+    # Single must-entry is the nested temporal sub-filter.
+    nested = qf.must[0]
+    assert isinstance(nested, qmodels.Filter)
+    assert nested.should is not None and len(nested.should) == 2
+    assert isinstance(nested.should[0], qmodels.IsEmptyCondition)
+    # Same Filter object on both Prefetch arms (D-03).
     for pf in kwargs["prefetch"]:
-        assert pf.filter is None
+        assert pf.filter is qf
 
 
 def test_query_filter_shape_matches_match_value(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The captured Filter wraps a MatchValue with the expected key/value."""
-    import json
+    """The captured Filter wraps the temporal clause AND a MatchValue.
 
+    Phase 9 D-FILTER-01 + D-COMPOSE: temporal sub-filter is prepended to the
+    must= list, then the caller's where clauses follow in insertion order.
+    """
     backend, fake_client = _make_fake_backend(monkeypatch)
     backend.query("x", k=5, where={"room": "backend"})
 
     qf = fake_client.query_points.call_args.kwargs["query_filter"]
-    body = json.loads(qf.model_dump_json(exclude_none=True))
-    assert body == {
-        "must": [{"key": "room", "match": {"value": "backend"}}],
-    }
+    assert qf.must is not None and len(qf.must) == 2
+    # Position 0: nested temporal sub-filter.
+    from qdrant_client.http import models as qmodels
+
+    assert isinstance(qf.must[0], qmodels.Filter)
+    assert qf.must[0].should is not None and len(qf.must[0].should) == 2
+    # Position 1: the room MatchValue.
+    cond = qf.must[1]
+    assert isinstance(cond, qmodels.FieldCondition)
+    assert cond.key == "room"
+    assert cond.match.value == "backend"
 
 
 def test_dense_stub_accepts_where_kwarg() -> None:

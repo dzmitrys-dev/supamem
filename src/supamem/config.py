@@ -100,6 +100,17 @@ class ResolvedConfig:
     reranker_top_n: int = 50
     reranker_prefetch_per_arm: int = 50
     reranker_batch_size: int = 16
+    # ── Phase 9 D-CONFIG-01 / D-GC-DEFAULT-01 ─────────────────────────────
+    # Per-source recency decay (transcript-only opt-in) + auto-GC retention.
+    # Code/ADR/doc rankings invariant under decay flag flips (TEMP-03 lock).
+    # Defaults populated from the [supamem.recency.per_source.transcript]
+    # and [supamem.temporal] TOML tables via _NESTED_TABLES; boot-time
+    # validation gates in load_config() reject out-of-range values
+    # (D-CONFIG-02): alpha ∈ [0, 1], half_life_days > 0, retention_days >= 0.
+    recency_per_source_transcript_enabled: bool = False
+    recency_per_source_transcript_half_life_days: float = 14.0
+    recency_per_source_transcript_alpha: float = 0.7
+    temporal_retention_days: int = 90  # 0 = kept-forever escape hatch
 
 
 @dataclass
@@ -133,6 +144,11 @@ class ConfigChain:
     reranker_top_n: Source = "default"
     reranker_prefetch_per_arm: Source = "default"
     reranker_batch_size: Source = "default"
+    # Phase 9 D-CONFIG-01 / D-GC-DEFAULT-01.
+    recency_per_source_transcript_enabled: Source = "default"
+    recency_per_source_transcript_half_life_days: Source = "default"
+    recency_per_source_transcript_alpha: Source = "default"
+    temporal_retention_days: Source = "default"
 
 
 _LEGACY_ENV: dict[str, str] = {
@@ -191,6 +207,24 @@ _NESTED_TABLES: list[tuple[str, dict[str, str]]] = [
             "top_n": "reranker_top_n",
             "prefetch_per_arm": "reranker_prefetch_per_arm",
             "batch_size": "reranker_batch_size",
+        },
+    ),
+    # ── Phase 9 D-CONFIG-01 — [supamem.recency.per_source.transcript] ────
+    # Three-level dotted key; _apply_nested .split(".") traversal handles
+    # arbitrary depth (verified via existing two-level [supamem.mcp.caps]).
+    (
+        "recency.per_source.transcript",
+        {
+            "enabled": "recency_per_source_transcript_enabled",
+            "half_life_days": "recency_per_source_transcript_half_life_days",
+            "alpha": "recency_per_source_transcript_alpha",
+        },
+    ),
+    # ── Phase 9 D-GC-DEFAULT-01 — [supamem.temporal] ─────────────────────
+    (
+        "temporal",
+        {
+            "retention_days": "temporal_retention_days",
         },
     ),
 ]
@@ -380,5 +414,29 @@ def load_config(cwd: Path | None = None) -> tuple[ResolvedConfig, ConfigChain]:
                 f"Set [supamem.reranker] name = 'off' to disable."
             )
             raise SystemExit(2)
+
+    # ── Phase 9 D-CONFIG-02 — Pydantic-style fail-closed validation ──────
+    # Boot-time fail-closed: out-of-range numeric config never reaches the
+    # decay math or GC sweep. Mitigates T-09-02-01 (tampering via TOML).
+    from supamem.console import err_console  # noqa: PLC0415
+
+    if not (0.0 <= cfg.recency_per_source_transcript_alpha <= 1.0):
+        err_console.print(
+            f"[supamem.err]config: recency.per_source.transcript.alpha="
+            f"{cfg.recency_per_source_transcript_alpha} must be in [0.0, 1.0]"
+        )
+        raise SystemExit(2)
+    if cfg.recency_per_source_transcript_half_life_days <= 0:
+        err_console.print(
+            f"[supamem.err]config: recency.per_source.transcript.half_life_days="
+            f"{cfg.recency_per_source_transcript_half_life_days} must be > 0"
+        )
+        raise SystemExit(2)
+    if cfg.temporal_retention_days < 0:
+        err_console.print(
+            f"[supamem.err]config: temporal.retention_days="
+            f"{cfg.temporal_retention_days} must be >= 0 (0 = kept-forever)"
+        )
+        raise SystemExit(2)
 
     return cfg, chain

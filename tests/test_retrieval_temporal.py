@@ -237,12 +237,19 @@ def test_malformed_valid_from_skips_decay_keeps_score():
 
 def _write_temporal_toml(
     tmp_path,
+    monkeypatch,
     *,
     alpha: float = 0.7,
     half_life_days: float = 14.0,
     retention_days: int = 90,
     decay_enabled: bool = True,
 ):
+    """Write a TOML file under ``tmp_path`` and point ``$SUPAMEM_CONFIG`` at it.
+
+    Uses the existing ``SUPAMEM_CONFIG`` env-var rung (precedence ladder
+    rung 1a in ``config.py``) so we exercise the production discovery path
+    without depending on a Pytest-only ``explicit_path`` kwarg.
+    """
     cfg_path = tmp_path / "config.toml"
     cfg_path.write_text(
         f"""
@@ -259,64 +266,56 @@ alpha = {alpha}
 retention_days = {retention_days}
 """.lstrip()
     )
+    monkeypatch.setenv("SUPAMEM_CONFIG", str(cfg_path))
+    monkeypatch.chdir(tmp_path)
     return cfg_path
 
 
-@pytest.mark.skip(reason="GREEN in Plan 02 — Pydantic validators wired in config.py")
 def test_alpha_out_of_range_rejected(tmp_path, monkeypatch):
     """D-CONFIG-02: α > 1 → SystemExit(2) at boot."""
     from supamem.config import load_config
 
-    cfg_path = _write_temporal_toml(tmp_path, alpha=1.5)
-    monkeypatch.chdir(tmp_path)
+    _write_temporal_toml(tmp_path, monkeypatch, alpha=1.5)
     with pytest.raises(SystemExit) as excinfo:
-        load_config(explicit_path=cfg_path)
+        load_config()
     assert excinfo.value.code == 2
 
 
-@pytest.mark.skip(reason="GREEN in Plan 02 — Pydantic validators wired in config.py")
 def test_alpha_negative_rejected(tmp_path, monkeypatch):
     """D-CONFIG-02: α < 0 → SystemExit(2) at boot."""
     from supamem.config import load_config
 
-    cfg_path = _write_temporal_toml(tmp_path, alpha=-0.1)
-    monkeypatch.chdir(tmp_path)
+    _write_temporal_toml(tmp_path, monkeypatch, alpha=-0.1)
     with pytest.raises(SystemExit) as excinfo:
-        load_config(explicit_path=cfg_path)
+        load_config()
     assert excinfo.value.code == 2
 
 
-@pytest.mark.skip(reason="GREEN in Plan 02 — Pydantic validators wired in config.py")
 def test_half_life_zero_rejected(tmp_path, monkeypatch):
     """D-CONFIG-02: hl == 0 → SystemExit(2) (division-by-zero guard at boot)."""
     from supamem.config import load_config
 
-    cfg_path = _write_temporal_toml(tmp_path, half_life_days=0.0)
-    monkeypatch.chdir(tmp_path)
+    _write_temporal_toml(tmp_path, monkeypatch, half_life_days=0.0)
     with pytest.raises(SystemExit) as excinfo:
-        load_config(explicit_path=cfg_path)
+        load_config()
     assert excinfo.value.code == 2
 
 
-@pytest.mark.skip(reason="GREEN in Plan 02 — Pydantic validators wired in config.py")
 def test_half_life_negative_rejected(tmp_path, monkeypatch):
     """D-CONFIG-02: hl < 0 → SystemExit(2)."""
     from supamem.config import load_config
 
-    cfg_path = _write_temporal_toml(tmp_path, half_life_days=-1.0)
-    monkeypatch.chdir(tmp_path)
+    _write_temporal_toml(tmp_path, monkeypatch, half_life_days=-1.0)
     with pytest.raises(SystemExit) as excinfo:
-        load_config(explicit_path=cfg_path)
+        load_config()
     assert excinfo.value.code == 2
 
 
-@pytest.mark.skip(reason="GREEN in Plan 02 — Pydantic validators wired in config.py")
 def test_retention_days_negative_rejected(tmp_path, monkeypatch):
     """D-CONFIG-02: retention_days < 0 → SystemExit(2). 0 is the kept-forever escape hatch."""
     from supamem.config import load_config
 
-    cfg_path = _write_temporal_toml(tmp_path, retention_days=-1)
-    monkeypatch.chdir(tmp_path)
+    _write_temporal_toml(tmp_path, monkeypatch, retention_days=-1)
     with pytest.raises(SystemExit) as excinfo:
-        load_config(explicit_path=cfg_path)
+        load_config()
     assert excinfo.value.code == 2
