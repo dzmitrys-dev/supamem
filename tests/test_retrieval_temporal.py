@@ -104,11 +104,17 @@ def test_temporal_disabled_with_where():
 
 
 def test_now_injection():
-    """``now=`` kwarg pins the cutoff for deterministic tests."""
+    """``now=`` kwarg pins the cutoff for deterministic tests.
+
+    Note: ``qmodels.DatetimeRange`` (qdrant-client 1.17 / Pydantic v2) coerces
+    any ISO-8601 string passed to ``gt=`` back into a ``datetime`` instance, so
+    we compare instant-to-instant rather than string-to-string. The wire shape
+    re-serializes to the canonical ISO-8601 form on ``model_dump_json``.
+    """
     fixed = datetime(2025, 1, 1, tzinfo=timezone.utc)
     flt = build_qdrant_filter(None, now=fixed)
     fc = flt.must[0].should[1]
-    assert fc.range.gt == fixed.isoformat()
+    assert fc.range.gt == fixed
 
 
 def test_uses_isempty_not_isnull():
