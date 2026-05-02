@@ -23,6 +23,9 @@ dependencies = [
   "packaging>=23.0",
   "PyYAML>=6.0",
   "watchfiles>=0.24",
+  "mxbai-rerank>=0.1.6,<0.2",
+  "huggingface_hub>=0.24",
+  "filelock>=3.13",
 ]
 
 [project.urls]
@@ -49,6 +52,13 @@ bm25 = "supamem.embedders.bm25:BM25Embedder"
 [project.entry-points."supamem.chunker"]
 markdown_header = "supamem.indexer.chunker:chunk_markdown"
 transcript = "supamem.indexer.transcript.chunker:chunk_transcript"
+
+# Phase 8 D-CONTRACT-04 — reranker plugin group. Installing third-party
+# `supamem.reranker` packages is equivalent to installing arbitrary Python
+# deps (T-PLUGIN-01: standard Python plugin trust model — `.load()` runs
+# the registered class).
+[project.entry-points."supamem.reranker"]
+mxbai_v2 = "supamem.rerankers.mxbai_v2:MxbaiV2Reranker"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/supamem"]

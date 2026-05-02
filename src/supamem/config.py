@@ -91,6 +91,15 @@ class ResolvedConfig:
             "backend": ["src", "backend", "api", "server", "lib"],
         }
     )
+    # Phase 8 D-CONFIG-02 — code-aware reranker plugin selection. Flat
+    # fields populated from the [supamem.reranker] TOML table via
+    # _NESTED_TABLES; default flips to mxbai_v2 per D-FETCH-02.
+    # ``reranker_name = "off"`` restores pre-Phase-8 byte-identical retrieval.
+    reranker_name: str = "mxbai_v2"
+    reranker_model_id: str = "mixedbread-ai/mxbai-rerank-base-v2"
+    reranker_top_n: int = 50
+    reranker_prefetch_per_arm: int = 50
+    reranker_batch_size: int = 16
 
 
 @dataclass
@@ -119,6 +128,11 @@ class ConfigChain:
     transcript_include_paths_glob: Source = "default"
     transcript_exclude_paths_glob: Source = "default"
     classifier_rooms: Source = "default"
+    reranker_name: Source = "default"
+    reranker_model_id: Source = "default"
+    reranker_top_n: Source = "default"
+    reranker_prefetch_per_arm: Source = "default"
+    reranker_batch_size: Source = "default"
 
 
 _LEGACY_ENV: dict[str, str] = {
@@ -167,6 +181,18 @@ _NESTED_TABLES: list[tuple[str, dict[str, str]]] = [
     # classifier_rooms field. Leaf is dict[str, list[str]]; _apply_nested
     # setattr is type-agnostic (verified RESEARCH R-06).
     ("classifier", {"rooms": "classifier_rooms"}),
+    # Phase 8 D-CONFIG-01 / D-CONFIG-03 — flat [supamem.reranker] table
+    # → 5 reranker_* fields. ``name = "off"`` is the disable sentinel.
+    (
+        "reranker",
+        {
+            "name": "reranker_name",
+            "model_id": "reranker_model_id",
+            "top_n": "reranker_top_n",
+            "prefetch_per_arm": "reranker_prefetch_per_arm",
+            "batch_size": "reranker_batch_size",
+        },
+    ),
 ]
 
 
@@ -335,5 +361,24 @@ def load_config(cwd: Path | None = None) -> tuple[ResolvedConfig, ConfigChain]:
         if val is not None and val != "":
             setattr(cfg, field_name, val)
             setattr(chain, field_name, "env")
+
+    # ── Phase 8 D-CONFIG-03 — reranker_name validation gate ───────────────
+    # Unregistered names fail closed at construction time (T-CONFIG-01
+    # mitigation): err_console + SystemExit(2). The "off" sentinel is
+    # always accepted regardless of registered plugins.
+    if cfg.reranker_name != "off":
+        from importlib.metadata import entry_points  # noqa: PLC0415
+
+        from supamem.console import err_console  # noqa: PLC0415
+
+        known = {ep.name for ep in entry_points(group="supamem.reranker")}
+        if cfg.reranker_name not in known:
+            err_console.print(
+                f"[supamem.err]config: reranker_name={cfg.reranker_name!r} "
+                f"is not a registered supamem.reranker entry-point "
+                f"(known: {sorted(known) or '[]'}). "
+                f"Set [supamem.reranker] name = 'off' to disable."
+            )
+            raise SystemExit(2)
 
     return cfg, chain

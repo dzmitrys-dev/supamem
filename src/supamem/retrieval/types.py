@@ -18,3 +18,4 @@ class RetrievedChunk(BaseModel):
     file_path: Optional[str] = None
     headers: Optional[dict[str, str]] = None
     payload: Optional[dict[str, Any]] = None
+    rerank_score: Optional[float] = None
