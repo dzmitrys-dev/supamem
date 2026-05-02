@@ -199,6 +199,64 @@ def test_classifier_rooms_provenance_default(
     assert list(cfg.classifier_rooms.keys())[-1] == "backend"
 
 
+def test_reranker_defaults_match_d_config_02() -> None:
+    """Phase 8 D-CONFIG-02 — reranker_* defaults match the locked decision."""
+    cfg = ResolvedConfig()
+    assert cfg.reranker_name == "mxbai_v2"
+    assert cfg.reranker_model_id == "mixedbread-ai/mxbai-rerank-base-v2"
+    assert cfg.reranker_top_n == 50
+    assert cfg.reranker_prefetch_per_arm == 50
+    assert cfg.reranker_batch_size == 16
+
+
+def test_reranker_nested_table_flattens(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``[supamem.reranker]`` table flows into the 5 flat reranker_* fields
+    via _NESTED_TABLES (D-CONFIG-01 + D-CONFIG-03)."""
+    monkeypatch.delenv("SUPAMEM_CONFIG", raising=False)
+    cfg_dir = tmp_path / ".supamem"
+    cfg_dir.mkdir()
+    (cfg_dir / "config.toml").write_text(
+        "[supamem.reranker]\n"
+        'name = "off"\n'
+        "top_n = 20\n"
+        "batch_size = 8\n",
+        encoding="utf-8",
+    )
+    cfg, chain = load_config(tmp_path)
+    assert cfg.reranker_name == "off"
+    assert cfg.reranker_top_n == 20
+    assert cfg.reranker_batch_size == 8
+    # Untouched keys keep defaults + default source.
+    assert cfg.reranker_model_id == "mixedbread-ai/mxbai-rerank-base-v2"
+    assert cfg.reranker_prefetch_per_arm == 50
+    assert chain.reranker_name == "supamem_toml"
+    assert chain.reranker_top_n == "supamem_toml"
+    assert chain.reranker_batch_size == "supamem_toml"
+    assert chain.reranker_model_id == "default"
+    assert chain.reranker_prefetch_per_arm == "default"
+
+
+def test_unregistered_reranker_name_exits_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Unknown reranker_name fails fast at load_config() with err_console
+    warning + SystemExit(2) (D-CONFIG-03)."""
+    monkeypatch.delenv("SUPAMEM_CONFIG", raising=False)
+    cfg_dir = tmp_path / ".supamem"
+    cfg_dir.mkdir()
+    (cfg_dir / "config.toml").write_text(
+        "[supamem.reranker]\nname = \"bogus\"\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(SystemExit) as exc:
+        load_config(tmp_path)
+    assert exc.value.code == 2
+    captured = capsys.readouterr()
+    assert "bogus" in captured.err
+
+
 def test_flat_classifier_rooms_under_supamem_is_ignored(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
