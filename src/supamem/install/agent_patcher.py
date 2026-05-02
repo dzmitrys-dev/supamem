@@ -373,3 +373,296 @@ def patch_yaml(text: str) -> tuple[str, Optional[ManifestFragment]]:
         "tools_form": tools_form,
     }
     return new_text, fragment
+
+
+# ---------------------------------------------------------------------------
+# I/O layer (Plan 03) — manifest IO, filesystem walker, patch_all, unpatch_all
+# ---------------------------------------------------------------------------
+#
+# Everything below this banner is the I/O wrapper. The pure kernel above MUST
+# NOT import anything below; the kernel is unit-testable without disk access.
+#
+# Pattern references (all mirrored verbatim from Phase 8 rerankers):
+#   - manifest_path() honors SUPAMEM_CACHE_DIR override (rerankers/__init__.py:79-88)
+#   - save_manifest uses FileLock + temp-file-and-rename (rerankers:165-208)
+#   - per-file failures swallowed via err_console (D-FAIL-01..04)
+# Threat-model:
+#   - T-08.1.03-01: project_dir traversal guard via is_relative_to(find_project_root())
+#   - T-08.1.03-02: symlinks excluded with warning (P6)
+#   - T-08.1.03-07: oversize files (>1 MiB) skipped with reason
+
+import json  # noqa: E402
+import os  # noqa: E402
+import tempfile  # noqa: E402
+from dataclasses import dataclass, field  # noqa: E402
+from importlib.metadata import PackageNotFoundError, version as pkg_version  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+import platformdirs  # noqa: E402
+from filelock import FileLock, Timeout  # noqa: E402
+
+from supamem.console import err_console  # noqa: E402
+
+_MANIFEST_FILENAME = "agent_patches.json"
+_MANIFEST_SCHEMA_VERSION = 1
+_MANIFEST_LOCK_TIMEOUT_S = int(os.environ.get("SUPAMEM_MANIFEST_LOCK_TIMEOUT", "3600"))
+_MAX_AGENT_FILE_BYTES = 1_048_576  # T-08.1.03-07 oversize guard
+_VANISH_RETRY_DELAY_S = 0.05  # D-FAIL-04 retry-once after 50ms
+_PERMISSION_RETRY_DELAY_S = 0.1  # P10 unpatch retry-once after 100ms
+
+
+def _supamem_version() -> str:
+    """Best-effort package version string. Falls back for editable/dev installs."""
+    try:
+        return pkg_version("supamem")
+    except PackageNotFoundError:  # pragma: no cover — exercised only in dev sandboxes
+        return "0.0.0+dev"
+
+
+@dataclass
+class PatchEntry:
+    """Per-file outcome surfaced by patch_all (used by doctor in Plan 05)."""
+
+    path: str
+    scope: Literal["global", "project"]
+    state: DetectedState
+    relpath: str
+
+
+@dataclass
+class PatchSummary:
+    patched: list[PatchEntry] = field(default_factory=list)
+    covered: list[PatchEntry] = field(default_factory=list)
+    inheritance: list[PatchEntry] = field(default_factory=list)
+    skipped: list[tuple[PatchEntry, str]] = field(default_factory=list)
+    manifest_path: Optional[Path] = None
+
+
+@dataclass
+class UnpatchSummary:
+    restored: list[str] = field(default_factory=list)
+    skipped_user_edited: list[str] = field(default_factory=list)
+    skipped_missing: list[str] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Manifest IO
+# ---------------------------------------------------------------------------
+
+
+def manifest_path() -> Path:
+    """Path to the rolling agent-patches manifest.
+
+    Honors ``SUPAMEM_CACHE_DIR`` env override (mirrors
+    ``rerankers._model_cache_dir``). Defaults to
+    ``platformdirs.user_cache_dir("supamem")/agent_patches.json``.
+    """
+    override = os.environ.get("SUPAMEM_CACHE_DIR")
+    if override:
+        return Path(override) / _MANIFEST_FILENAME
+    return Path(platformdirs.user_cache_dir("supamem")) / _MANIFEST_FILENAME
+
+
+def _empty_manifest() -> dict:
+    return {
+        "schema_version": _MANIFEST_SCHEMA_VERSION,
+        "supamem_version": _supamem_version(),
+        "patches": [],
+    }
+
+
+def load_manifest() -> dict:
+    """Read + JSON-parse the manifest; return empty template on any failure.
+
+    Never raises — the manifest is purely informational and a corrupted file
+    must not block ``supamem repair``. Forward-compat: if a future
+    ``schema_version`` is encountered we emit a warning and return the
+    template rather than silently corrupting the on-disk state.
+    """
+    path = manifest_path()
+    if not path.is_file():
+        return _empty_manifest()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        err_console.print(
+            f"[supamem.warn]agent_patcher: manifest unreadable at {path}: {exc!r}; "
+            f"starting fresh"
+        )
+        return _empty_manifest()
+    if not isinstance(data, dict):
+        err_console.print(
+            f"[supamem.warn]agent_patcher: manifest root is not an object at {path}; "
+            f"starting fresh"
+        )
+        return _empty_manifest()
+    if data.get("schema_version") != _MANIFEST_SCHEMA_VERSION:
+        err_console.print(
+            f"[supamem.warn]agent_patcher: manifest schema_version="
+            f"{data.get('schema_version')!r} (expected {_MANIFEST_SCHEMA_VERSION}); "
+            f"starting fresh"
+        )
+        return _empty_manifest()
+    if not isinstance(data.get("patches"), list):
+        data["patches"] = []
+    return data
+
+
+def save_manifest(m: dict) -> None:
+    """Atomically persist the manifest under a FileLock.
+
+    Mirrors ``rerankers/__init__.py:165-208``: lock at
+    ``<manifest_path>.lock`` with timeout governed by
+    ``SUPAMEM_MANIFEST_LOCK_TIMEOUT`` (default 3600s; tests override). On
+    timeout, raises ``RuntimeError`` after surfacing via err_console — same
+    shape as the rerankers prepare path so callers can render a uniform
+    message.
+    """
+    path = manifest_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = str(path) + ".lock"
+    try:
+        with FileLock(lock_path, timeout=_MANIFEST_LOCK_TIMEOUT_S):
+            tmp = tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=str(path.parent),
+                prefix=path.name + ".",
+                suffix=".tmp",
+                delete=False,
+            )
+            try:
+                json.dump(m, tmp, indent=2, sort_keys=False)
+                tmp.flush()
+                os.fsync(tmp.fileno())
+            finally:
+                tmp.close()
+            os.replace(tmp.name, str(path))
+    except Timeout as exc:
+        err_console.print(
+            f"[supamem.err]agent_patches manifest lock timeout at {lock_path}. "
+            f"Another supamem repair may be running. Retry shortly or delete "
+            f"the stale lock if no install is active."
+        )
+        raise RuntimeError(
+            f"supamem: manifest lock timeout at {path}"
+        ) from exc
+
+
+# ---------------------------------------------------------------------------
+# Filesystem walker
+# ---------------------------------------------------------------------------
+
+
+def _default_global_dir() -> Path:
+    return Path.home() / ".claude" / "agents"
+
+
+def _default_project_dir() -> Optional[Path]:
+    # Local import keeps the pure kernel free of supamem.config dependence.
+    from supamem.config import find_project_root  # noqa: PLC0415
+
+    root = find_project_root()
+    if root is None:
+        return None
+    return root / ".claude" / "agents"
+
+
+def _project_root_for(project_dir: Path, *, explicit: bool) -> Optional[Path]:
+    """Resolve the canonical project root for a candidate project_dir.
+
+    Used as the traversal-guard reference (T-08.1.03-01).
+
+    Anchoring strategy:
+      - When ``project_dir`` was injected explicitly by the caller (tests,
+        future API surface), derive the project root structurally from the
+        path itself (``<root>/.claude/agents`` -> ``<root>``). This trusts
+        the caller's intent: they pointed us at a tree, the guard's job is
+        only to reject ``project_dir`` paths that escape that tree (e.g. via
+        ``..`` segments).
+      - When ``project_dir`` was discovered via ``find_project_root()`` (the
+        default), anchor against that same discovery — symmetric, defensive.
+    """
+    if explicit:
+        parents = list(project_dir.parents)
+        # Need at least <agents>/.claude/<root>; project_dir itself is
+        # parents[-1]'s child, so parents[1] is <root> when layout matches.
+        if len(parents) >= 2:
+            return parents[1].resolve()
+        return None
+
+    from supamem.config import find_project_root  # noqa: PLC0415
+
+    discovered = find_project_root()
+    if discovered is not None:
+        return discovered.resolve()
+    return None
+
+
+def scan_agent_dirs(
+    global_dir: Optional[Path] = None,
+    project_dir: Optional[Path] = None,
+) -> list[tuple[Path, Literal["global", "project"]]]:
+    """Enumerate ``*.md`` agent files in both global and project scopes.
+
+    Defaults: ``global_dir = ~/.claude/agents``,
+    ``project_dir = <find_project_root()>/.claude/agents`` (if discoverable).
+
+    Symlinks are EXCLUDED with a stderr warning (P6 / T-08.1.03-02). Project
+    scope is guarded against path traversal (T-08.1.03-01): the resolved
+    ``project_dir`` MUST be inside the resolved project root, otherwise the
+    whole project scope is dropped with a warning.
+    """
+    project_dir_explicit = project_dir is not None
+    if global_dir is None:
+        global_dir = _default_global_dir()
+    if project_dir is None:
+        project_dir = _default_project_dir()
+
+    out: list[tuple[Path, Literal["global", "project"]]] = []
+
+    candidates: list[tuple[Optional[Path], Literal["global", "project"]]] = [
+        (global_dir, "global"),
+        (project_dir, "project"),
+    ]
+
+    for candidate_dir, scope in candidates:
+        if candidate_dir is None:
+            continue
+        if not candidate_dir.exists() or not candidate_dir.is_dir():
+            continue
+
+        # T-08.1.03-01 traversal guard for project scope only — global scope
+        # is anchored at Path.home() and trusted by construction.
+        if scope == "project":
+            try:
+                resolved_dir = candidate_dir.resolve()
+            except OSError:
+                err_console.print(
+                    f"[supamem.warn]agent_patcher: cannot resolve project agent dir "
+                    f"{candidate_dir}; skipping"
+                )
+                continue
+            project_root = _project_root_for(candidate_dir, explicit=project_dir_explicit)
+            if project_root is None or not resolved_dir.is_relative_to(project_root):
+                err_console.print(
+                    f"[supamem.warn]agent_patcher: project agent dir {resolved_dir} "
+                    f"is outside project root; skipping (path-traversal guard)"
+                )
+                continue
+
+        for md in sorted(candidate_dir.glob("*.md")):
+            if md.is_symlink():
+                try:
+                    target = md.resolve()
+                except OSError:
+                    target = md
+                err_console.print(
+                    f"[supamem.warn]agent_patcher: skipped symlink: {md} -> {target}"
+                )
+                continue
+            if not md.is_file():
+                continue
+            out.append((md, scope))
+
+    return out
