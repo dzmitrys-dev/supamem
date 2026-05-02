@@ -394,14 +394,16 @@ def patch_yaml(text: str) -> tuple[str, Optional[ManifestFragment]]:
 import json  # noqa: E402
 import os  # noqa: E402
 import tempfile  # noqa: E402
+import time  # noqa: E402
 from dataclasses import dataclass, field  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
 from importlib.metadata import PackageNotFoundError, version as pkg_version  # noqa: E402
 from pathlib import Path  # noqa: E402
 
 import platformdirs  # noqa: E402
 from filelock import FileLock, Timeout  # noqa: E402
 
-from supamem.console import err_console  # noqa: E402
+from supamem.console import err_console, info  # noqa: E402
 
 _MANIFEST_FILENAME = "agent_patches.json"
 _MANIFEST_SCHEMA_VERSION = 1
@@ -666,3 +668,344 @@ def scan_agent_dirs(
             out.append((md, scope))
 
     return out
+
+
+# ---------------------------------------------------------------------------
+# Atomic file write + retry helpers
+# ---------------------------------------------------------------------------
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write ``text`` to ``path`` atomically via temp-file-and-rename.
+
+    Uses ``newline=""`` so the kernel-emitted line endings (always ``\\n``)
+    survive verbatim — Python's text-mode default would translate ``\\n``
+    to the platform separator on Windows, which would silently change the
+    bytes on disk and invalidate the manifest's frontmatter SHA on the
+    next pass.
+    """
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        newline="",
+        dir=str(path.parent),
+        prefix=path.name + ".",
+        suffix=".tmp",
+        delete=False,
+    )
+    try:
+        tmp.write(text)
+        tmp.flush()
+        os.fsync(tmp.fileno())
+    finally:
+        tmp.close()
+    os.replace(tmp.name, str(path))
+
+
+def _read_with_retry(path: Path, retries: int = 1) -> str:
+    """Read text with one retry on FileNotFoundError (D-FAIL-04).
+
+    A brief sleep between attempts gives a racing tool (e.g. plugin reinstall
+    in flight) a chance to finish renaming the file into place. Final
+    ``FileNotFoundError`` propagates so the caller can record
+    ``skipped: vanished``.
+    """
+    last: Optional[FileNotFoundError] = None
+    for attempt in range(retries + 1):
+        try:
+            return path.read_text(encoding="utf-8")
+        except FileNotFoundError as exc:
+            last = exc
+            if attempt < retries:
+                time.sleep(_VANISH_RETRY_DELAY_S)
+    assert last is not None  # for type-checker — loop only exits via return or raise
+    raise last
+
+
+# ---------------------------------------------------------------------------
+# Entry points: patch_all, unpatch_all
+# ---------------------------------------------------------------------------
+
+
+def _utc_now_iso() -> str:
+    """ISO-8601 timestamp with trailing ``Z`` (D-UNDO-04)."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _make_entry(path: Path, scope: Literal["global", "project"], state: DetectedState) -> PatchEntry:
+    try:
+        rel = path.relative_to(path.parent.parent.parent)
+    except ValueError:
+        rel = path
+    return PatchEntry(path=str(path), scope=scope, state=state, relpath=str(rel))
+
+
+def patch_all(skip: bool = False) -> PatchSummary:
+    """Walk both agent scopes and patch every restrictive ``tools:`` whitelist.
+
+    Idempotent (D-COVER-03): a second run produces zero new manifest entries
+    because already-patched files now match coverage. Per-file failures
+    skip-with-warning and never abort (D-FAIL-01..03 — mirrors
+    ``_maybe_prepare_models`` swallow). Mid-scan vanish triggers one retry
+    (D-FAIL-04).
+    """
+    summary = PatchSummary(manifest_path=manifest_path())
+    if skip:
+        info("--skip-patch-agents: skipping subagent reachability patch")
+        return summary
+
+    manifest = load_manifest()
+    # Index existing entries by absolute path so re-patches replace rather
+    # than duplicate (idempotent re-runs after a partial-state recovery).
+    existing_by_path: dict[str, dict] = {p["path"]: p for p in manifest.get("patches", [])}
+
+    candidates = scan_agent_dirs()
+    new_entries: list[dict] = []
+    any_changes = False
+
+    for path, scope in candidates:
+        entry = _make_entry(path, scope, "inheritance")  # state filled in below
+
+        # T-08.1.03-07 oversize guard.
+        try:
+            size = path.stat().st_size
+        except OSError as exc:
+            err_console.print(
+                f"[supamem.warn]agent_patcher: skipped {path}: stat-failed: {exc!r}"
+            )
+            entry.state = "skipped:malformed"
+            summary.skipped.append((entry, f"stat-failed: {exc!r}"))
+            continue
+        if size > _MAX_AGENT_FILE_BYTES:
+            err_console.print(
+                f"[supamem.warn]agent_patcher: skipped {path}: oversize "
+                f"({size} > {_MAX_AGENT_FILE_BYTES} bytes)"
+            )
+            entry.state = "skipped:malformed"
+            summary.skipped.append((entry, "oversize"))
+            continue
+
+        try:
+            content = _read_with_retry(path)
+        except FileNotFoundError:
+            err_console.print(
+                f"[supamem.warn]agent_patcher: skipped {path}: vanished"
+            )
+            entry.state = "skipped:malformed"
+            summary.skipped.append((entry, "vanished"))
+            continue
+        except PermissionError as exc:
+            err_console.print(
+                f"[supamem.warn]agent_patcher: skipped {path}: read-only: {exc!r}"
+            )
+            entry.state = "skipped:malformed"
+            summary.skipped.append((entry, "read-only"))
+            continue
+        except OSError as exc:
+            err_console.print(
+                f"[supamem.warn]agent_patcher: skipped {path}: io-error: {exc!r}"
+            )
+            entry.state = "skipped:malformed"
+            summary.skipped.append((entry, f"io-error: {exc!r}"))
+            continue
+
+        try:
+            state = detect_tools_state(content)
+        except Exception as exc:  # noqa: BLE001 — pure-kernel safety net (D-FAIL-03)
+            err_console.print(
+                f"[supamem.warn]agent_patcher: skipped {path}: unexpected: {exc!r}"
+            )
+            entry.state = "skipped:malformed"
+            summary.skipped.append((entry, f"unexpected: {exc!r}"))
+            continue
+
+        entry.state = state
+
+        if state == "covered":
+            summary.covered.append(entry)
+            continue
+        if state == "inheritance":
+            summary.inheritance.append(entry)
+            continue
+        if state.startswith("skipped:"):
+            reason = state[len("skipped:"):]
+            err_console.print(
+                f"[supamem.warn]agent_patcher: skipped {path}: {reason}"
+            )
+            summary.skipped.append((entry, reason))
+            continue
+
+        # patchable_csv / patchable_list
+        try:
+            new_text, fragment = patch_yaml(content)
+        except Exception as exc:  # noqa: BLE001 — kernel safety net (D-FAIL-03)
+            err_console.print(
+                f"[supamem.warn]agent_patcher: skipped {path}: patch-failed: {exc!r}"
+            )
+            summary.skipped.append((entry, f"patch-failed: {exc!r}"))
+            continue
+        if fragment is None:
+            # Defensive: detect_state said patchable but kernel returned no fragment.
+            summary.skipped.append((entry, "patch-noop"))
+            continue
+
+        try:
+            _atomic_write_text(path, new_text)
+        except PermissionError as exc:
+            err_console.print(
+                f"[supamem.warn]agent_patcher: skipped {path}: read-only: {exc!r}"
+            )
+            summary.skipped.append((entry, "read-only"))
+            continue
+        except OSError as exc:
+            err_console.print(
+                f"[supamem.warn]agent_patcher: skipped {path}: io-error: {exc!r}"
+            )
+            summary.skipped.append((entry, f"io-error: {exc!r}"))
+            continue
+
+        record = {
+            "path": str(path),
+            "scope": scope,
+            "patched_at": _utc_now_iso(),
+            "supamem_version": _supamem_version(),
+            "original_frontmatter": fragment["original_frontmatter"],
+            "original_frontmatter_sha256": fragment["original_frontmatter_sha256"],
+            "patched_frontmatter_sha256": fragment["patched_frontmatter_sha256"],
+            "tools_form": fragment["tools_form"],
+        }
+        existing_by_path[str(path)] = record
+        new_entries.append(record)
+        summary.patched.append(entry)
+        any_changes = True
+
+    if any_changes:
+        manifest["patches"] = list(existing_by_path.values())
+        manifest["supamem_version"] = _supamem_version()
+        try:
+            save_manifest(manifest)
+        except RuntimeError as exc:
+            err_console.print(
+                f"[supamem.warn]agent_patcher: manifest save failed: {exc!r}"
+            )
+
+    return summary
+
+
+def unpatch_all() -> UnpatchSummary:
+    """Restore every patched agent whose frontmatter SHA still matches.
+
+    Files whose frontmatter SHA has drifted (user-edited or plugin-rewritten)
+    are skipped with a stderr warning naming the path (D-UNDO-02). Files
+    listed in the manifest but missing from disk are skipped silently with
+    an info log. After processing, the manifest is rewritten to retain only
+    skipped-user-edited entries. When no entries remain, the manifest file
+    is removed for a clean uninstall.
+    """
+    summary = UnpatchSummary()
+    manifest_p = manifest_path()
+    if not manifest_p.is_file():
+        # No manifest = nothing was ever patched. Friendly no-op.
+        return summary
+
+    manifest = load_manifest()
+    patches = manifest.get("patches", [])
+    if not patches:
+        try:
+            manifest_p.unlink()
+        except OSError:
+            pass
+        return summary
+
+    retained: list[dict] = []
+
+    for entry in patches:
+        path_str = entry.get("path", "")
+        path = Path(path_str)
+        if not path.is_file():
+            info(f"agent_patcher: manifest entry stale (file missing): {path_str}")
+            summary.skipped_missing.append(path_str)
+            # Drop stale entries — the file is gone, restoration is moot.
+            continue
+
+        try:
+            current = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            err_console.print(
+                f"[supamem.warn]agent_patcher: cannot read {path}: {exc!r}; skipping"
+            )
+            summary.skipped_user_edited.append(path_str)
+            retained.append(entry)
+            continue
+
+        current_sha = block_sha256(current)
+        if current_sha != entry.get("patched_frontmatter_sha256"):
+            err_console.print(
+                f"[supamem.warn]agent {path} has been edited since supamem patched it; "
+                f"manual cleanup required"
+            )
+            summary.skipped_user_edited.append(path_str)
+            retained.append(entry)
+            continue
+
+        original_block = entry.get("original_frontmatter", "")
+        # Reconstruct the file: original frontmatter + body slice past the
+        # patched frontmatter block.
+        patched_block = frontmatter_block(current)
+        if patched_block is None:
+            err_console.print(
+                f"[supamem.warn]agent {path} no longer has a frontmatter block; "
+                f"skipping restoration"
+            )
+            summary.skipped_user_edited.append(path_str)
+            retained.append(entry)
+            continue
+        new_text = original_block + current[len(patched_block):]
+
+        write_ok = False
+        for attempt in range(2):
+            try:
+                _atomic_write_text(path, new_text)
+                write_ok = True
+                break
+            except PermissionError:
+                # P10 — race with active Claude Code session on Windows; retry once.
+                if attempt == 0:
+                    time.sleep(_PERMISSION_RETRY_DELAY_S)
+                    continue
+                err_console.print(
+                    f"[supamem.warn]agent_patcher: cannot write {path} (read-only); "
+                    f"skipping restoration"
+                )
+                summary.skipped_user_edited.append(path_str)
+                retained.append(entry)
+                break
+            except OSError as exc:
+                err_console.print(
+                    f"[supamem.warn]agent_patcher: io-error restoring {path}: {exc!r}"
+                )
+                summary.skipped_user_edited.append(path_str)
+                retained.append(entry)
+                break
+
+        if write_ok:
+            summary.restored.append(path_str)
+
+    # Rewrite manifest with only the entries we couldn't safely restore.
+    if retained:
+        manifest["patches"] = retained
+        manifest["supamem_version"] = _supamem_version()
+        try:
+            save_manifest(manifest)
+        except RuntimeError as exc:
+            err_console.print(
+                f"[supamem.warn]agent_patcher: manifest rewrite failed: {exc!r}"
+            )
+    else:
+        # All entries either restored or stale — clean state, drop the manifest.
+        try:
+            manifest_p.unlink()
+        except OSError:
+            pass
+
+    return summary
