@@ -345,7 +345,14 @@ def test_indexer_hash_drift_writes_classifier_hash_to_manifest(
 def test_indexer_no_sweep_when_classifier_hash_stable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Second invocation with unchanged config → ZERO scroll calls (D-08)."""
+    """Second invocation with unchanged config → no classifier sweep set_payload (D-08).
+
+    Phase 9 introduces a baseline GC scroll per run (D-GC-01) and a one-shot
+    eager-validity-migration scroll on first post-upgrade run (D-NULL-03), so
+    the original "ZERO scrolls" invariant no longer holds. The Phase 7
+    contract this test guards is "no classifier-room re-classification when
+    hash is stable" — observable as no ``set_payload`` with a ``room`` key.
+    """
     src_dir = tmp_path / "src"
     src_dir.mkdir()
     para = " ".join(["lorem"] * 30)
@@ -359,15 +366,18 @@ def test_indexer_no_sweep_when_classifier_hash_stable(
         cache_dir=str(tmp_path / "cache"),
         collection="test_room",
     )
-    # First run: writes classifier_hash to manifest.
+    # First run: writes classifier_hash + validity_migration to manifest.
     run_index(target="tuned", force=True, sources=[str(src)], config=cfg)
     fake_client.reset_mock()
 
-    # Second run: hash matches → sweep gate does NOT fire.
+    # Second run: hash matches → classifier sweep gate does NOT fire.
     run_index(target="tuned", force=True, sources=[str(src)], config=cfg)
-    assert not fake_client.scroll.called, (
-        "second run with stable classifier_hash MUST NOT scroll"
-    )
+    # Phase 7 D-08 contract: no set_payload with a "room" key.
+    for call in fake_client.set_payload.call_args_list:
+        payload = call.kwargs.get("payload") or {}
+        assert "room" not in payload, (
+            "second run with stable classifier_hash MUST NOT set_payload(room=...)"
+        )
 
 
 # ───── Plan 06-04 B2 — _parse_since + _filter_jsonl_by_since ──────────────

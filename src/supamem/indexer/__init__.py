@@ -624,8 +624,10 @@ def _process_one_source(
     client: Any,
     dense: Any,
     sparse: Any,
+    cfg: ResolvedConfig,
     collection: str,
     classifier_rooms: dict[str, list[str]],
+    wallclock_fallback: list[int],
 ) -> tuple[int, int]:
     """Process a single source path. Returns ``(chunks_written, failed)``.
 
@@ -654,6 +656,23 @@ def _process_one_source(
         raise
     except Exception:  # noqa: BLE001 — chunker should not crash the run
         return 0, 1
+
+    # Phase 9 D-WINDOW-01..02 — close validity window on the OLD chunks of
+    # this file BEFORE upserting new content-hash-keyed chunks. Gated on
+    # hash drift (manifest.needs_index returned True above) AND prior manifest
+    # entry exists (brand-new files have nothing to close). Transcripts are
+    # append-only by construction (D-CID-02), so close-old does NOT apply.
+    # Re-raise on RPC failure: TEMP-01 contract requires atomic
+    # close-then-upsert per file (Threat T-09-03-05).
+    if not is_transcript and abs_path in manifest.entries:
+        try:
+            _close_validity_window(client, cfg, abs_path)
+        except Exception as exc:  # noqa: BLE001
+            err_console.print(
+                f"[red]close-old failed for {abs_path}: "
+                f"{type(exc).__name__}: {exc}[/red]"
+            )
+            raise
 
     if is_transcript:
         # Per-message dedupe (D-25). force=True bypasses the manifest gate
@@ -684,6 +703,7 @@ def _process_one_source(
             collection=collection,
             is_transcript=is_transcript,
             classifier_rooms=classifier_rooms,
+            wallclock_fallback=wallclock_fallback,
         )
         if n > 0 and not is_transcript:
             manifest.update(abs_path, target, sha)
@@ -726,6 +746,42 @@ def run_index(
     manifest_path = _manifest_path(cfg)
     manifest = Manifest.load(manifest_path)
 
+    # ── Phase 9 — strict ordering at run_index boot (Pitfall 7) ───────────
+    # 1. _ensure_temporal_indexes  — idempotent payload-index creation.
+    # 2. _eager_validity_migration — back-fill valid_to=None on legacy
+    #    points BEFORE per-file close-old can consume them via IsEmpty.
+    # 3. existing classifier-hash sweep gate (untouched).
+    # 4. per-file close-old BEFORE upsert (in _process_one_source).
+    # 5. _gc_sweep at end of run, AFTER all upserts.
+    # Out-of-order writes resurrect closed legacy chunks.
+
+    # ── Phase 9 D-INDEX-01 / D-INDEX-02 — payload indexes (idempotent) ────
+    _ensure_temporal_indexes(client, cfg)
+
+    # ── Phase 9 D-NULL-03 / Pitfall 7 — eager validity migration gate ─────
+    # Mirrors classifier_hash gate; trips exactly once post-upgrade.
+    if manifest.validity_migration is None:
+        err_console.print(
+            "[supamem.brand]Validity migration — back-filling valid_to "
+            "on legacy chunks…[/supamem.brand]"
+        )
+        sweep_ok = False
+        try:
+            migrated = _eager_validity_migration(client, cfg)
+            sweep_ok = True
+            err_console.print(
+                f"  back-filled {migrated} legacy chunks with valid_to=null"
+            )
+        except Exception as exc:  # noqa: BLE001 — fail-soft, but SURFACE
+            err_console.print(
+                f"[red]validity migration failed: "
+                f"{type(exc).__name__}: {exc}[/red]"
+            )
+        if sweep_ok:
+            # Persist gate ONLY on full success; otherwise leave None to retry.
+            from supamem import __version__ as _supamem_version  # noqa: PLC0415
+            manifest.validity_migration = _supamem_version
+
     # Plan 07-02 D-08 / D-09 / R-04: gate the classifier sweep on hash drift.
     # Pre-Phase-7 manifests have classifier_hash=None, which trips the gate
     # exactly once on the first post-upgrade run (set_payload only — no
@@ -756,6 +812,10 @@ def run_index(
     written = 0
     failed = 0
     chunks_emitted = 0
+    # Phase 9 D-VFROM-02 — single-element list as a mutable counter so the
+    # per-record loop in _index_records can increment it without a per-file
+    # warning storm. ONE end-of-run warning emission (not per file).
+    wallclock_fallback: list[int] = [0]
 
     if _progress_enabled():
         with _make_progress() as progress:
@@ -769,8 +829,10 @@ def run_index(
                     client=client,
                     dense=dense,
                     sparse=sparse,
+                    cfg=cfg,
                     collection=cfg.collection,
                     classifier_rooms=cfg.classifier_rooms,
+                    wallclock_fallback=wallclock_fallback,
                 )
                 written += n
                 failed += fail
@@ -786,12 +848,35 @@ def run_index(
                 client=client,
                 dense=dense,
                 sparse=sparse,
+                cfg=cfg,
                 collection=cfg.collection,
                 classifier_rooms=cfg.classifier_rooms,
+                wallclock_fallback=wallclock_fallback,
             )
             written += n
             failed += fail
             chunks_emitted += n
+
+    # ── Phase 9 D-GC-01 — auto-GC superseded chunks past retention_days ──
+    # retention_days=0 disables GC entirely (kept-forever escape hatch).
+    retention_days = int(getattr(cfg, "temporal_retention_days", 90))
+    try:
+        gc_count = _gc_sweep(client, cfg, retention_days)
+        if gc_count:
+            err_console.print(
+                f"  garbage-collected {gc_count} superseded chunks"
+            )
+    except Exception as exc:  # noqa: BLE001 — fail-soft, but SURFACE
+        err_console.print(
+            f"[red]gc sweep failed: {type(exc).__name__}: {exc}[/red]"
+        )
+
+    # D-VFROM-02 — ONE wall-clock fallback warning per run (not per file).
+    if wallclock_fallback[0]:
+        err_console.print(
+            f"[supamem.warn]{wallclock_fallback[0]} files used wall-clock "
+            f"fallback for valid_from (corrupt/zero mtime)[/supamem.warn]"
+        )
 
     try:
         manifest.save(manifest_path)

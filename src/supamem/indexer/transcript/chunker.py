@@ -315,6 +315,11 @@ def chunk_transcript(
                 "turn_index": pair.turn_index,
             },
             "tool_uses": pairs_meta[idx],
+            # Phase 9 D-VFROM-01 (cross-phase 09-03 hand-off): per-message
+            # ISO-8601 timestamp from the JSONL user event. Empty string when
+            # absent — the indexer falls back to file mtime in that case.
+            # Phase 9 reads this; Phase 6 fulfils the contract.
+            "valid_from": pair.user_event.get("timestamp", ""),
         }
 
         if _token_count(drawer_text) <= soft_max_tokens or rc_splitter is None:
