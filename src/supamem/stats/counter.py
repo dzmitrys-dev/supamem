@@ -12,9 +12,15 @@ Both writes are guarded by ``fcntl.LOCK_EX`` on a sentinel file under
 anywhere in the bump path is logged to stderr and **swallowed** —
 observability must never block the calling tool (Plan 80.6-06 fail-soft
 contract).
+
+Phase 8 adds a process-local ``_LATENCY_DEQUES`` ring buffer keyed by
+``(kind, source)`` so ``supamem doctor`` can render TRUE p50/p95
+percentiles for the last 100 rerank calls (W3 verifiability — Welford
+aggregates only carry mean+variance; the deque carries the raw samples).
 """
 from __future__ import annotations
 
+import collections
 import datetime as _dt
 import fcntl
 import json
@@ -29,6 +35,28 @@ if not log.handlers:
     log.addHandler(logging.StreamHandler(stream=sys.stderr))
 
 DEFAULT_CACHE_DIR = Path.home() / ".cache" / "supamem"
+
+# Phase 8 D-CPU-02 / W3: process-local ring buffer of recent latency samples
+# keyed by ``(kind, source)``. ``maxlen=100`` mirrors the doctor panel's
+# "last 100 queries" window. Doctor reads via ``get_latency_samples`` to
+# compute TRUE percentiles (Welford aggregates would only give mean+variance).
+_LATENCY_DEQUES: dict[tuple[str, str], "collections.deque[float]"] = (
+    collections.defaultdict(lambda: collections.deque(maxlen=100))
+)
+
+
+def get_latency_samples(kind: str, source: str) -> list[float]:
+    """Return a snapshot list of recent latency samples for ``(kind, source)``.
+
+    Returns an empty list if no ``bump(... latency_ms=...)`` calls have
+    landed for this key in the current process. The deque is process-local
+    (not persisted) — long-running daemons accumulate; one-shot CLI runs
+    start empty.
+    """
+    key = (kind, source)
+    if key not in _LATENCY_DEQUES:
+        return []
+    return list(_LATENCY_DEQUES[key])
 
 
 def _resolve_cache_dir(cache_dir: Path | None) -> Path:
@@ -105,6 +133,12 @@ def bump(
     and appends one record to ``audit.jsonl``. Both writes are flock-guarded.
     """
     try:
+        # Process-local latency ring buffer (D-CPU-02) — record BEFORE the
+        # disk write so doctor sees fresh samples even if the flock path
+        # below errors out. Always-on for any latency_ms > 0.
+        if float(latency_ms) > 0.0:
+            _LATENCY_DEQUES[(kind, source)].append(float(latency_ms))
+
         target = _resolve_cache_dir(cache_dir)
         agg_path = target / "aggregates.json"
         audit_path = target / "audit.jsonl"

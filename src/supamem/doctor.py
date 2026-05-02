@@ -244,6 +244,107 @@ def run_doctor(*, redact_secrets: bool = True) -> int:
                 n = 0
         ok(f"  {label:<12} : {n}")
 
+    # ── Section 2f: Reranker (Phase 8 D-DOCTOR-01 / D-DOCTOR-02 / D-CPU-02) ───
+    console.print()
+    console.print("[supamem.brand]Reranker[/supamem.brand]")
+    reranker_drift = False  # local accumulator OR-ed into rc on line ~295
+    rname = getattr(cfg, "reranker_name", "off")
+    rname_src = getattr(chain, "reranker_name", "default")
+    ok(f"name           = {rname}  [source: {rname_src}]")
+
+    if rname != "off":
+        rmodel = getattr(cfg, "reranker_model_id", "(unset)")
+        ok(f"model_id       = {rmodel}")
+        try:
+            from supamem.rerankers import _model_cache_dir  # noqa: PLC0415
+
+            cache_root = _model_cache_dir()
+            ok(f"cache_path     = {cache_root}")
+
+            slug = rmodel.replace("/", "--")
+            snap_candidates = list(
+                cache_root.glob(f"models--{slug}/snapshots/*")
+            ) or list(cache_root.glob(f"{slug}/*"))
+            if not snap_candidates:
+                warn("snapshot not found — run `supamem repair`")
+                reranker_drift = True
+            else:
+                snap = snap_candidates[0]
+                manifest_path = snap / "_expected_manifest.json"
+                try:
+                    import json as _json  # noqa: PLC0415
+
+                    m = _json.loads(manifest_path.read_text())
+                    expected_total = int(m.get("total_bytes", 0))
+                    expected_files = m.get("files", {})
+                    actual_files = {
+                        str(p.relative_to(snap)): p.stat().st_size
+                        for p in snap.rglob("*")
+                        if p.is_file() and p.name != "_expected_manifest.json"
+                    }
+                    actual_total = sum(actual_files.values())
+                    pct = (actual_total / expected_total) if expected_total else 0.0
+                    missing = set(expected_files) - set(actual_files)
+                    if missing or pct < 0.9:
+                        warn(
+                            f"size           = {actual_total} / {expected_total} bytes "
+                            f"({pct:.0%}); missing {len(missing)} files — run `supamem repair`"
+                        )
+                        reranker_drift = True
+                    else:
+                        ok(
+                            f"size           = {actual_total} bytes "
+                            f"({len(actual_files)} files)"
+                        )
+                except Exception:  # noqa: BLE001 — non-essential probe (T-INTEGRITY-01)
+                    warn("manifest unreadable — run `supamem repair`")
+                    reranker_drift = True
+        except Exception:  # noqa: BLE001
+            warn("reranker cache probe failed — run `supamem repair`")
+            reranker_drift = True
+
+        # Latency telemetry — DEQUE path (D-CPU-02 / W3 verifiable percentiles).
+        try:
+            from supamem.stats.counter import (  # noqa: PLC0415
+                get_latency_samples,
+            )
+
+            samples = get_latency_samples("rerank", "rerank_latency_ms")
+            if samples:
+                import statistics as _st  # noqa: PLC0415
+
+                p50 = _st.median(samples)
+                p95 = (
+                    _st.quantiles(samples, n=20)[18]
+                    if len(samples) >= 20
+                    else max(samples)
+                )
+                ok(
+                    f"rerank_p50_ms  = {p50:.1f}  rerank_p95_ms  = {p95:.1f}  "
+                    f"(n={len(samples)})"
+                )
+            else:
+                ok("rerank latency = (no samples yet)")
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Detected device (D-CPU-02 backend detection).
+        device = "cpu"
+        try:
+            import torch  # noqa: PLC0415 — local import only on doctor probe
+
+            if torch.cuda.is_available():
+                device = "cuda"
+            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                device = "mps"
+        except ImportError:
+            device = "cpu (torch not installed)"
+        ok(f"device         = {device}")
+        # D-CPU-03 escape-hatch hint:
+        info(
+            "(set retrieval.reranker = 'off' to disable; restores pre-Phase-8 latency)"
+        )
+
     # ── Section 3: Installed clients drift ───────────────────────────────
     console.print()
     console.print("[supamem.brand]Installed clients[/supamem.brand]")
@@ -292,7 +393,12 @@ def run_doctor(*, redact_secrets: bool = True) -> int:
 
     # ── Section 5: Exit code ─────────────────────────────────────────────
     rc = 0
-    if not qdrant_up or any_drift or (qdrant_up and not coll_status.get("present")):
+    if (
+        not qdrant_up
+        or any_drift
+        or reranker_drift
+        or (qdrant_up and not coll_status.get("present"))
+    ):
         rc = 1
     console.print()
     if rc == 0:
