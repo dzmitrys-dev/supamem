@@ -159,6 +159,7 @@ The **SessionStart banner** (v0.1.4+) also lands a one-line status in your AI cl
 |---------|-------------|
 | 🔍 **Hybrid retrieval** | Tuned sparse (BM25) + dense (MiniLM) fusion, locked schema D-25 |
 | 🎯 **Code-aware reranker** | Cross-encoder `mxbai-rerank-base-v2` (Apache-2.0) rescores `tuned_hybrid` candidates by default. Disable with `retrieval.reranker = "off"` for pre-v0.2.4a1 behavior. (Phase 8, RERANK-01..04) |
+| ⏳ **Per-source temporal validity** | Every chunk carries `valid_from`/`valid_to`; re-indexing a changed file supersedes prior chunks atomically and the retrieval-time filter excludes superseded points across every backend. Optional transcript-only recency decay (off by default). Auto-GC past `retention_days = 90` (set to `0` for kept-forever / audit collections). (Phase 9, TEMP-01..03) |
 | 📚 **Markdown chunker** | Header-aware, 200-token chunks with 250-token soft max (T-1) |
 | 🤖 **MCP server** | `stdio` (default) and `http` transports, official `mcp` SDK |
 | 🪝 **Multi-client hooks** | Claude Code session-start, OpenCode session-start, Cursor MDC |
@@ -493,6 +494,83 @@ my_reranker = "my_pkg.module:MyReranker"
 Plugin protocol: `rerank(query: str, candidates: list[RetrievedChunk]) -> list[RetrievedChunk]`.
 Lazy model-load on first call; eager warm-up runs through the install/init/repair
 fetch pipeline.
+
+---
+
+## ⏳ Per-source temporal validity (v0.3.0a1+)
+
+Every indexed chunk carries a binary `valid_to` field:
+
+- `valid_to = null` → live
+- `valid_to ≤ now()` → superseded (filtered out of every retrieval)
+
+When a file changes and you re-index, the indexer atomically:
+
+1. Scrolls every existing chunk for that file path.
+2. Sets `valid_to = now()` on each (closes the prior validity window).
+3. Upserts the new chunks under content-hash-keyed UUIDs with `valid_to = null`.
+
+Old and new chunks coexist in Qdrant; only the new ones are returned by retrieval until
+the auto-GC sweep deletes the old ones past `retention_days`. The retrieval-time filter
+is constructed at a single site and inherited by every backend (`tuned_hybrid` both
+Prefetch arms, `dense`, `bm25`, `qdrant_find`, `dual_memory_search`) — uses Qdrant's
+`IsEmptyCondition` on `valid_to` (NOT `IsNullCondition` — see
+[Qdrant#5342](https://github.com/qdrant/qdrant/issues/5342): `IsNull` does not match
+missing fields).
+
+Configure in `.supamem/config.toml`:
+
+```toml
+[supamem.retrieval.temporal]
+retention_days = 90          # 0 = kept forever (compliance / audit collections)
+```
+
+### Transcript-only recency decay (opt-in, default OFF)
+
+Code, ADRs, and docs do not "go stale". Transcripts often do — older support-chat turns
+with deprecated APIs distract the agent from the current dialogue. Phase 9 ships an
+opt-in multiplicative-floor decay knob that runs **only** on transcript chunks, after
+rerank, never auto-enabled for code / ADR / doc:
+
+```toml
+[supamem.retrieval.recency.per_source.transcript]
+enabled        = true            # default false
+half_life_days = 14.0
+alpha          = 0.7             # floor: oldest transcript still gets 0.7x its score
+```
+
+Worked example with the locked defaults (`alpha = 0.7`, `half_life_days = 14`):
+
+| Age (days) | Multiplier         |
+|------------|--------------------|
+| 0          | 1.000              |
+| 7          | 0.924              |
+| 14         | 0.850              |
+| 28         | 0.775              |
+| ∞          | 0.700 (floor at α) |
+
+Code / ADR / doc rankings stay byte-identical when the knob is flipped — verified by
+an end-to-end byte-identity test (TEMP-03 success criterion).
+
+References: [Customers.ai recency-weighted scoring](https://customers.ai/recency-weighted-scoring),
+[Snowflake Cortex Search scoring docs](https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-search/cortex-search-customize-scoring).
+
+### Doctor surface
+
+`supamem doctor` shows a `Temporal validity` panel (between Reranker and Subagent
+reachability) listing live / superseded / awaiting_gc / future-dated counts, per-source
+breakdown, oldest + newest `valid_from` across your collection, and `retention_days`
+provenance. Read-only by construction; never flips the doctor exit code.
+
+### Migration
+
+First post-upgrade `supamem index` back-fills `valid_to=null` on legacy points (gated
+by a manifest reserved key, idempotent on subsequent runs). Defense-in-depth alongside
+the `IsEmpty` runtime filter.
+
+> ⚠ **Default retention is destructive** for users upgrading from v0.2.x with audit-mode
+> collections older than 90 days. Set `[supamem.retrieval.temporal] retention_days = 0`
+> to disable auto-GC entirely.
 
 ---
 

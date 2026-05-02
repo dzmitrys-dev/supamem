@@ -2,6 +2,87 @@
 
 All notable changes to `supamem` will be documented in this file.
 
+## [0.3.0a1] — 2026-05-02 (Phase 9: Per-Source Temporal Validity)
+
+First alpha of the v0.3 line. Ships **per-source temporal validity** —
+every indexed chunk now carries `payload.valid_from` (= source mtime)
+and `payload.valid_to = null`; re-indexing a CHANGED file scrolls and
+`set_payload(valid_to=now())`s prior chunks atomically BEFORE upserting
+new content-hash-keyed chunks (old + new coexist in Qdrant per TEMP-01).
+A single always-on retrieval-time filter (`IsEmptyCondition` on
+`valid_to`, NOT `IsNullCondition` — see Qdrant#5342) removes superseded
+chunks from every backend uniformly.
+
+### Added
+
+- **Per-source temporal validity** (TEMP-01, TEMP-02): every indexed
+  chunk carries `payload.valid_from` (source mtime) and
+  `payload.valid_to = null` by default. Re-indexing a CHANGED file
+  atomically scrolls + `set_payload(valid_to=now())`s the prior chunks
+  BEFORE upserting new content-hash-keyed chunks (`_chunk_id` extended
+  with `content_hash` per D-CID-01). Old + new chunks coexist in
+  Qdrant — TEMP-01 literal compliance. Auto-GC at end of
+  `supamem index` deletes superseded chunks past
+  `[retrieval.temporal] retention_days = 90` (default). Set
+  `retention_days = 0` for kept-forever (compliance / audit)
+  collections.
+- **Always-on retrieval temporal filter** (TEMP-02):
+  `retrieval/filters.py:build_qdrant_filter` always emits a
+  `valid_to IS missing/null OR valid_to > now()` clause. Single
+  construction site (Phase 7 D-03) — all backends (`tuned_hybrid` both
+  Prefetch arms, `dense`, `bm25`, `qdrant_find`,
+  `dual_memory_search`) inherit it. Uses `IsEmptyCondition` (NOT
+  `IsNullCondition` — Qdrant#5342: `IsNull` does not match missing
+  fields).
+- **Transcript-only opt-in recency decay** (TEMP-03):
+  `[retrieval.recency.per_source.transcript]` table with
+  `enabled = false` default, `half_life_days = 14.0`, `alpha = 0.7`.
+  When enabled, transcripts get a post-rerank multiplicative-floor
+  decay `score *= alpha + (1 - alpha) * 0.5 ** (age_days / half_life_days)`.
+  Code / ADR / doc / null-room rankings remain byte-identical when
+  the knob is flipped — orthogonal pass after rerank-or-RRF, before
+  T-5 dedup.
+- **Doctor Temporal-validity panel**: `supamem doctor` between
+  Reranker and Subagent reachability panels — live / superseded /
+  awaiting_gc / future_dated counts, per-source breakdown, oldest +
+  newest `valid_from`, `retention_days` provenance, validity-migration
+  status. Read-only — never flips exit code.
+- **Eager validity migration** (D-NULL-03): first post-upgrade
+  `supamem index` back-fills `valid_to=null` on legacy points (gated
+  by manifest `__validity_migration__` reserved key, idempotent on
+  subsequent runs). Defense-in-depth alongside the IsEmpty runtime
+  filter.
+- **Payload indexes**: idempotent `create_payload_index` on
+  `valid_to` (DATETIME) and `chunker` (KEYWORD) at `run_index` boot —
+  sub-ms range queries on large collections (D-INDEX-01, D-INDEX-02).
+
+### Changed
+
+- **`_chunk_id`** signature now takes `content_hash` — unchanged
+  content is idempotent under re-index; changed content gets a fresh
+  uuid so old + new coexist in Qdrant.
+- **Default retention is destructive** for users upgrading from v0.2.x
+  with audit-mode collections older than 90 days. Set
+  `[retrieval.temporal] retention_days = 0` to disable auto-GC
+  entirely (kept-forever escape hatch).
+
+### Notes on public claims
+
+Per the v0.2.1 milestone gate, the "−30% tokens-per-correct-answer"
+claim is BLOCKED until Phase 10 (LongMemEval_S + RAGAS bench) validates
+the number. Phase 9 ships the temporal-validity infrastructure feeding
+into that measurement; no public benchmark claim accompanies this
+release.
+
+### References
+
+- Decay-shape rationale: Customers.ai recency-weighted scoring +
+  Snowflake Cortex Search docs (multiplicative-floor decay for
+  uncalibrated cross-encoder scores).
+- Qdrant API behavior: filtering docs (IsEmpty vs IsNull semantics,
+  DatetimeRange RFC 3339), payload index (DATETIME schema), point
+  delete (PointIdsList scroll-then-batch).
+
 ## [0.2.5a1] — 2026-05-02
 
 First alpha of the v0.2.5 line. Ships the **subagent reachability

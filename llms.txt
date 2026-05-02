@@ -18,8 +18,8 @@ installed, AI coding assistants gain persistent semantic memory across projects.
 
 ## Distribution
 
-- [PyPI](https://pypi.org/project/supamem/): Released via Trusted Publisher OIDC; `pip install supamem` or `uv tool install supamem`. Current version: v0.2.5a1 (alpha pre-release; v0.2.0 / v0.2.1 already shipped).
-- [CHANGELOG](CHANGELOG.md): Per-version release notes (v0.1.0 initial, v0.1.1 update-check + AGENTS.md, v0.1.2 project-tunable regress baselines, v0.1.3 dual_memory_write + qdrant aliases, v0.1.4 SessionStart banner + supamem live dashboard, v0.1.5 SessionStart wired by installer, v0.2.0 mcp.caps + multi-project install + agent-discipline hooks, v0.2.1 user-visible banner + drift signal, v0.2.2a1 transcript chunker plugin, v0.2.3a1 coding-path classifier + where filter, v0.2.4a1 code-aware reranker + eager ML fetch + doctor-driven repair self-heal, v0.2.5a1 subagent reachability auto-patcher + unpatch-agents + doctor reachability panel)
+- [PyPI](https://pypi.org/project/supamem/): Released via Trusted Publisher OIDC; `pip install supamem` or `uv tool install supamem`. Current version: v0.3.0a1 (alpha pre-release; v0.2.0 / v0.2.1 already shipped).
+- [CHANGELOG](CHANGELOG.md): Per-version release notes (v0.1.0 initial, v0.1.1 update-check + AGENTS.md, v0.1.2 project-tunable regress baselines, v0.1.3 dual_memory_write + qdrant aliases, v0.1.4 SessionStart banner + supamem live dashboard, v0.1.5 SessionStart wired by installer, v0.2.0 mcp.caps + multi-project install + agent-discipline hooks, v0.2.1 user-visible banner + drift signal, v0.2.2a1 transcript chunker plugin, v0.2.3a1 coding-path classifier + where filter, v0.2.4a1 code-aware reranker + eager ML fetch + doctor-driven repair self-heal, v0.2.5a1 subagent reachability auto-patcher + unpatch-agents + doctor reachability panel, v0.3.0a1 per-source temporal validity + transcript-only recency decay + temporal doctor panel)
 
 ## Translations
 
@@ -172,6 +172,40 @@ Subagents (Claude Code agent definitions under `~/.claude/agents/*.md` and `<pro
   ```
 
   `supamem doctor` displays the manifest path and reminder so this flow is discoverable without docs.
+
+## Per-source temporal validity (v0.3.0a1+)
+
+Every indexed chunk carries a binary `valid_to` field: `null` ⇒ live; `≤ now()` ⇒ superseded (filtered out of every retrieval). Re-indexing a CHANGED file atomically scrolls existing chunks for that path, `set_payload(valid_to=now())`s them, then upserts new content-hash-keyed chunks with `valid_to=null`. Old and new chunks coexist in Qdrant; auto-GC at end of `supamem index` deletes superseded chunks past `retention_days`. The retrieval-time filter is constructed at a single site (`retrieval/filters.py:build_qdrant_filter`) and inherited by every backend — `tuned_hybrid` (both Prefetch arms), `dense`, `bm25`, `qdrant_find`, `dual_memory_search`. Filter uses `IsEmptyCondition` on `valid_to` (NOT `IsNullCondition` — Qdrant#5342: `IsNull` does not match missing fields).
+
+### Config keys
+
+`[retrieval.temporal]` — universal binary `valid_to` invalidation:
+
+- `retention_days` (int, default `90`) — auto-GC sweeps superseded chunks older than this at the end of `supamem index`. Set to `0` to disable auto-GC entirely (kept-forever escape hatch for compliance / audit collections).
+
+`[retrieval.recency.per_source.transcript]` — transcript-only opt-in decay (does NOT affect code / ADR / doc / null-room rankings):
+
+- `enabled` (bool, default `false`) — gates the post-rerank decay multiplier.
+- `half_life_days` (float, default `14.0`) — half-life of the multiplier; e.g. age=14d ⇒ multiplier=0.85 with α=0.7.
+- `alpha` (float, default `0.7`) — floor of the multiplier; range `[0.0, 1.0]`. Validators reject out-of-range at boot.
+
+Worked example with locked defaults: age 0d → 1.000; 7d → 0.924; 14d → 0.850; 28d → 0.775; ∞ → 0.700 (floor).
+
+### Doctor panel
+
+`supamem doctor` adds a "Temporal validity" panel between Reranker and Subagent reachability:
+
+- live / superseded / awaiting_gc / future_dated counts
+- per-source breakdown (markdown_header / transcript / null)
+- oldest + newest `valid_from` across the collection
+- `retention_days` provenance line
+- `validity_migration` provenance line (when manifest gate has tripped)
+
+Read-only by construction; never flips the doctor exit code.
+
+### Migration
+
+First post-upgrade `supamem index` back-fills `valid_to=null` on legacy points (gated by manifest `__validity_migration__` reserved key, idempotent on subsequent runs). Defense-in-depth alongside the `IsEmpty` runtime filter.
 
 ## Architecture
 
