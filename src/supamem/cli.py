@@ -447,6 +447,36 @@ def cmd_uninstall(
     raise typer.Exit(do_uninstall(client=client.value if client else None))
 
 
+@app.command("unpatch-agents")
+def cmd_unpatch_agents() -> None:
+    """Restore agent files patched by supamem install/repair (D-UNDO-01).
+
+    Run this BEFORE `pip uninstall supamem` to cleanly remove supamem's
+    additions to ~/.claude/agents/ tools whitelists. Files edited since
+    they were patched are left alone with a warning.
+    """
+    from supamem.console import info, ok, warn  # noqa: PLC0415
+    from supamem.install.agent_patcher import (  # noqa: PLC0415
+        manifest_path,
+        unpatch_all,
+    )
+
+    mp = manifest_path()
+    if not mp.exists():
+        info("no agent_patches.json manifest found — nothing to restore")
+        raise typer.Exit(code=0)
+    summary = unpatch_all()
+    if summary.restored:
+        ok(f"restored {len(summary.restored)} agent file(s)")
+    if summary.skipped_user_edited:
+        for path in summary.skipped_user_edited:
+            warn(f"skipped (user-edited since patch): {path}")
+    if summary.skipped_missing:
+        for path in summary.skipped_missing:
+            info(f"skipped (file no longer exists): {path}")
+    raise typer.Exit(code=0)
+
+
 @app.command("repair")
 def cmd_repair(
     client: Optional[Client] = typer.Option(

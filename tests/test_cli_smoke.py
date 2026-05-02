@@ -318,6 +318,137 @@ def test_init_with_skip_patch_agents_accepted(tmp_path) -> None:
     assert "Traceback" not in r.stderr, r.stderr
 
 
+# ───── Plan 08.1-05 — `supamem unpatch-agents` subcommand (D-UNDO-01 REVISED) ─
+
+
+def test_unpatch_agents_help_runs() -> None:
+    """`supamem unpatch-agents --help` exits 0 and surfaces the docstring."""
+    r = _run("unpatch-agents", "--help")
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    combined = r.stdout + r.stderr
+    assert "Restore agent files patched by supamem" in combined, combined
+
+
+def test_unpatch_agents_no_manifest_exits_zero_with_message(tmp_path) -> None:
+    """With no manifest on disk, `unpatch-agents` is a friendly no-op (exit 0)."""
+    home = tmp_path / "home"
+    home.mkdir()
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    env = {
+        "HOME": str(home),
+        "SUPAMEM_CACHE_DIR": str(cache),
+        "SUPAMEM_NO_UPDATE_CHECK": "1",
+    }
+    r = _run("unpatch-agents", env=env)
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    combined = r.stdout + r.stderr
+    assert "no agent_patches.json manifest found" in combined, combined
+
+
+CSV_PATCHABLE_FIXTURE = (
+    "---\n"
+    "name: csv-patchable\n"
+    "description: restrictive whitelist, no supamem coverage\n"
+    "tools: Read, Bash, Grep, mcp__context7__*\n"
+    "---\n"
+    "\n"
+    "body\n"
+)
+
+
+def _seed_patchable_agent_for_smoke(home, name: str = "csv-patchable.md"):
+    agents_dir = home / ".claude" / "agents"
+    agents_dir.mkdir(parents=True, exist_ok=True)
+    agent_file = agents_dir / name
+    agent_file.write_text(CSV_PATCHABLE_FIXTURE, encoding="utf-8")
+    return agent_file
+
+
+def test_unpatch_agents_restores_after_install_repair_loop(tmp_path) -> None:
+    """End-to-end smoke: install patches the seeded agent, then
+    `unpatch-agents` restores it byte-identical to the original fixture."""
+    home = tmp_path / "home"
+    home.mkdir()
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    agent_file = _seed_patchable_agent_for_smoke(home)
+    original_bytes = agent_file.read_bytes()
+    (home / ".claude.json").write_text("{}", encoding="utf-8")
+
+    env = {
+        "HOME": str(home),
+        "SUPAMEM_CACHE_DIR": str(cache),
+        "SUPAMEM_NO_UPDATE_CHECK": "1",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+    }
+    r1 = _run(
+        "install",
+        "--client", "claude-code",
+        "--dry-run",
+        "--skip-models",
+        env=env,
+    )
+    # Install must succeed (or at least not traceback) and patch the agent.
+    assert "Traceback" not in r1.stderr, r1.stderr
+    patched_text = agent_file.read_text(encoding="utf-8")
+    assert "mcp__supamem__*" in patched_text, (
+        f"install did not patch the agent file: {patched_text!r}"
+    )
+
+    r2 = _run("unpatch-agents", env=env)
+    assert r2.returncode == 0, (r2.stdout, r2.stderr)
+    assert agent_file.read_bytes() == original_bytes, (
+        "agent file should be byte-identical after unpatch-agents"
+    )
+
+
+def test_unpatch_agents_warns_on_user_edited_file(tmp_path) -> None:
+    """User-edited frontmatter post-patch → unpatch-agents warns + leaves file alone."""
+    home = tmp_path / "home"
+    home.mkdir()
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    agent_file = _seed_patchable_agent_for_smoke(home)
+    (home / ".claude.json").write_text("{}", encoding="utf-8")
+
+    env = {
+        "HOME": str(home),
+        "SUPAMEM_CACHE_DIR": str(cache),
+        "SUPAMEM_NO_UPDATE_CHECK": "1",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+    }
+    _run(
+        "install",
+        "--client", "claude-code",
+        "--dry-run",
+        "--skip-models",
+        env=env,
+    )
+    patched_text = agent_file.read_text(encoding="utf-8")
+    assert "mcp__supamem__*" in patched_text, "precondition: file should be patched"
+
+    # Mutate the frontmatter (append a key) so the SHA drifts.
+    mutated = patched_text.replace(
+        "---\nname: csv-patchable\n",
+        "---\nname: csv-patchable\nmodel: opus\n",
+        1,
+    )
+    agent_file.write_text(mutated, encoding="utf-8")
+    mutated_bytes = agent_file.read_bytes()
+
+    r = _run("unpatch-agents", env=env)
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    combined = r.stdout + r.stderr
+    assert "user-edited" in combined or "edited since" in combined, combined
+    # File unchanged from the mutated state.
+    assert agent_file.read_bytes() == mutated_bytes, (
+        "user-edited file must not be mutated by unpatch-agents"
+    )
+
+
 def test_version_prints_current() -> None:
     """Test 6: --version prints styled banner with current __version__ + credit line."""
     from supamem import __version__
