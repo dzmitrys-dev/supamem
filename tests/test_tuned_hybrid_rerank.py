@@ -18,6 +18,7 @@ Locks:
 """
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import math
 from pathlib import Path
@@ -34,7 +35,6 @@ _GOLDEN_PATH = Path(__file__).parent / "_fixtures" / "tuned_hybrid_pre_phase8.js
 
 # Frozen "now" mirrors the value used in tests/_fixtures/_capture_golden.py.
 # Re-baseline by re-running that script if you change this.
-import datetime as _dt
 _FROZEN_NOW = _dt.datetime(2026, 5, 1, 12, 0, 0, tzinfo=_dt.timezone.utc)
 
 
