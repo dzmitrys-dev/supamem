@@ -137,6 +137,27 @@ class TunedHybridBackend:
         dense_q = [float(x) for x in next(dense.embed([text]))]
         sparse_q = next(sparse.embed([text]))
 
+        # Phase 8 (D-COMPOSE-03): rerank-on/off branch. ``"off"`` returns
+        # ``None`` from the loader without iterating entry-points so the
+        # off-path is byte-identical to pre-Phase-8 (RERANK-01).
+        from supamem.rerankers import load_reranker  # noqa: PLC0415
+
+        reranker_name = getattr(self.config, "reranker_name", "off")
+        try:
+            reranker = load_reranker(reranker_name, self.config)
+        except LookupError:
+            # Fail-soft: treat unknown reranker as off; ResolvedConfig's
+            # validation gate (load_config) is the canonical fail-closed
+            # surface — at backend.query() time we never abort retrieval.
+            reranker = None
+
+        # D-POOL-01: widen prefetch only when reranker is on.
+        prefetch_limit = (
+            getattr(self.config, "reranker_prefetch_per_arm", PREFETCH_LIMIT)
+            if reranker
+            else PREFETCH_LIMIT
+        )
+
         # D-03: build Filter ONCE; thread the SAME object to both Prefetch
         # arms AND top-level query_filter (defense-in-depth per RESEARCH
         # §Pattern 3 — applying it to only one arm causes RRF fusion to
@@ -149,7 +170,7 @@ class TunedHybridBackend:
                 qmodels.Prefetch(
                     query=dense_q,
                     using=DENSE_VECTOR_NAME,
-                    limit=PREFETCH_LIMIT,
+                    limit=prefetch_limit,
                     filter=qf,
                 ),
                 qmodels.Prefetch(
@@ -158,7 +179,7 @@ class TunedHybridBackend:
                         values=[float(v) for v in sparse_q.values],
                     ),
                     using=SPARSE_VECTOR_NAME,
-                    limit=PREFETCH_LIMIT,
+                    limit=prefetch_limit,
                     filter=qf,
                 ),
             ],
@@ -169,24 +190,95 @@ class TunedHybridBackend:
             with_vectors=True,
         )
 
-        # T-4 recency adjust on payload.updated_at
-        adjusted: list[tuple[str, float, dict, list[float] | None]] = []
+        # Build raw candidates preserving payload + vec for downstream T-5 dedup.
+        raw: list[tuple[str, float, dict, list[float] | None]] = []
         for hit in resp.points or []:
             payload = hit.payload or {}
-            mult = _recency_multiplier(payload.get("updated_at"))
             vec: list[float] | None = None
             if hit.vector:
                 if isinstance(hit.vector, dict):
-                    raw = hit.vector.get(DENSE_VECTOR_NAME)
+                    raw_v = hit.vector.get(DENSE_VECTOR_NAME)
                 else:
-                    raw = hit.vector
-                if raw is not None:
+                    raw_v = hit.vector
+                if raw_v is not None:
                     try:
-                        vec = [float(x) for x in raw]
+                        vec = [float(x) for x in raw_v]
                     except (TypeError, ValueError):
                         vec = None
-            adjusted.append((str(hit.id), float(hit.score) * mult, payload, vec))
-        adjusted.sort(key=lambda t: t[1], reverse=True)
+            raw.append((str(hit.id), float(hit.score), payload, vec))
+
+        adjusted: list[tuple[str, float, dict, list[float] | None]]
+        if reranker:
+            # D-COMPOSE-01/02: rerank REPLACES score, T-4 recency SKIPPED,
+            # T-5 dedup + T-8 budget run AFTER on the reranked ordering.
+            pre_rerank = [
+                RetrievedChunk(
+                    id=doc_id,
+                    text=str(payload.get("document") or ""),
+                    score=score,
+                    payload=payload,
+                    source_path=payload.get("source") or payload.get("file_path"),
+                    file_path=payload.get("file_path"),
+                )
+                for doc_id, score, payload, _vec in raw
+            ]
+            # Latency telemetry (D-CPU-02): wrap the rerank call for the
+            # doctor panel's p50/p95 surface. Failures swallowed (non-essential).
+            import time as _time  # noqa: PLC0415
+
+            t0 = _time.perf_counter()
+            try:
+                reranked = reranker.rerank(text, pre_rerank)
+            except Exception:
+                # Plugin failure → fall through to off-path semantics
+                # (T-RERANK-INVAR mitigation: never silently drop hits).
+                from supamem.console import err_console  # noqa: PLC0415
+
+                err_console.print(
+                    "[supamem.warn]reranker raised — falling back to off-branch"
+                )
+                reranker = None
+                reranked = []
+            elapsed_ms = (_time.perf_counter() - t0) * 1000.0
+
+            # T-RERANK-INVAR: list MUST NOT grow.
+            if reranker is not None and len(reranked) > len(pre_rerank):
+                from supamem.console import err_console  # noqa: PLC0415
+
+                err_console.print(
+                    "[supamem.warn]reranker returned more chunks than provided; "
+                    "falling back to off-branch behavior"
+                )
+                reranker = None
+
+            if reranker is not None:
+                # Record latency (Welford + deque). Failures swallowed.
+                try:
+                    from supamem.stats.counter import bump  # noqa: PLC0415
+
+                    bump("rerank", "rerank_latency_ms", 0, elapsed_ms)
+                except Exception:
+                    pass
+                vec_by_id = {doc_id: vec for doc_id, _s, _p, vec in raw}
+                payload_by_id = {doc_id: pl for doc_id, _s, pl, _v in raw}
+                adjusted = [
+                    (
+                        c.id,
+                        float(c.score),
+                        payload_by_id.get(c.id, c.payload or {}),
+                        vec_by_id.get(c.id),
+                    )
+                    for c in reranked
+                ]
+                # Reranker owns the ordering — no resort.
+
+        if not reranker:
+            # Pre-Phase-8 path: T-4 recency multiplier + sort.
+            adjusted = []
+            for doc_id, score, payload, vec in raw:
+                mult = _recency_multiplier(payload.get("updated_at"))
+                adjusted.append((doc_id, score * mult, payload, vec))
+            adjusted.sort(key=lambda t: t[1], reverse=True)
 
         # T-5 cosine dedup + T-8 token-budget truncation.
         kept_vecs: list[list[float]] = []
@@ -212,6 +304,7 @@ class TunedHybridBackend:
                     source_path=payload.get("source") or payload.get("file_path"),
                     file_path=payload.get("file_path"),
                     payload=payload,
+                    rerank_score=score if reranker else None,
                 )
             )
             if len(out) >= k:
