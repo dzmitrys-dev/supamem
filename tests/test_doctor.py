@@ -634,3 +634,175 @@ def test_doctor_handles_empty_global_dir(
     assert "run `supamem repair` to patch" not in out, out
     # rc is 1 because qdrant unreachable; doctor itself didn't crash.
     assert rc == 1
+
+
+# ───── Plan 09-05 — Temporal-validity panel (D-DOCTOR-01) ────────────────
+
+
+def test_doctor_temporal_panel_renders_when_qdrant_unreachable(
+    home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """D-DOCTOR-01: panel renders header + buckets + provenance even with no Qdrant.
+
+    Qdrant unreachable → every count probe falls back to 0 (mirrors Room
+    histogram T-07-02-04 fail-soft). Panel must still surface its labels
+    and the retention_days [source: ...] provenance line.
+    """
+    import supamem.doctor as mod
+
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: False)
+    rc = mod.run_doctor()
+    out = capsys.readouterr().out
+
+    # Header.
+    assert "Temporal validity" in out
+    # Four count-buckets must all label, even when n=0 fallback fires.
+    for label in ("live", "superseded", "awaiting_gc", "future_dated"):
+        assert label in out, f"expected bucket {label!r} in output, got: {out!r}"
+    # Per-source breakdown labels.
+    assert "Per-source breakdown" in out
+    for src in ("markdown_header", "transcript", "null"):
+        assert src in out, f"expected per-source {src!r} in output, got: {out!r}"
+    # Oldest / newest valid_from rows.
+    assert "oldest_valid_from" in out
+    assert "newest_valid_from" in out
+    # Config provenance line (mirrors reranker [source: ...] convention).
+    assert "retention_days" in out
+    assert "[source:" in out
+    # Validity-migration provenance row (manifest absent in tmp HOME → "(not run)"
+    # or "(manifest unreadable)" — both are valid surfaces).
+    assert "validity_migration" in out
+    # rc==1 attributable to qdrant unreachable, NOT to the temporal panel.
+    assert rc == 1
+
+
+def test_doctor_temporal_panel_read_only_never_flips_rc(
+    home: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D-DOCTOR-01 + Plan 08.1 D-DOCTOR-04 mirror: panel never flips exit code.
+
+    Compare two doctor runs in identical environments where the ONLY
+    difference is what the temporal panel observes:
+
+    - Baseline:    every count probe returns 0 (no drift surface).
+    - With-drift:  every count probe returns 7 (worst-case drift —
+                   future_dated > 0 AND awaiting_gc > 0).
+
+    Both runs share the same qdrant up/collection-present/reranker
+    state, so any rc delta isolates the temporal panel as the cause.
+    Mirrors ``test_doctor_subagent_reachability_does_not_change_exit_code``
+    (Plan 08.1 D-DOCTOR-04) baseline-vs-drift comparison shape.
+    """
+    import supamem.doctor as mod
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setenv("SUPAMEM_CACHE_DIR", str(cache))
+
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: True)
+    monkeypatch.setattr(
+        mod,
+        "_collection_health",
+        lambda client, name: {"present": True, "sparse": True},
+    )
+
+    counts_holder = {"value": 0}
+
+    class _Client:
+        def __init__(self, *a, **kw) -> None:
+            pass
+
+        def get_collection(self, *a, **kw):
+            class _Info:
+                class config:
+                    class params:
+                        sparse_vectors = {"sparse": object()}
+
+            return _Info()
+
+        def count(self, *a, **kw):
+            class _C:
+                count = counts_holder["value"]
+
+            return _C()
+
+        def scroll(self, *a, **kw):
+            return ([], None)
+
+    monkeypatch.setattr(
+        "qdrant_client.QdrantClient",
+        lambda *a, **kw: _Client(),
+        raising=False,
+    )
+
+    counts_holder["value"] = 0
+    rc_baseline = mod.run_doctor()
+
+    counts_holder["value"] = 7  # surfaces awaiting_gc + future_dated drift
+    rc_with_drift = mod.run_doctor()
+
+    assert rc_with_drift == rc_baseline, (
+        "Temporal-validity panel MUST be read-only "
+        "(D-DOCTOR-01 + Plan 08.1 D-DOCTOR-04 mirror): "
+        f"baseline={rc_baseline}, with_drift={rc_with_drift}"
+    )
+
+
+def test_doctor_temporal_panel_handles_count_exception(
+    home: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """T-09-05-01: client.count() raising falls back to n=0; panel still renders."""
+    import supamem.doctor as mod
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setenv("SUPAMEM_CACHE_DIR", str(cache))
+
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: True)
+    monkeypatch.setattr(
+        mod,
+        "_collection_health",
+        lambda client, name: {"present": True, "sparse": True},
+    )
+
+    class _BoomClient:
+        def __init__(self, *a, **kw) -> None:
+            pass
+
+        def get_collection(self, *a, **kw):
+            class _Info:
+                class config:
+                    class params:
+                        sparse_vectors = {"sparse": object()}
+
+            return _Info()
+
+        def count(self, *a, **kw):
+            raise RuntimeError("qdrant boom — temporal panel must fail-soft")
+
+        def scroll(self, *a, **kw):
+            raise RuntimeError("qdrant boom — scroll must also fail-soft")
+
+    monkeypatch.setattr(
+        "qdrant_client.QdrantClient",
+        lambda *a, **kw: _BoomClient(),
+        raising=False,
+    )
+
+    mod.run_doctor()
+    out = capsys.readouterr().out
+    err = capsys.readouterr().err
+
+    assert "Temporal validity" in out
+    assert "Traceback" not in (out + err)
+    # No assertion on rc value — other panels (e.g. reranker model not
+    # cached in tmp_path) legitimately bump rc; the contract here is
+    # that the temporal panel ITSELF survives a count() exception
+    # without crashing or polluting stderr with a traceback.

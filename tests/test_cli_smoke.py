@@ -89,6 +89,28 @@ def test_doctor_shows_caps() -> None:
     assert "[source:" in out, f"expected provenance tag '[source: ...]' in output, got: {out!r}"
 
 
+def test_doctor_shows_temporal_validity_panel() -> None:
+    """Plan 09-05 D-DOCTOR-01: ``supamem doctor`` surfaces the Temporal-validity panel.
+
+    Renders unconditionally (qdrant up or down) — count probes fall back
+    to 0 when Qdrant unreachable. Subprocess env is pinned by ``_run``
+    (NO_COLOR=1, TERM=dumb, COLUMNS=200) per AGENTS.md Test Discipline.
+    """
+    result = _run("doctor")
+    out = result.stdout
+    # Header.
+    assert "Temporal validity" in out, (
+        f"expected 'Temporal validity' panel header in output, got: {out!r}"
+    )
+    # All four buckets must label.
+    for label in ("live", "superseded", "awaiting_gc", "future_dated"):
+        assert label in out, f"expected bucket {label!r} in output, got: {out!r}"
+    # retention_days provenance (mirrors reranker [source: ...] convention).
+    assert "retention_days" in out
+    # No traceback under any qdrant connectivity scenario.
+    assert "Traceback" not in (result.stdout + result.stderr)
+
+
 def test_index_transcripts_help_lists_flag() -> None:
     """Plan 06-04: index --help advertises --transcripts and --since (B1, B2)."""
     r = _run("index", "--help")

@@ -243,6 +243,204 @@ def _format_reachability_row(relpath: str, state: str, is_patched: bool) -> str:
     return f"    ⚠  {name_field} — {state}"
 
 
+def _render_temporal_validity_panel(
+    cfg: ResolvedConfig,
+    chain: ConfigChain,
+    *,
+    client: Any,
+) -> None:
+    """Render the Temporal-validity panel (Phase 9 D-DOCTOR-01).
+
+    Read-only by construction: this function NEVER returns or signals
+    drift back to ``run_doctor`` and ``run_doctor`` NEVER ORs anything
+    from this panel into ``rc`` (mirrors Plan 08.1 D-DOCTOR-04 Subagent
+    reachability invariant). Drift such as ``future_dated > 0`` or
+    ``awaiting_gc > 0`` surfaces visually only.
+
+    All ``client.count``/``client.scroll`` probes are wrapped in
+    try/except → ``n=0`` fallback (matches Room histogram pattern at
+    ``doctor.py:354-388``; T-09-05-01 mitigation). The panel renders
+    even when ``client is None`` (qdrant_up=False) — every bucket
+    falls back to 0 cleanly.
+    """
+    from datetime import datetime, timedelta, timezone  # noqa: PLC0415
+
+    console.print()
+    console.print("[supamem.brand]Temporal validity[/supamem.brand]")
+
+    try:
+        from qdrant_client.http import models as qmodels  # noqa: PLC0415
+    except Exception:  # noqa: BLE001 — qdrant-client may be missing
+        qmodels = None  # type: ignore[assignment]
+
+    now_utc = datetime.now(timezone.utc)
+    now_iso = now_utc.isoformat()
+    retention_days = getattr(cfg, "temporal_retention_days", 90)
+    cutoff_iso = (
+        (now_utc - timedelta(days=retention_days)).isoformat()
+        if retention_days > 0
+        else None
+    )
+
+    def _count(flt: Any) -> int:
+        if client is None or qmodels is None or flt is None:
+            return 0
+        try:
+            return client.count(
+                collection_name=cfg.collection, count_filter=flt
+            ).count
+        except Exception:  # noqa: BLE001 — non-essential probe (T-09-05-01)
+            return 0
+
+    if qmodels is not None:
+        live_filter = qmodels.Filter(
+            must=[
+                qmodels.IsEmptyCondition(
+                    is_empty=qmodels.PayloadField(key="valid_to")
+                )
+            ]
+        )
+        superseded_filter = qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="valid_to",
+                    range=qmodels.DatetimeRange(lte=now_iso),
+                )
+            ]
+        )
+        future_filter = qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="valid_to",
+                    range=qmodels.DatetimeRange(gt=now_iso),
+                )
+            ]
+        )
+        awaiting_gc_filter = (
+            qmodels.Filter(
+                must=[
+                    qmodels.FieldCondition(
+                        key="valid_to",
+                        range=qmodels.DatetimeRange(lt=cutoff_iso),
+                    )
+                ]
+            )
+            if cutoff_iso is not None
+            else None
+        )
+    else:
+        live_filter = superseded_filter = future_filter = awaiting_gc_filter = None
+
+    live = _count(live_filter)
+    superseded = _count(superseded_filter)
+    future_dated = _count(future_filter)
+    awaiting_gc = _count(awaiting_gc_filter) if awaiting_gc_filter is not None else 0
+
+    ok(f"live           = {live}")
+    ok(f"superseded     = {superseded}")
+    if awaiting_gc > 0:
+        # T-09-05-02 surface — informational, never flips rc.
+        # D-GC-03 lock: no `supamem prune` subcommand; auto-GC on next index.
+        info(
+            f"  awaiting_gc  = {awaiting_gc}  "
+            f"({awaiting_gc} chunks awaiting auto-GC at next `supamem index`)"
+        )
+    else:
+        ok(f"  awaiting_gc  = {awaiting_gc}")
+    if future_dated > 0:
+        # T-09-05-02 mitigation — drift surfaced as informational only.
+        info(f"future_dated   = {future_dated}  (drift — manual payload edit?)")
+    else:
+        ok(f"future_dated   = {future_dated}")
+
+    # Per-source breakdown — mirror Room histogram pattern at doctor.py:354-388.
+    console.print("  Per-source breakdown:")
+    for chunker_tag in ("markdown_header", "transcript", None):
+        label = "null" if chunker_tag is None else chunker_tag
+        if qmodels is None:
+            n = 0
+        else:
+            if chunker_tag is None:
+                cf = qmodels.Filter(
+                    must=[
+                        qmodels.IsEmptyCondition(
+                            is_empty=qmodels.PayloadField(key="chunker")
+                        )
+                    ]
+                )
+            else:
+                cf = qmodels.Filter(
+                    must=[
+                        qmodels.FieldCondition(
+                            key="chunker",
+                            match=qmodels.MatchValue(value=chunker_tag),
+                        )
+                    ]
+                )
+            n = _count(cf)
+        ok(f"    {label:<16} : {n}")
+
+    # Oldest + newest valid_from — order_by scroll on a payload-indexed
+    # datetime field (D-INDEX-01 establishes the index on valid_to; the
+    # valid_from index is currently absent per CONTEXT deferred ideas, so
+    # this scroll may fall back to brute-force on large collections —
+    # acceptable for an opt-in diagnostic surface).
+    oldest = newest = "—"
+    if client is not None and qmodels is not None:
+        try:
+            pts, _ = client.scroll(
+                collection_name=cfg.collection,
+                limit=1,
+                with_payload=True,
+                with_vectors=False,
+                order_by=qmodels.OrderBy(
+                    key="valid_from", direction=qmodels.Direction.ASC
+                ),
+            )
+            if pts and pts[0].payload:
+                oldest = pts[0].payload.get("valid_from", "—") or "—"
+            pts, _ = client.scroll(
+                collection_name=cfg.collection,
+                limit=1,
+                with_payload=True,
+                with_vectors=False,
+                order_by=qmodels.OrderBy(
+                    key="valid_from", direction=qmodels.Direction.DESC
+                ),
+            )
+            if pts and pts[0].payload:
+                newest = pts[0].payload.get("valid_from", "—") or "—"
+        except Exception:  # noqa: BLE001 — non-essential probe (T-09-05-01)
+            pass
+
+    ok(f"oldest_valid_from = {oldest}")
+    ok(f"newest_valid_from = {newest}")
+
+    # Config + manifest provenance (mirror reranker panel `[source: ...]`
+    # convention at doctor.py:396).
+    retention_src = getattr(chain, "temporal_retention_days", "default")
+    ok(f"retention_days    = {retention_days}  [source: {retention_src}]")
+    if retention_days == 0:
+        info("  (kept-forever escape hatch — auto-GC disabled)")
+
+    # Validity-migration provenance from manifest (Plan 09-03 reserved key
+    # __validity_migration__ at indexer/manifest.py:31). Missing/malformed
+    # manifest → silently skipped (non-essential probe).
+    try:
+        from supamem.indexer import _manifest_path  # noqa: PLC0415
+        from supamem.indexer.manifest import Manifest  # noqa: PLC0415
+
+        _mf = Manifest.load(_manifest_path(cfg))
+        if _mf.validity_migration is not None:
+            ok(f"validity_migration = {_mf.validity_migration}")
+        else:
+            ok("validity_migration = (not run)")
+    except Exception:  # noqa: BLE001 — non-essential probe
+        ok("validity_migration = (manifest unreadable)")
+
+    # READ-ONLY: no `temporal_drift` flag returned or accumulated.
+
+
 def run_doctor(*, redact_secrets: bool = True) -> int:
     cfg, chain = load_config()
     banner("supamem doctor", f"v{__version__}")
@@ -488,7 +686,17 @@ def run_doctor(*, redact_secrets: bool = True) -> int:
             "(set retrieval.reranker = 'off' to disable; restores pre-Phase-8 latency)"
         )
 
-    # ── Section 2g: Subagent reachability (Phase 08.1 D-DOCTOR-01..05) ───
+    # ── Section 2g: Temporal validity (Phase 9 D-DOCTOR-01) ──────────────
+    # Read-only panel — NEVER flips exit code (mirrors Plan 08.1 D-DOCTOR-04
+    # Subagent reachability invariant). Surfaces drift (future-dated chunks,
+    # awaiting_gc backlog) as informational signal only.
+    _render_temporal_validity_panel(
+        cfg,
+        chain,
+        client=locals().get("client") if qdrant_up else None,
+    )
+
+    # ── Section 2h: Subagent reachability (Phase 08.1 D-DOCTOR-01..05) ───
     _render_subagent_reachability_panel()
 
     # ── Section 3: Installed clients drift ───────────────────────────────
