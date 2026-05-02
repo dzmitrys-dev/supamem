@@ -23,6 +23,12 @@ TRANSCRIPTS_KEY = "__transcripts__"
 # Plan 07-02 D-10: classifier hash is stored under a top-level reserved key,
 # emitted only when not None so Phase-6-era manifests round-trip byte-stable.
 CLASSIFIER_HASH_KEY = "__classifier_hash__"
+# Phase 9 D-NULL-03 — gate for one-shot eager validity migration sweep.
+# Set to ``supamem.__version__`` on first successful sweep; absent on
+# Phase-8-era manifests so the gate trips exactly once post-upgrade.
+# Mirrors :data:`CLASSIFIER_HASH_KEY` precedent (byte-stable rollback when
+# the field is None — the key is omitted from the JSON dump entirely).
+VALIDITY_MIGRATION_KEY = "__validity_migration__"
 
 
 @dataclass
@@ -34,6 +40,12 @@ class Manifest:
     # Plan 07-02 D-10: sha256 digest of [classifier.rooms]; drift triggers a
     # set_payload sweep on next ``run_index``. Missing key on Phase-6 manifests
     # loads as None which trips the gate exactly once on first post-upgrade run.
+    validity_migration: Optional[str] = None
+    # Phase 9 D-NULL-03: stamped to ``supamem.__version__`` on first successful
+    # eager-validity-migration sweep. Missing key on Phase-8-era manifests
+    # loads as None which trips the gate exactly once on first post-upgrade
+    # run (mirrors classifier_hash gate). Byte-stable rollback: the key is
+    # NOT emitted to JSON when the field is None.
 
     @classmethod
     def load(cls, path: Path) -> Manifest:
@@ -51,6 +63,14 @@ class Manifest:
         raw_classifier_hash = raw.get(CLASSIFIER_HASH_KEY)
         classifier_hash = (
             str(raw_classifier_hash) if isinstance(raw_classifier_hash, str) else None
+        )
+        # Phase 9 D-NULL-03: validity-migration gate — top-level reserved key,
+        # missing → None (gate trips once on first post-upgrade ``run_index``).
+        raw_validity_migration = raw.get(VALIDITY_MIGRATION_KEY)
+        validity_migration = (
+            str(raw_validity_migration)
+            if isinstance(raw_validity_migration, str)
+            else None
         )
         transcripts: dict[str, dict[str, dict]] = {}
         if isinstance(raw_transcripts, dict):
@@ -80,7 +100,10 @@ class Manifest:
                     "tuned": str(v.get("tuned") or ""),
                 }
         return cls(
-            entries=out, transcripts=transcripts, classifier_hash=classifier_hash
+            entries=out,
+            transcripts=transcripts,
+            classifier_hash=classifier_hash,
+            validity_migration=validity_migration,
         )
 
     def save(self, path: Path) -> None:
@@ -94,6 +117,10 @@ class Manifest:
         # classifier) keep byte-identical JSON output.
         if self.classifier_hash is not None:
             payload[CLASSIFIER_HASH_KEY] = self.classifier_hash
+        # Phase 9 D-NULL-03: emit validity_migration only when set so Phase-8
+        # manifests round-trip byte-stable (mirrors classifier_hash convention).
+        if self.validity_migration is not None:
+            payload[VALIDITY_MIGRATION_KEY] = self.validity_migration
         path.write_text(
             json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
         )
