@@ -32,6 +32,7 @@ import hashlib
 import json
 import os
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Literal, Optional
 
@@ -159,8 +160,238 @@ def _reclassify_sweep(client: Any, cfg: ResolvedConfig, *, batch: int = 512) -> 
     return updated
 
 
-def _chunk_id(file_path: str, idx: int) -> str:
-    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"{file_path}#chunk={idx}"))
+# ---------------------------------------------------------------------------
+# Phase 9 — temporal validity helpers (D-WINDOW-01, D-NULL-03, D-GC-01,
+# D-INDEX-01..02). Each helper mirrors :func:`_reclassify_sweep` shape:
+# scroll → group → ONE batched RPC per group (Phase 7 D-09 batching invariant).
+# ``wait=True`` for idempotency under interruption (RESEARCH §R-3).
+# ---------------------------------------------------------------------------
+
+
+def _close_validity_window(
+    client: Any,
+    cfg: ResolvedConfig,
+    file_path: str,
+    *,
+    batch: int = 512,
+) -> int:
+    """Close the validity window on currently-live chunks of ``file_path``.
+
+    D-WINDOW-01: scroll all points where ``file_path == path AND
+    IsEmpty(valid_to)`` (so already-closed chunks are skipped — idempotent),
+    then issue ONE batched ``set_payload({"valid_to": now_iso})`` per scroll
+    page. Re-raise on RPC failure: TEMP-01 contract requires atomic
+    close-then-upsert per file (Threat T-09-03-05).
+
+    Returns the number of points whose validity was closed.
+    """
+    from qdrant_client.http import models as qmodels  # noqa: PLC0415
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    scroll_filter = qmodels.Filter(
+        must=[
+            qmodels.FieldCondition(
+                key="file_path", match=qmodels.MatchValue(value=file_path)
+            ),
+            qmodels.IsEmptyCondition(
+                is_empty=qmodels.PayloadField(key="valid_to")
+            ),
+        ]
+    )
+    offset: Any = None
+    closed = 0
+    while True:
+        points, offset = client.scroll(
+            collection_name=cfg.collection,
+            scroll_filter=scroll_filter,
+            limit=batch,
+            with_payload=False,
+            with_vectors=False,
+            offset=offset,
+        )
+        if not points:
+            break
+        ids = [p.id for p in points]
+        client.set_payload(
+            collection_name=cfg.collection,
+            payload={"valid_to": now_iso},
+            points=ids,
+            wait=True,
+        )
+        closed += len(ids)
+        if offset is None:
+            break
+    return closed
+
+
+def _eager_validity_migration(
+    client: Any,
+    cfg: ResolvedConfig,
+    *,
+    batch: int = 512,
+) -> int:
+    """Back-fill ``valid_to = None`` on legacy Phase-8-era points.
+
+    D-NULL-03 + Pitfall 7: scrolls every point where ``IsEmpty(valid_to)`` and
+    issues ONE batched ``set_payload({"valid_to": None})`` per scroll page.
+    The explicit-null marker makes legacy points eligible for the runtime
+    IsEmpty match in :func:`build_qdrant_filter` (Phase-8 chunks would
+    otherwise be silently filtered out by the always-on temporal clause).
+
+    Gated externally by ``manifest.validity_migration is None``; called
+    exactly ONCE per upgrade, BEFORE the per-file close-old sweep so
+    legacy points are not consumed by close-window's IsEmpty filter.
+
+    Returns the number of points back-filled.
+    """
+    from qdrant_client.http import models as qmodels  # noqa: PLC0415
+
+    scroll_filter = qmodels.Filter(
+        must=[
+            qmodels.IsEmptyCondition(
+                is_empty=qmodels.PayloadField(key="valid_to")
+            )
+        ]
+    )
+    offset: Any = None
+    migrated = 0
+    while True:
+        points, offset = client.scroll(
+            collection_name=cfg.collection,
+            scroll_filter=scroll_filter,
+            limit=batch,
+            with_payload=False,
+            with_vectors=False,
+            offset=offset,
+        )
+        if not points:
+            break
+        ids = [p.id for p in points]
+        client.set_payload(
+            collection_name=cfg.collection,
+            payload={"valid_to": None},
+            points=ids,
+            wait=True,
+        )
+        migrated += len(ids)
+        if offset is None:
+            break
+    return migrated
+
+
+def _gc_sweep(
+    client: Any,
+    cfg: ResolvedConfig,
+    retention_days: int,
+    *,
+    batch: int = 512,
+) -> int:
+    """Delete chunks superseded longer than ``retention_days``.
+
+    D-GC-01: scrolls points where ``valid_to < (now - retention_days)`` and
+    issues batched ``client.delete(points_selector=PointIdsList(points=ids))``
+    calls (Form A — keeps count visible for doctor + Welford telemetry per
+    RESEARCH §R-5; Form B ``delete(filter=...)`` is rejected because it
+    hides the count).
+
+    ``retention_days <= 0`` is the kept-forever escape hatch — returns 0
+    and never calls ``client.scroll`` (Threat T-09-03-02 mitigation).
+
+    Returns the number of points deleted.
+    """
+    if retention_days <= 0:
+        return 0
+    from datetime import timedelta  # noqa: PLC0415
+    from qdrant_client.http import models as qmodels  # noqa: PLC0415
+
+    cutoff_iso = (
+        datetime.now(timezone.utc) - timedelta(days=retention_days)
+    ).isoformat()
+    scroll_filter = qmodels.Filter(
+        must=[
+            qmodels.FieldCondition(
+                key="valid_to",
+                range=qmodels.DatetimeRange(lt=cutoff_iso),
+            )
+        ]
+    )
+    offset: Any = None
+    deleted = 0
+    while True:
+        points, offset = client.scroll(
+            collection_name=cfg.collection,
+            scroll_filter=scroll_filter,
+            limit=batch,
+            with_payload=False,
+            with_vectors=False,
+            offset=offset,
+        )
+        if not points:
+            break
+        ids = [p.id for p in points]
+        client.delete(
+            collection_name=cfg.collection,
+            points_selector=qmodels.PointIdsList(points=ids),
+            wait=True,
+        )
+        deleted += len(ids)
+        if offset is None:
+            break
+    return deleted
+
+
+def _ensure_temporal_indexes(client: Any, cfg: ResolvedConfig) -> None:
+    """Create payload indexes on ``valid_to`` (DATETIME) and ``chunker`` (KEYWORD).
+
+    D-INDEX-01..02: idempotent — qdrant-client treats re-creation of the
+    same-schema index as a no-op (RESEARCH §R-3). Without these, the
+    always-on ``Range(gt=now)`` temporal clause and the per-source decay
+    fan-out fall back to brute-force scans.
+
+    Fail-soft + SURFACE per CLAUDE.md: errors go to ``err_console`` and
+    indexing continues. The single sanctioned blanket except in the indexer
+    is the update-check daemon; this RPC surface is critical enough to
+    surface but not critical enough to abort the run.
+    """
+    from qdrant_client.http import models as qmodels  # noqa: PLC0415
+
+    try:
+        client.create_payload_index(
+            collection_name=cfg.collection,
+            field_name="valid_to",
+            field_schema=qmodels.PayloadSchemaType.DATETIME,
+            wait=True,
+        )
+        client.create_payload_index(
+            collection_name=cfg.collection,
+            field_name="chunker",
+            field_schema=qmodels.PayloadSchemaType.KEYWORD,
+            wait=True,
+        )
+    except Exception as exc:  # noqa: BLE001 — fail-soft + SURFACE per CLAUDE.md
+        err_console.print(
+            f"[red]temporal index creation failed: "
+            f"{type(exc).__name__}: {exc}[/red]"
+        )
+
+
+def _chunk_id(file_path: str, idx: int, content_hash: str) -> str:
+    """Deterministic chunk uuid keyed on (path, idx, content_hash) — Phase 9 D-CID-01.
+
+    Identical content → identical uuid (idempotent re-index of unchanged
+    content; Qdrant upsert is a no-op). CHANGED content → NEW uuid; the old
+    point persists with ``valid_to`` set, the new point upserts with
+    ``valid_to = None``. This is the literal TEMP-01 supersede mechanism.
+
+    Transcript chunks use :func:`_transcript_chunk_id` (D-CID-02) — append-only
+    by construction, content-independent.
+    """
+    return str(
+        uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"{file_path}#chunk={idx}#hash={content_hash}",
+        )
+    )
 
 
 def _transcript_chunk_id(session_uuid: str, message_uuid: str, idx: int) -> str:
@@ -285,8 +516,15 @@ def _index_records(
     collection: str,
     is_transcript: bool,
     classifier_rooms: dict[str, list[str]],
+    wallclock_fallback: Optional[list[int]] = None,
 ) -> int:
-    """Embed ``records`` and upsert hybrid points. Returns chunks written."""
+    """Embed ``records`` and upsert hybrid points. Returns chunks written.
+
+    ``wallclock_fallback`` is a single-element mutable counter (list[int])
+    so the per-record loop can increment it under Phase 9 D-VFROM-02 without
+    a per-file warning storm. ``run_index`` initializes the counter and
+    emits ONE end-of-run warning (Task 2b wires it).
+    """
     from qdrant_client.http import models as qmodels
 
     if not records:
@@ -296,6 +534,18 @@ def _index_records(
     # loop. A chunker can still override via metadata["room"] because the
     # **rec.metadata spread happens AFTER "room" in the payload literal.
     default_room = classify_room(abs_path, classifier_rooms)
+    # Phase 9 D-VFROM-01: derive valid_from once per file from mtime so the
+    # per-chunk loop is cheap. Transcripts may carry a per-message timestamp
+    # in rec.metadata['valid_from'] which overrides this default.
+    try:
+        mt = path.stat().st_mtime
+        if mt <= 0:
+            raise OSError("zero mtime")
+        file_valid_from = datetime.fromtimestamp(mt, tz=timezone.utc).isoformat()
+    except OSError:
+        file_valid_from = datetime.now(timezone.utc).isoformat()
+        if wallclock_fallback is not None:
+            wallclock_fallback[0] += 1
     points: list[Any] = []
     for idx, rec in enumerate(records):
         if _token_count(rec.text) < CHUNK_MIN_TOKENS and not is_transcript:
@@ -319,9 +569,20 @@ def _index_records(
             point_id = _transcript_chunk_id(session_id, user_uuid, turn_index)
             content_hash = hashlib.sha256(rec.text.encode("utf-8")).hexdigest()
         else:
-            point_id = _chunk_id(abs_path, idx)
             content_hash = sha
+            point_id = _chunk_id(abs_path, idx, content_hash)
 
+        # Phase 9 D-VFROM-01: transcripts may already expose a per-message
+        # timestamp via rec.metadata['valid_from'] (Phase 6 owns the chunker).
+        # Filesystem-derived chunks fall back to the per-file mtime computed
+        # above. ``valid_to`` is None for live chunks; the close-window sweep
+        # stamps it to ISO(now) when a file is re-indexed (D-WINDOW-01).
+        rec_valid_from = rec.metadata.get("valid_from")
+        valid_from = (
+            rec_valid_from
+            if isinstance(rec_valid_from, str) and rec_valid_from
+            else file_valid_from
+        )
         # D-06 + D-11 + D-13: payload.room is ALWAYS present (string or None),
         # positioned BEFORE **rec.metadata so a chunker can deliberately
         # override classification by setting metadata["room"]. v1 default
@@ -332,6 +593,8 @@ def _index_records(
             "content_hash": content_hash,
             "document": rec.text,
             "room": default_room,
+            "valid_from": valid_from,
+            "valid_to": None,
             **rec.metadata,
         }
         points.append(
