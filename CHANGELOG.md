@@ -2,6 +2,57 @@
 
 All notable changes to `supamem` will be documented in this file.
 
+## [__NEW_VERSION__] — __DATE__
+
+First alpha of the v0.2.4 line. Ships the **code-aware reranker**
+(Phase 8 of the v0.2.0 milestone train) — every `tuned_hybrid` query
+now rescores RRF-fused candidates through a cross-encoder by default.
+
+### Added
+
+- Code-aware cross-encoder reranker: `mxbai-rerank-base-v2` (Apache-2.0)
+  plugged into `tuned_hybrid` retrieval as the new default
+  (`retrieval.reranker = "mxbai_v2"`). Setting
+  `retrieval.reranker = "off"` restores pre-Phase-8 byte-identical
+  behavior. (Phase 8, RERANK-01..04)
+- New `supamem.reranker` plugin entry-point group — third parties
+  register custom rerankers without forking. Registered default:
+  `mxbai_v2 = supamem.rerankers.mxbai_v2:MxbaiV2Reranker`. (RERANK-03)
+- `supamem install` and `supamem init` proactively download all ML
+  prerequisites (MiniLM ~90 MB + BM25 ~10 MB + mxbai-rerank-base-v2
+  ~1 GB) with `rich.progress`. Cold post-install CLI invocations
+  (`supamem --help`, `supamem doctor`, `supamem --version`) trigger
+  zero network egress. (RERANK-02)
+- `supamem install --skip-models` opt-out flag for air-gapped
+  first-run; backfill via `supamem repair`. (D-FETCH-07)
+- `supamem repair` extended to doctor-driven self-heal: re-fetches
+  missing/partial reranker model, re-syncs `share/`, repairs managed
+  CLAUDE.md/AGENTS.md blocks, restores client config. Idempotent.
+  (D-FETCH-03)
+- `supamem doctor` Reranker panel: name, model_id, cache path,
+  on-disk size + partial-download detection, last-load latency,
+  last-100-query rerank p50/p95, detected device (cuda/mps/cpu).
+  (RERANK-04, D-DOCTOR-01)
+- New env vars: `SUPAMEM_CACHE_DIR` (override platformdirs cache root),
+  `HF_HUB_OFFLINE=1` / `TRANSFORMERS_OFFLINE=1` (respected by
+  `prepare()`), `SUPAMEM_INTEGRATION_RERANKER=1` (opt-in integration
+  test gate).
+
+### Changed
+
+- `RetrievedChunk` gains optional `rerank_score: float | None` field
+  for telemetry; primary `score` carries the rerank score when
+  reranker is on. (D-CONTRACT-05)
+- When reranker is on: PREFETCH_LIMIT widens to 50 per arm; T-4
+  recency multiplier is skipped; T-5 dedup + T-8 token budget run
+  AFTER rerank. (D-COMPOSE-01..03, D-POOL-01..04)
+
+### Dependencies
+
+- Added: `mxbai-rerank>=0.1.6,<0.2`, `huggingface_hub>=0.24`,
+  `filelock>=3.13`. Pulls `transformers>=4.49`, `torch>=2.0`,
+  `accelerate>=1.5` transitively.
+
 ## [0.2.3a1] — 2026-05-01
 
 First alpha of the v0.2.3 line. Ships the **coding-path classifier**

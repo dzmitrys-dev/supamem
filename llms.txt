@@ -18,8 +18,8 @@ installed, AI coding assistants gain persistent semantic memory across projects.
 
 ## Distribution
 
-- [PyPI](https://pypi.org/project/supamem/): Released via Trusted Publisher OIDC; `pip install supamem` or `uv tool install supamem`. Current version: v0.2.3a1 (alpha pre-release; v0.2.0 / v0.2.1 already shipped).
-- [CHANGELOG](CHANGELOG.md): Per-version release notes (v0.1.0 initial, v0.1.1 update-check + AGENTS.md, v0.1.2 project-tunable regress baselines, v0.1.3 dual_memory_write + qdrant aliases, v0.1.4 SessionStart banner + supamem live dashboard, v0.1.5 SessionStart wired by installer, v0.2.0 mcp.caps + multi-project install + agent-discipline hooks, v0.2.1 user-visible banner + drift signal, v0.2.2a1 transcript chunker plugin, v0.2.3a1 coding-path classifier + where filter)
+- [PyPI](https://pypi.org/project/supamem/): Released via Trusted Publisher OIDC; `pip install supamem` or `uv tool install supamem`. Current version: v__NEW_VERSION__ (alpha pre-release; v0.2.0 / v0.2.1 already shipped).
+- [CHANGELOG](CHANGELOG.md): Per-version release notes (v0.1.0 initial, v0.1.1 update-check + AGENTS.md, v0.1.2 project-tunable regress baselines, v0.1.3 dual_memory_write + qdrant aliases, v0.1.4 SessionStart banner + supamem live dashboard, v0.1.5 SessionStart wired by installer, v0.2.0 mcp.caps + multi-project install + agent-discipline hooks, v0.2.1 user-visible banner + drift signal, v0.2.2a1 transcript chunker plugin, v0.2.3a1 coding-path classifier + where filter, v__NEW_VERSION__ code-aware reranker + eager ML fetch + doctor-driven repair self-heal)
 
 ## Translations
 
@@ -32,8 +32,8 @@ installed, AI coding assistants gain persistent semantic memory across projects.
 ## CLI commands
 
 - [supamem init](README.md#cli-surface): Greenfield bootstrap — probes Qdrant, creates collection, writes `.supamem/config.toml`
-- [supamem install](README.md#wiring-into-your-client): Patch a client config (claude-code, cursor, opencode) — atomic with backup. `--scope project` (default, per-workspace `.mcp.json` / `.cursor/mcp.json`) or `--scope user` (legacy global). `--enforce-search` (claude-code only) registers the opt-in PreToolUse edit-gate.
-- [supamem repair](README.md#cli-surface): Migrate from legacy global install to per-workspace files. Strips stale globals, re-installs at project scope. Idempotent. (v0.2.0+)
+- [supamem install](README.md#wiring-into-your-client): Patch a client config (claude-code, cursor, opencode) — atomic with backup. `--scope project` (default, per-workspace `.mcp.json` / `.cursor/mcp.json`) or `--scope user` (legacy global). `--enforce-search` (claude-code only) registers the opt-in PreToolUse edit-gate. v__NEW_VERSION__+ proactively downloads all ML prerequisites (MiniLM ~90 MB, BM25 ~10 MB, mxbai-rerank-base-v2 ~1 GB) with `rich.progress`. Pass `--skip-models` / `--no-skip-models` to skip eager ML model download (air-gapped first-run; backfill via `supamem repair`).
+- [supamem repair](README.md#cli-surface): doctor-driven self-heal — re-fetches missing/partial reranker model, re-syncs `share/`, repairs managed CLAUDE.md/AGENTS.md blocks, restores client config (idempotent). Composes with `supamem doctor` (diagnose) as the canonical UX entry points. v__NEW_VERSION__+ extends the v0.2.0 migrate-from-global-install path; original behavior preserved.
 - [supamem index](README.md#cli-surface): Embed dev memories into Qdrant using the locked tuned-hybrid pipeline (D-25). v0.2.2a1+ adds `--transcripts` (bare → uses `[supamem.transcript] default_root`, defaults to `~/.claude/projects/`) and `--transcripts <path>` (explicit) to ingest Claude Code session JSONL as Q+A drawer chunks; `--transcripts-only` skips the default project corpus; `--since Nd|Nh|0` filters transcripts by mtime (default 180d, `0` disables)
 - [supamem mcp-server](README.md#cli-surface): Run the MCP server over stdio (default) or HTTP
 - [supamem hook](README.md#cli-surface): Per-client session/edit hooks called by the client itself
@@ -137,6 +137,22 @@ backend    = ["src", "backend", "api", "server", "lib"]
 ```
 
 User TOML at `[supamem.classifier.rooms]` REPLACES the defaults dict (leaf-replace, not merge — matches the `transcript_*` precedent). Reordering rooms in the user config trips the sweep gate because `sort_keys=False` is intentional. Transcript chunks (chunker == "transcript") classify to `room = null` by construction — non-coding paths; filter them via the existing `payload.chunker` key instead.
+
+## Code-aware reranker (v__NEW_VERSION__+)
+
+Cross-encoder `mixedbread-ai/mxbai-rerank-base-v2` (Apache-2.0, ~1 GB) plugged into `tuned_hybrid` retrieval as the **new default** (`retrieval.reranker = "mxbai_v2"`). Setting `retrieval.reranker = "off"` restores pre-Phase-8 byte-identical behavior. When reranker is on: PREFETCH_LIMIT widens to 50 per arm; T-4 recency multiplier is skipped; T-5 dedup + T-8 token budget run AFTER rerank.
+
+- New `supamem.reranker` plugin entry-point group — third parties register custom rerankers without forking. Registered: `mxbai_v2 = supamem.rerankers.mxbai_v2:MxbaiV2Reranker`. Plugin signature: `rerank(query: str, candidates: list[RetrievedChunk]) -> list[RetrievedChunk]`. Lazy model load on first `rerank()` call mirrors `embedders/_ensure()`.
+- `RetrievedChunk` gains optional `rerank_score: float | None` field for telemetry; primary `score` carries the rerank score when reranker is on.
+- `supamem doctor` `Reranker` panel: name, model_id, cache path (`platformdirs.user_cache_dir("supamem")/models/<model_id>/`), on-disk size + partial-download detection, last-load latency, last-100-query rerank p50/p95, detected device (cuda/mps/cpu).
+- `[retrieval.reranker]` config table:
+  - `name = "mxbai_v2" | "off"` (default `"mxbai_v2"`)
+  - `top_n = 50` — rerank pool size; clamps to fused-candidate count
+  - `prefetch_per_arm = 50` — widened from default 20 when reranker on
+  - `batch_size = 16`
+  - `model_id = "mixedbread-ai/mxbai-rerank-base-v2"`
+- New env vars: `SUPAMEM_CACHE_DIR` (override the platformdirs cache root for tests/CI); `HF_HUB_OFFLINE=1` + `TRANSFORMERS_OFFLINE=1` (respected by `prepare()` — refuse network probes); `SUPAMEM_INTEGRATION_RERANKER=1` (opt-in integration test gate).
+- New deps: `mxbai-rerank>=0.1.6,<0.2`, `huggingface_hub>=0.24`, `filelock>=3.13` (pulls `transformers>=4.49`, `torch>=2.0`, `accelerate>=1.5` transitively).
 
 ## Architecture
 

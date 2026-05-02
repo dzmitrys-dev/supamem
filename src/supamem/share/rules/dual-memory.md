@@ -47,3 +47,8 @@ supamem index --target tuned --force
 ```
 
 Re-running is idempotent — only changed docs re-embed.
+
+## Diagnose & Heal
+
+Use **`supamem doctor`** for full environment diagnosis (config + Qdrant + cache + reranker model + managed-block drift).
+Use **`supamem repair`** for full self-heal (re-fetches missing models, re-syncs `share/`, restores client config). Idempotent.

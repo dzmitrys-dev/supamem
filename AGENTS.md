@@ -36,11 +36,12 @@ src/supamem/
 
 ## Plugin Entry Points (D-48)
 
-Three plugin groups in `pyproject.toml`. Third parties add backends without forking:
+Four plugin groups in `pyproject.toml`. Third parties add backends without forking:
 
 - `supamem.retrieval` — `tuned_hybrid`, `dense`, `bm25`
 - `supamem.embedder` — `minilm`, `bm25`
-- `supamem.chunker` — `markdown_header`
+- `supamem.chunker` — `markdown_header`, `transcript`
+- `supamem.reranker` — `mxbai_v2` (Phase 8)
 
 ## Config Discovery (D-38)
 
@@ -55,6 +56,7 @@ Order: `./.supamem/config.toml` (project) → `~/.config/supamem/config.toml` (u
 - NEVER delete a Qdrant collection without `--force` flag confirmation
 - ALWAYS use `console.py` exports for terminal output (no bare `print()`)
 - ALWAYS run `pytest` from project root via `uv run pytest`
+- ALWAYS use `supamem doctor` for full environment diagnosis; ALWAYS use `supamem repair` for full self-heal. These are the canonical entry points — do not invent ad-hoc cache-clearing or model-redownload flows. (Phase 8 D-FETCH-04)
 
 ## Workflow
 
