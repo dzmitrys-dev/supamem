@@ -285,6 +285,46 @@ supamem --version
 Модели хранятся в `platformdirs.user_cache_dir("supamem")/models/`
 (переопределяется через `SUPAMEM_CACHE_DIR`).
 
+### Доступность субагентов (v0.2.5+)
+
+Если вы используете субагентов Claude Code из GSD, superpowers, hookify или любого
+плагина, который прибивает `tools:`-вайтлист к своим определениям агентов, эти агенты
+не могут достучаться до MCP-сервера supamem, пока в их вайтлисте нет
+`mcp__supamem__*` — даже если родительская сессия подключена к supamem. Субагенты
+наследуют только те инструменты, что перечислены в их frontmatter.
+
+`supamem install` и `supamem repair` патчат это автоматически:
+
+```bash
+supamem install --client claude-code   # patches ~/.claude/agents/ + <project>/.claude/agents/
+supamem repair                         # re-applies if a plugin overwrites your agents
+```
+
+Патч идемпотентен (повторный прогон не вносит изменений), сохраняет ваш стиль YAML
+(CSV или list) и пропускает с предупреждением символлинкованные файлы агентов. Файлы с
+пустой или отсутствующей строкой `tools:` имеют полное наследование по семантике
+Claude Code и остаются нетронутыми.
+
+Бэкап-манифест лежит в `~/.cache/supamem/agent_patches.json`. Чисто откатить:
+
+```bash
+supamem unpatch-agents
+```
+
+Передайте `--skip-patch-agents` любому из `install` / `init` / `repair`, чтобы
+отказаться от патчинга.
+
+#### Удаление supamem
+
+```bash
+supamem unpatch-agents      # restore agent whitelists first
+pip uninstall supamem
+```
+
+В 2026 году ни у `pip`, ни у `uv`, ни у `pipx` нет переносимого хука деинсталляции, так
+что эти два шага — поддерживаемый контракт. `supamem doctor` показывает путь к
+манифесту и напоминание, чтобы этот сценарий находился естественным образом.
+
 ---
 
 ## 🎯 Команды CLI
@@ -292,7 +332,7 @@ supamem --version
 | Команда | Назначение |
 |---|---|
 | `supamem init` | Greenfield-инициализация — пинг Qdrant, создание коллекции, запись `.supamem/config.toml` |
-| `supamem install --client <name>` | Патч конфига клиента (`claude-code`, `cursor`, `opencode`) — атомарно с бэкапом |
+| `supamem install --client <name>` | Патч конфига клиента (`claude-code`, `cursor`, `opencode`) — атомарно с бэкапом. v0.2.5+: автоматически патчит `~/.claude/agents/` и `<project>/.claude/agents/`, добавляя `mcp__supamem__*` к ограниченным `tools:`-вайтлистам; отключается через `--skip-patch-agents`. |
 | `supamem index` | Embed dev-памяти в Qdrant зафиксированным tuned-hybrid пайплайном (D-25) |
 | `supamem mcp-server` | Запуск MCP-сервера (`--transport stdio` по умолчанию; `--transport http` для HTTP) |
 | `supamem hook <client>` | Хуки сессии/редактирования на клиента (вызываются самим клиентом) |
@@ -302,6 +342,7 @@ supamem --version
 | `supamem migrate` | Brownfield-миграция с уже существующей коллекции `dev_memory` |
 | `supamem eval` | Прогон регрессионного харнесса по встроенному корпусу из 33 запросов |
 | `supamem uninstall --client <name>` | Чисто откатить `supamem install` |
+| `supamem unpatch-agents` | 🔄 Откатить патчи доступности субагентов (v0.2.5+). Восстанавливает файлы агентов в их допатчевую форму по манифесту `~/.cache/supamem/agent_patches.json`. Файлы, отредактированные вами после патча, пропускаются с предупреждением. Запускайте ПЕРЕД `pip uninstall supamem` для чистой деинсталляции. |
 
 Каждая долгая команда показывает **живой спиннер** с прошедшим временем — всегда видно, что она работает.
 `--help` на любой подкоманде даёт детали.

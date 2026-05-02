@@ -279,6 +279,43 @@ trigger zero network egress. Air-gapped first-run? Pass `--skip-models`, then ru
 Models live under `platformdirs.user_cache_dir("supamem")/models/` (override with
 `SUPAMEM_CACHE_DIR`).
 
+### Subagent reachability (v0.2.5+)
+
+If you use Claude Code subagents shipped by GSD, superpowers, hookify, or any plugin that
+pins a `tools:` whitelist on its agent definitions, those agents cannot reach the supamem
+MCP server unless `mcp__supamem__*` is in the whitelist — even when the parent session has
+supamem connected. Subagents inherit only the tools their frontmatter lists.
+
+`supamem install` and `supamem repair` patch this for you automatically:
+
+```bash
+supamem install --client claude-code   # patches ~/.claude/agents/ + <project>/.claude/agents/
+supamem repair                         # re-applies if a plugin overwrites your agents
+```
+
+The patcher is idempotent (running twice produces zero changes), preserves your YAML style
+(CSV vs list), and skips symlinked agent files with a warning. Files with a missing or empty
+`tools:` line have full inheritance per Claude Code semantics and are left untouched.
+
+Backup manifest lives at `~/.cache/supamem/agent_patches.json`. Reverse cleanly with:
+
+```bash
+supamem unpatch-agents
+```
+
+Pass `--skip-patch-agents` to opt out on any of `install` / `init` / `repair`.
+
+#### Uninstalling supamem
+
+```bash
+supamem unpatch-agents      # restore agent whitelists first
+pip uninstall supamem
+```
+
+There is no portable `pip` / `uv` / `pipx` uninstall hook in 2026, so the two-step is the
+supported contract. `supamem doctor` shows the manifest path and reminder so you can
+discover this flow naturally.
+
 ---
 
 ## 🎯 CLI surface
@@ -286,8 +323,8 @@ Models live under `platformdirs.user_cache_dir("supamem")/models/` (override wit
 | Command | Purpose |
 |---------|---------|
 | `supamem init` | Greenfield bootstrap — probes Qdrant, creates collection, writes `.supamem/config.toml` |
-| `supamem install --client <name>` | Patch a client config (`claude-code`, `cursor`, `opencode`) — atomic with backup. Defaults to `--scope project` (per-workspace files); pass `--scope user` for legacy global behavior. Pass `--enforce-search` (claude-code only) to wire the opt-in edit-gate hook. |
-| `supamem repair` | 🩹 Migrate from legacy global install to per-workspace files. Strips stale `mcpServers.supamem` from globals and re-installs at project scope from the current cwd. Idempotent. |
+| `supamem install --client <name>` | Patch a client config (`claude-code`, `cursor`, `opencode`) — atomic with backup. Defaults to `--scope project` (per-workspace files); pass `--scope user` for legacy global behavior. Pass `--enforce-search` (claude-code only) to wire the opt-in edit-gate hook. v0.2.5+: auto-patches `~/.claude/agents/` and `<project>/.claude/agents/` to add `mcp__supamem__*` to restrictive `tools:` whitelists; opt out with `--skip-patch-agents`. |
+| `supamem repair` | 🩹 Migrate from legacy global install to per-workspace files. Strips stale `mcpServers.supamem` from globals and re-installs at project scope from the current cwd. v0.2.5+: re-applies subagent reachability patches. Idempotent. Supports `--skip-patch-agents`. |
 | `supamem index` | Embed dev memories into Qdrant using the locked tuned-hybrid pipeline (D-25) |
 | `supamem mcp-server` | Run the MCP server (`--transport stdio` default; `--transport http` for HTTP) |
 | `supamem hook <client>` | Per-client session/edit hooks (called by the client itself) |
@@ -297,6 +334,7 @@ Models live under `platformdirs.user_cache_dir("supamem")/models/` (override wit
 | `supamem migrate` | Brownfield migration from a pre-existing `dev_memory` collection |
 | `supamem eval` | Run the regression harness against the bundled 33-query golden corpus |
 | `supamem uninstall --client <name>` | Reverse `supamem install` cleanly. Strips supamem from BOTH project and user scopes. |
+| `supamem unpatch-agents` | 🔄 Reverse subagent reachability patches (v0.2.5+). Restores agent files to their pre-patch form per the manifest at `~/.cache/supamem/agent_patches.json`. Skips files you've edited since with a per-file warning. Run BEFORE `pip uninstall supamem` for a clean uninstall. |
 
 ### Environment variables
 

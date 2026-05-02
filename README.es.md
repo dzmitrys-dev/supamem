@@ -286,6 +286,47 @@ egreso de red. ¿Primer arranque sin red? Pasa `--skip-models` y luego ejecuta
 Los modelos viven bajo `platformdirs.user_cache_dir("supamem")/models/`
 (sobreescribible con `SUPAMEM_CACHE_DIR`).
 
+### Alcance de los subagentes (v0.2.5+)
+
+Si usas subagentes de Claude Code provistos por GSD, superpowers, hookify, o cualquier
+plugin que clave una whitelist `tools:` en sus definiciones de agentes, esos agentes no
+pueden alcanzar el servidor MCP de supamem a menos que `mcp__supamem__*` esté en la
+whitelist — incluso si la sesión padre tiene supamem conectado. Los subagentes solo
+heredan las herramientas que su frontmatter lista.
+
+`supamem install` y `supamem repair` aplican este parche por ti automáticamente:
+
+```bash
+supamem install --client claude-code   # patches ~/.claude/agents/ + <project>/.claude/agents/
+supamem repair                         # re-applies if a plugin overwrites your agents
+```
+
+El parche es idempotente (correr dos veces no produce cambios), preserva tu estilo YAML
+(CSV vs lista), y omite con advertencia los archivos de agentes enlazados simbólicamente.
+Los archivos con una línea `tools:` faltante o vacía tienen herencia completa según la
+semántica de Claude Code y se dejan intactos.
+
+El manifiesto de respaldo vive en `~/.cache/supamem/agent_patches.json`. Reviértelo
+limpiamente con:
+
+```bash
+supamem unpatch-agents
+```
+
+Pasa `--skip-patch-agents` para optar por no aplicarlo en cualquiera de
+`install` / `init` / `repair`.
+
+#### Desinstalar supamem
+
+```bash
+supamem unpatch-agents      # restore agent whitelists first
+pip uninstall supamem
+```
+
+No existe un hook portátil de desinstalación en `pip` / `uv` / `pipx` en 2026, así que
+los dos pasos son el contrato soportado. `supamem doctor` muestra la ruta del manifiesto
+y el recordatorio para que descubras este flujo de manera natural.
+
 ---
 
 ## 🎯 Superficie CLI
@@ -293,7 +334,7 @@ Los modelos viven bajo `platformdirs.user_cache_dir("supamem")/models/`
 | Comando | Propósito |
 |---|---|
 | `supamem init` | Bootstrap greenfield — prueba Qdrant, crea colección, escribe `.supamem/config.toml` |
-| `supamem install --client <name>` | Patchear config de cliente (`claude-code`, `cursor`, `opencode`) — atómico con backup |
+| `supamem install --client <name>` | Patchear config de cliente (`claude-code`, `cursor`, `opencode`) — atómico con backup. v0.2.5+: auto-parchea `~/.claude/agents/` y `<project>/.claude/agents/` para añadir `mcp__supamem__*` a las whitelists `tools:` restrictivas; opta por no con `--skip-patch-agents`. |
 | `supamem index` | Embeber memorias de dev en Qdrant usando el pipeline tuned-hybrid fijo (D-25) |
 | `supamem mcp-server` | Correr el servidor MCP (`--transport stdio` default; `--transport http` para HTTP) |
 | `supamem hook <client>` | Hooks de sesión/edición por cliente (llamados por el cliente) |
@@ -303,6 +344,7 @@ Los modelos viven bajo `platformdirs.user_cache_dir("supamem")/models/`
 | `supamem migrate` | Migración brownfield desde una colección `dev_memory` preexistente |
 | `supamem eval` | Correr el arnés de regresión contra el corpus dorado de 33 consultas |
 | `supamem uninstall --client <name>` | Revertir `supamem install` limpiamente |
+| `supamem unpatch-agents` | 🔄 Revertir los parches de alcance de subagentes (v0.2.5+). Restaura los archivos de agentes a su forma anterior al parche según el manifiesto en `~/.cache/supamem/agent_patches.json`. Omite con advertencia los archivos que hayas editado desde entonces. Córrelo ANTES de `pip uninstall supamem` para una desinstalación limpia. |
 
 Cada comando de larga ejecución muestra un **spinner en vivo** con tiempo transcurrido para que siempre
 sepas que está trabajando. Usa `--help` en cualquier subcomando para detalles.

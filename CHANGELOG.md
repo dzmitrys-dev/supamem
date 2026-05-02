@@ -2,6 +2,76 @@
 
 All notable changes to `supamem` will be documented in this file.
 
+## [0.2.5a1] — 2026-05-02
+
+First alpha of the v0.2.5 line. Ships the **subagent reachability
+auto-patcher** (Phase 8.1) — closes the silent dogfooding gap where
+subagents shipping with restrictive `tools:` whitelists (GSD's
+`gsd-executor`, superpowers/*, hookify, etc.) could not reach the
+supamem MCP server, so dual-memory lookups inside subagent sessions
+silently returned empty.
+
+### Added
+
+- Subagent reachability auto-patcher: `supamem install` and
+  `supamem repair` now scan `~/.claude/agents/` AND
+  `<project>/.claude/agents/` and idempotently append
+  `mcp__supamem__*` to any restrictive `tools:` whitelist that doesn't
+  already cover supamem. Files with a missing or empty `tools:` line
+  inherit all parent tools (Claude Code semantics) and are left
+  untouched. Symlinked agent files are skipped with a warning to avoid
+  polluting upstream repos. (REACH-01..03)
+- `supamem unpatch-agents` subcommand restores patched agent files
+  cleanly. Run BEFORE `pip uninstall supamem` for a clean uninstall.
+  Skips files the user has edited since the patch (frontmatter SHA
+  match) and emits a per-file warning naming them. (REACH-05)
+- `--skip-patch-agents` flag on `install` / `init` / `repair` for
+  users who manage agent whitelists by hand. (REACH-07)
+- `supamem doctor` `Subagent reachability` panel: per-agent listing
+  (patched / OK already-covered / OK full-inheritance / skipped /
+  needs-patching), grouped by `[global]` and `[project]` scope.
+  Renders the manifest path + an `unpatch-agents` reminder when a
+  manifest exists, or a `supamem repair` hint when patchable agents
+  are detected without a manifest. Read-only by construction; never
+  flips the doctor exit code. (REACH-08)
+- Backup manifest at
+  `platformdirs.user_cache_dir("supamem")/agent_patches.json` —
+  single rolling JSON, FileLock-protected, atomic temp+rename writes.
+  Per-entry: file path (relative to scope root), original frontmatter
+  SHA-256 (newline-normalized), patched frontmatter SHA, original
+  `tools:` value (verbatim), timestamp, supamem version. (REACH-06)
+
+### Changed
+
+- `src/supamem/share/rules/dual-memory.md` rewritten to reference the
+  real MCP tool names (`mcp__supamem__qdrant_find`,
+  `mcp__supamem__dual_memory_search`) instead of the non-existent
+  `qdrant-find` shell command the rule used to advertise (D-LOCK-07).
+  Adds a `Subagent reachability` section explaining the auto-patcher,
+  the `--skip-patch-agents` opt-out, the `supamem unpatch-agents`
+  reverse path, and the two-step uninstall contract.
+
+### Dependencies
+
+- Added: `ruamel.yaml>=0.18,<0.20` (~112 kB pure-Python wheel on
+  Py3.12+) for round-trip-preserving YAML mutations on agent
+  frontmatter — preserves user comments, indentation, and CSV vs
+  list-style formatting. (REACH-04)
+
+### Notes — Uninstalling
+
+There is no portable `pip uninstall` hook in pip / uv / pipx
+(verified 2026-05-02), so reversibility is a documented two-step
+contract:
+
+```bash
+supamem unpatch-agents      # restore agent whitelists first
+pip uninstall supamem       # then remove the package
+```
+
+`supamem doctor` displays the manifest path and the reminder so users
+discover this flow naturally without consulting docs.
+
 ## [0.2.4a1] — 2026-05-01
 
 First alpha of the v0.2.4 line. Ships the **code-aware reranker**

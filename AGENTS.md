@@ -98,6 +98,16 @@ uv run python -m supamem doctor
 
 PyPI tags are immutable: never re-use a published version number.
 
+## Subagent reachability (v0.2.5a1+)
+
+`supamem install` and `supamem repair` auto-patch `~/.claude/agents/` and `<project>/.claude/agents/` so restrictive `tools:` whitelists (GSD, superpowers, hookify, etc.) include `mcp__supamem__*` — closes the silent dogfooding gap where subagents could not reach the supamem MCP server. The patcher is idempotent (lenient coverage detection: `mcp__*`, `mcp__supamem__*`, or any specific `mcp__supamem__<tool>` literal counts as covered), preserves user formatting via `ruamel.yaml` round-trip, and skips symlinks with a warning. Reversible via `supamem unpatch-agents`.
+
+- Backup manifest: `platformdirs.user_cache_dir("supamem")/agent_patches.json` (single rolling JSON, FileLock-protected, atomic temp-and-rename writes, schema_version=1). Per-entry: relative path, original frontmatter SHA-256 (newline-normalized), patched frontmatter SHA, original `tools:` value verbatim, timestamp, supamem version.
+- Opt-out: `--skip-patch-agents` on `install` / `init` / `repair`.
+- Doctor surface: `supamem doctor` Subagent reachability panel (read-only; never flips exit code) shows per-agent status grouped by `[global]` and `[project]` scope, plus the manifest path + `unpatch-agents` reminder when a manifest exists.
+
+NEVER edit `agent_patches.json` by hand — the CLI is the contract. NEVER auto-restore on `pip uninstall`: pip / uv / pipx have no portable uninstall hook (verified 2026-05-02), so the user-facing two-step contract is `supamem unpatch-agents && pip uninstall supamem`, surfaced via `supamem doctor`.
+
 ## Update-check (v0.1.1+)
 
 A daemon thread probes GitHub Releases on every CLI invocation, caches result for 24h in `platformdirs.user_cache_dir("supamem")/update_check.json`, and prints a stderr footer on the *next* invocation if a newer version is available. Suppress with `SUPAMEM_NO_UPDATE_CHECK=1`, `CI=1`, or `NO_UPDATE_NOTIFIER=1`. Never blocks; never raises.

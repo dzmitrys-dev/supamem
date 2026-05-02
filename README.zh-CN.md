@@ -277,6 +277,42 @@ supamem --version
 模型缓存目录:`platformdirs.user_cache_dir("supamem")/models/`
 (可用 `SUPAMEM_CACHE_DIR` 覆盖)。
 
+### 子代理可达性(v0.2.5+)
+
+如果你使用 GSD、superpowers、hookify 或其他给 agent 定义钉死 `tools:` 白名单的插件
+所提供的 Claude Code 子代理(subagent),那么除非白名单包含 `mcp__supamem__*`,
+否则这些子代理无法访问 supamem MCP 服务器 —— 即使父会话已连上 supamem。
+子代理只继承其 frontmatter 中列出的工具。
+
+`supamem install` 和 `supamem repair` 会自动为你打这个补丁:
+
+```bash
+supamem install --client claude-code   # patches ~/.claude/agents/ + <project>/.claude/agents/
+supamem repair                         # re-applies if a plugin overwrites your agents
+```
+
+补丁是幂等的(重复运行不会产生改动),保留你的 YAML 风格(CSV 还是 list),
+并对软链接的 agent 文件附带告警跳过。`tools:` 行缺失或为空的文件按 Claude Code
+语义具有完全继承,会被原样保留。
+
+备份清单位于 `~/.cache/supamem/agent_patches.json`,可以干净反向:
+
+```bash
+supamem unpatch-agents
+```
+
+在 `install` / `init` / `repair` 任意一个上加 `--skip-patch-agents` 可关闭此功能。
+
+#### 卸载 supamem
+
+```bash
+supamem unpatch-agents      # restore agent whitelists first
+pip uninstall supamem
+```
+
+2026 年 `pip` / `uv` / `pipx` 都没有可移植的卸载钩子,所以这两步是受支持的契约。
+`supamem doctor` 会显示清单路径和提醒,所以你能自然地发现这套流程。
+
 ---
 
 ## 🎯 CLI 一览
@@ -284,7 +320,7 @@ supamem --version
 | 命令 | 用途 |
 |------|------|
 | `supamem init` | 绿地初始化 — 探测 Qdrant、创建集合、写 `.supamem/config.toml` |
-| `supamem install --client <name>` | 给客户端打配置补丁(`claude-code`、`cursor`、`opencode`)— 原子带备份 |
+| `supamem install --client <name>` | 给客户端打配置补丁(`claude-code`、`cursor`、`opencode`)— 原子带备份。v0.2.5+:自动为 `~/.claude/agents/` 与 `<project>/.claude/agents/` 的受限 `tools:` 白名单追加 `mcp__supamem__*`;用 `--skip-patch-agents` 关闭。 |
 | `supamem index` | 用锁定的 tuned-hybrid 管线把开发记忆嵌入 Qdrant(D-25) |
 | `supamem mcp-server` | 运行 MCP 服务器(`--transport stdio` 默认;`http` 走 HTTP) |
 | `supamem hook <client>` | 每客户端会话/编辑钩子(由客户端自动调用) |
@@ -294,6 +330,7 @@ supamem --version
 | `supamem migrate` | 从已有 `dev_memory` 集合的棕地迁移 |
 | `supamem eval` | 对内置 33 条 golden 查询跑回归测试 |
 | `supamem uninstall --client <name>` | 干净反向 `supamem install` |
+| `supamem unpatch-agents` | 🔄 反向子代理可达性补丁(v0.2.5+)。按 `~/.cache/supamem/agent_patches.json` 清单将 agent 文件还原到打补丁前的形态。已被你修改过的文件会带告警跳过。`pip uninstall supamem` 之前先跑这条以获得干净卸载。 |
 
 每个长时间命令都有**实时进度条**显示已用时间,所以你始终知道它在工作。
 任意子命令上加 `--help` 可看详细说明。

@@ -280,6 +280,45 @@ BM25 ~10 MB、mxbai-rerank-base-v2 ~1 GB)をプログレスバー付きで先行
 モデルは `platformdirs.user_cache_dir("supamem")/models/` 配下に置かれます
 (`SUPAMEM_CACHE_DIR` で上書き可)。
 
+### サブエージェントの到達性(v0.2.5+)
+
+GSD、superpowers、hookify、その他 agent 定義に `tools:` ホワイトリストを固定する
+プラグインの Claude Code サブエージェントを使用している場合、ホワイトリストに
+`mcp__supamem__*` が含まれていない限り、それらのエージェントは supamem MCP サーバーに
+到達できません — 親セッションが supamem に接続済みでも同様です。サブエージェントは
+frontmatter にリストされたツールのみを継承します。
+
+`supamem install` と `supamem repair` は自動的にこのパッチを適用します:
+
+```bash
+supamem install --client claude-code   # patches ~/.claude/agents/ + <project>/.claude/agents/
+supamem repair                         # re-applies if a plugin overwrites your agents
+```
+
+パッチは冪等(2 回実行しても変更ゼロ)で、YAML スタイル(CSV か list か)を保持し、
+シンボリックリンクされた agent ファイルは警告付きでスキップします。`tools:` 行が
+欠落または空のファイルは Claude Code セマンティクスに従って完全継承され、変更されません。
+
+バックアップマニフェストは `~/.cache/supamem/agent_patches.json` にあります。
+クリーンに反転するには:
+
+```bash
+supamem unpatch-agents
+```
+
+`install` / `init` / `repair` のいずれかで `--skip-patch-agents` を渡すとオプトアウトできます。
+
+#### supamem のアンインストール
+
+```bash
+supamem unpatch-agents      # restore agent whitelists first
+pip uninstall supamem
+```
+
+2026 年時点で `pip` / `uv` / `pipx` には移植可能なアンインストールフックが存在しない
+ため、この 2 ステップがサポートされる契約です。`supamem doctor` がマニフェストパスと
+リマインダーを表示するので、自然にこのフローを発見できます。
+
 ---
 
 ## 🎯 CLI 一覧
@@ -287,7 +326,7 @@ BM25 ~10 MB、mxbai-rerank-base-v2 ~1 GB)をプログレスバー付きで先行
 | コマンド | 用途 |
 |---|---|
 | `supamem init` | グリーンフィールドブートストラップ — Qdrant をプローブ、コレクション作成、`.supamem/config.toml` 書き込み |
-| `supamem install --client <name>` | クライアント設定にパッチ(`claude-code`、`cursor`、`opencode`)— アトミック+バックアップ |
+| `supamem install --client <name>` | クライアント設定にパッチ(`claude-code`、`cursor`、`opencode`)— アトミック+バックアップ。v0.2.5+:`~/.claude/agents/` と `<project>/.claude/agents/` の制限的な `tools:` ホワイトリストに `mcp__supamem__*` を自動追加;`--skip-patch-agents` でオプトアウト。 |
 | `supamem index` | ロックされた tuned-hybrid パイプラインで dev メモリを Qdrant に embed(D-25) |
 | `supamem mcp-server` | MCP サーバー実行(`--transport stdio` デフォルト;`http` で HTTP) |
 | `supamem hook <client>` | クライアント別セッション/編集フック(クライアント自身が呼び出す) |
@@ -297,6 +336,7 @@ BM25 ~10 MB、mxbai-rerank-base-v2 ~1 GB)をプログレスバー付きで先行
 | `supamem migrate` | 既存 `dev_memory` コレクションからのブラウンフィールド移行 |
 | `supamem eval` | 内蔵 33 クエリ正解コーパスに対するリグレッションハーネス実行 |
 | `supamem uninstall --client <name>` | `supamem install` をクリーンに反転 |
+| `supamem unpatch-agents` | 🔄 サブエージェント到達性パッチを反転(v0.2.5+)。`~/.cache/supamem/agent_patches.json` のマニフェストに従って agent ファイルをパッチ前の形に復元。あなたが編集済みのファイルは警告付きでスキップ。クリーンなアンインストールのため `pip uninstall supamem` の前に実行してください。 |
 
 すべての長時間実行コマンドは経過時間付きの **ライブスピナー** を表示するので、動作中だと
 常にわかります。任意のサブコマンドに `--help` を付けると詳細が出ます。

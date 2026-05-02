@@ -18,8 +18,8 @@ installed, AI coding assistants gain persistent semantic memory across projects.
 
 ## Distribution
 
-- [PyPI](https://pypi.org/project/supamem/): Released via Trusted Publisher OIDC; `pip install supamem` or `uv tool install supamem`. Current version: v0.2.4a1 (alpha pre-release; v0.2.0 / v0.2.1 already shipped).
-- [CHANGELOG](CHANGELOG.md): Per-version release notes (v0.1.0 initial, v0.1.1 update-check + AGENTS.md, v0.1.2 project-tunable regress baselines, v0.1.3 dual_memory_write + qdrant aliases, v0.1.4 SessionStart banner + supamem live dashboard, v0.1.5 SessionStart wired by installer, v0.2.0 mcp.caps + multi-project install + agent-discipline hooks, v0.2.1 user-visible banner + drift signal, v0.2.2a1 transcript chunker plugin, v0.2.3a1 coding-path classifier + where filter, v0.2.4a1 code-aware reranker + eager ML fetch + doctor-driven repair self-heal)
+- [PyPI](https://pypi.org/project/supamem/): Released via Trusted Publisher OIDC; `pip install supamem` or `uv tool install supamem`. Current version: v0.2.5a1 (alpha pre-release; v0.2.0 / v0.2.1 already shipped).
+- [CHANGELOG](CHANGELOG.md): Per-version release notes (v0.1.0 initial, v0.1.1 update-check + AGENTS.md, v0.1.2 project-tunable regress baselines, v0.1.3 dual_memory_write + qdrant aliases, v0.1.4 SessionStart banner + supamem live dashboard, v0.1.5 SessionStart wired by installer, v0.2.0 mcp.caps + multi-project install + agent-discipline hooks, v0.2.1 user-visible banner + drift signal, v0.2.2a1 transcript chunker plugin, v0.2.3a1 coding-path classifier + where filter, v0.2.4a1 code-aware reranker + eager ML fetch + doctor-driven repair self-heal, v0.2.5a1 subagent reachability auto-patcher + unpatch-agents + doctor reachability panel)
 
 ## Translations
 
@@ -32,8 +32,8 @@ installed, AI coding assistants gain persistent semantic memory across projects.
 ## CLI commands
 
 - [supamem init](README.md#cli-surface): Greenfield bootstrap — probes Qdrant, creates collection, writes `.supamem/config.toml`
-- [supamem install](README.md#wiring-into-your-client): Patch a client config (claude-code, cursor, opencode) — atomic with backup. `--scope project` (default, per-workspace `.mcp.json` / `.cursor/mcp.json`) or `--scope user` (legacy global). `--enforce-search` (claude-code only) registers the opt-in PreToolUse edit-gate. v0.2.4a1+ proactively downloads all ML prerequisites (MiniLM ~90 MB, BM25 ~10 MB, mxbai-rerank-base-v2 ~1 GB) with `rich.progress`. Pass `--skip-models` / `--no-skip-models` to skip eager ML model download (air-gapped first-run; backfill via `supamem repair`).
-- [supamem repair](README.md#cli-surface): doctor-driven self-heal — re-fetches missing/partial reranker model, re-syncs `share/`, repairs managed CLAUDE.md/AGENTS.md blocks, restores client config (idempotent). Composes with `supamem doctor` (diagnose) as the canonical UX entry points. v0.2.4a1+ extends the v0.2.0 migrate-from-global-install path; original behavior preserved.
+- [supamem install](README.md#wiring-into-your-client): Patch a client config (claude-code, cursor, opencode) — atomic with backup. `--scope project` (default, per-workspace `.mcp.json` / `.cursor/mcp.json`) or `--scope user` (legacy global). `--enforce-search` (claude-code only) registers the opt-in PreToolUse edit-gate. v0.2.4a1+ proactively downloads all ML prerequisites (MiniLM ~90 MB, BM25 ~10 MB, mxbai-rerank-base-v2 ~1 GB) with `rich.progress`. Pass `--skip-models` / `--no-skip-models` to skip eager ML model download (air-gapped first-run; backfill via `supamem repair`). v0.2.5a1+ also auto-patches `~/.claude/agents/` and `<project>/.claude/agents/` to append `mcp__supamem__*` to restrictive `tools:` whitelists; opt out with `--skip-patch-agents`.
+- [supamem repair](README.md#cli-surface): doctor-driven self-heal — re-fetches missing/partial reranker model, re-syncs `share/`, repairs managed CLAUDE.md/AGENTS.md blocks, restores client config, re-applies subagent reachability patches (idempotent). Composes with `supamem doctor` (diagnose) as the canonical UX entry points. v0.2.4a1+ extends the v0.2.0 migrate-from-global-install path; original behavior preserved. Supports `--skip-patch-agents` (v0.2.5a1+).
 - [supamem index](README.md#cli-surface): Embed dev memories into Qdrant using the locked tuned-hybrid pipeline (D-25). v0.2.2a1+ adds `--transcripts` (bare → uses `[supamem.transcript] default_root`, defaults to `~/.claude/projects/`) and `--transcripts <path>` (explicit) to ingest Claude Code session JSONL as Q+A drawer chunks; `--transcripts-only` skips the default project corpus; `--since Nd|Nh|0` filters transcripts by mtime (default 180d, `0` disables)
 - [supamem mcp-server](README.md#cli-surface): Run the MCP server over stdio (default) or HTTP
 - [supamem hook](README.md#cli-surface): Per-client session/edit hooks called by the client itself
@@ -43,6 +43,7 @@ installed, AI coding assistants gain persistent semantic memory across projects.
 - [supamem migrate](README.md#cli-surface): Brownfield migration from an existing `dev_memory` collection
 - [supamem eval](README.md#cli-surface): Run the regression harness; project-tunable baselines via `[supamem.eval]` config (v0.1.2+)
 - [supamem uninstall](README.md#cli-surface): Reverse `supamem install` cleanly
+- [supamem unpatch-agents](README.md#cli-surface): Reverse subagent reachability patches recorded in `agent_patches.json`. Skips files the user has edited since (frontmatter SHA-256 match) with a per-file warning. Run BEFORE `pip uninstall supamem` — there is no portable pip/uv/pipx uninstall hook (v0.2.5a1+).
 
 ## MCP tools (v0.1.3)
 
@@ -153,6 +154,24 @@ Cross-encoder `mixedbread-ai/mxbai-rerank-base-v2` (Apache-2.0, ~1 GB) plugged i
   - `model_id = "mixedbread-ai/mxbai-rerank-base-v2"`
 - New env vars: `SUPAMEM_CACHE_DIR` (override the platformdirs cache root for tests/CI); `HF_HUB_OFFLINE=1` + `TRANSFORMERS_OFFLINE=1` (respected by `prepare()` — refuse network probes); `SUPAMEM_INTEGRATION_RERANKER=1` (opt-in integration test gate).
 - New deps: `mxbai-rerank>=0.1.6,<0.2`, `huggingface_hub>=0.24`, `filelock>=3.13` (pulls `transformers>=4.49`, `torch>=2.0`, `accelerate>=1.5` transitively).
+
+## Subagent reachability (v0.2.5a1+)
+
+Subagents (Claude Code agent definitions under `~/.claude/agents/*.md` and `<project>/.claude/agents/*.md`) inherit ONLY the tools listed in their frontmatter `tools:` whitelist. Plugins like GSD, superpowers, and hookify ship agents with restrictive whitelists (e.g. `Read, Edit, mcp__context7__*`) that exclude `mcp__supamem__*`, so the parent session having the supamem MCP server connected is irrelevant — code-touching subagents silently fail dual-memory lookups.
+
+- **Auto-patcher** runs on `supamem install` and `supamem repair`. Idempotently appends `mcp__supamem__*` to any restrictive `tools:` whitelist that doesn't already cover supamem (broad `mcp__*`, `mcp__supamem__*`, or any specific `mcp__supamem__<tool>` literal counts as covered). Files with a missing or empty `tools:` line have full-inheritance per Claude Code semantics and are left untouched. Symlinked files are skipped with a warning to avoid polluting upstream repos. Style preserved (CSV vs YAML list) via `ruamel.yaml` round-trip.
+- **`--skip-patch-agents`** opt-out flag on `install` / `init` / `repair`.
+- **`supamem unpatch-agents`** reverses every recorded patch. Skips files the user has edited since the patch (frontmatter SHA-256 newline-normalized match) and emits a per-file warning naming them. Exit 0 even when nothing to restore.
+- **Backup manifest** at `platformdirs.user_cache_dir("supamem") / agent_patches.json` (override the cache root with `SUPAMEM_CACHE_DIR`). Single rolling JSON, schema_version=1, FileLock-protected concurrent writes, atomic temp-and-rename. Per-entry: relative path, original frontmatter SHA, patched frontmatter SHA, original `tools:` value verbatim, timestamp, supamem version.
+- **`supamem doctor` Subagent reachability panel** (between Reranker and Installed clients) lists per-agent status grouped by `[global]` and `[project]` scope: `patched (added mcp__supamem__*)`, `OK (already covered)`, `OK (full inheritance)`, `skipped: <reason>`, or `needs patching (run supamem repair)`. Renders the manifest path + an `unpatch-agents` reminder when a manifest exists. Read-only by construction; never flips the doctor exit code.
+- **Uninstall contract** is a documented two-step (no portable pip/uv/pipx uninstall hook in 2026):
+
+  ```bash
+  supamem unpatch-agents      # restore agent whitelists first
+  pip uninstall supamem       # then remove the package
+  ```
+
+  `supamem doctor` displays the manifest path and reminder so this flow is discoverable without docs.
 
 ## Architecture
 

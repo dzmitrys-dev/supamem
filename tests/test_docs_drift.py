@@ -91,6 +91,31 @@ def test_language_switcher_tail_consistent() -> None:
     )
 
 
+def test_dual_memory_rule_uses_real_mcp_tool_names() -> None:
+    """D-LOCK-07 — dual-memory.md must reference real MCP tool names, not the
+    phantom `qdrant-find` CLI that never existed."""
+    rule = (
+        REPO_ROOT / "src" / "supamem" / "share" / "rules" / "dual-memory.md"
+    ).read_text(encoding="utf-8")
+    assert "mcp__supamem__qdrant_find" in rule
+    assert "mcp__supamem__dual_memory_search" in rule
+    # The phantom CLI must be gone — but allow the explanatory call-out
+    # ("a `qdrant-find` shell command, that CLI never existed") which mentions
+    # it precisely to disclaim it. Test for the absence of CALL-SITE usage:
+    bad_patterns = [
+        'qdrant-find "',     # quoted command form
+        "$ qdrant-find ",     # shell prompt form
+        "`qdrant-find` ",     # back-tick wrapped command form (with trailing space)
+    ]
+    for pat in bad_patterns:
+        assert pat not in rule, (
+            f"call-site qdrant-find pattern still present: {pat!r}"
+        )
+    # Patcher disclosure
+    assert "unpatch-agents" in rule
+    assert "--skip-patch-agents" in rule
+
+
 def test_translations_have_synced_marker() -> None:
     """Each translation carries a synced-with SHA on line 2."""
     misses: list[str] = []
