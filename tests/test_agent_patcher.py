@@ -32,20 +32,26 @@ REACH-NN -> test_NAME mapping (per 08.1-RESEARCH.md "Phase Requirements -> Test 
 from __future__ import annotations
 
 from io import StringIO
+from pathlib import Path
 
 import pytest
 
 
-def _import_patcher() -> object:
-    """Import the not-yet-existing patcher module.
+_FIXTURES = Path(__file__).parent / "_fixtures" / "agents"
 
-    Lifted out of module scope so collection succeeds and the Wave 0 ruamel
-    smoke test can run independently of the patcher module's existence. Each
-    RED stub calls this and lets the ImportError surface as a test FAIL.
+
+def _import_patcher() -> object:
+    """Import the patcher module (Plan 02 makes this succeed).
+
+    Kept as a helper so tests stay decoupled from the import path string.
     """
-    from supamem.install import agent_patcher  # type: ignore[import-not-found]
+    from supamem.install import agent_patcher
 
     return agent_patcher
+
+
+def _read_fixture(name: str) -> str:
+    return (_FIXTURES / name).read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -54,39 +60,62 @@ def _import_patcher() -> object:
 
 
 def test_detect_state_full_inheritance_no_tools_line() -> None:
-    pytest.fail("RED: implement in Plan 02")
+    p = _import_patcher()
+    # no-frontmatter.md has no leading --- block; raw kernel reports
+    # "skipped:no-frontmatter" (the doctor wrapper in Plan 03 maps to
+    # "OK full inheritance" for display per P9).
+    assert p.detect_tools_state(_read_fixture("no-frontmatter.md")) == "skipped:no-frontmatter"
 
 
 def test_detect_state_empty_tools_line() -> None:
-    pytest.fail("RED: implement in Plan 02")
+    p = _import_patcher()
+    assert p.detect_tools_state(_read_fixture("empty-tools.md")) == "inheritance"
 
 
 def test_detect_state_csv_with_mcp_wildcard_covered() -> None:
-    pytest.fail("RED: implement in Plan 02")
+    p = _import_patcher()
+    assert p.detect_tools_state(_read_fixture("csv-covered.md")) == "covered"
 
 
 def test_detect_state_csv_with_supamem_wildcard_covered() -> None:
-    pytest.fail("RED: implement in Plan 02")
+    p = _import_patcher()
+    assert (
+        p.detect_tools_state(_read_fixture("csv-supamem-wildcard-covered.md"))
+        == "covered"
+    )
 
 
 def test_detect_state_csv_with_supamem_specific_tool_covered() -> None:
-    pytest.fail("RED: implement in Plan 02")
+    p = _import_patcher()
+    assert (
+        p.detect_tools_state(_read_fixture("csv-supamem-literal-covered.md"))
+        == "covered"
+    )
 
 
 def test_detect_state_csv_patchable() -> None:
-    pytest.fail("RED: implement in Plan 02")
+    p = _import_patcher()
+    assert p.detect_tools_state(_read_fixture("csv-patchable.md")) == "patchable_csv"
 
 
 def test_detect_state_block_list_patchable() -> None:
-    pytest.fail("RED: implement in Plan 02")
+    p = _import_patcher()
+    assert (
+        p.detect_tools_state(_read_fixture("block-list-patchable.md"))
+        == "patchable_list"
+    )
 
 
 def test_detect_state_flow_style_skipped() -> None:
-    pytest.fail("RED: implement in Plan 02")
+    p = _import_patcher()
+    assert p.detect_tools_state(_read_fixture("flow-style-skipped.md")) == "skipped:flow"
 
 
 def test_detect_state_malformed_yaml_skipped() -> None:
-    pytest.fail("RED: implement in Plan 02")
+    p = _import_patcher()
+    assert (
+        p.detect_tools_state(_read_fixture("malformed.md")) == "skipped:malformed"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -120,11 +149,21 @@ def test_patch_idempotent_when_already_covered() -> None:
 
 
 def test_block_sha256_excludes_prose_body() -> None:
-    pytest.fail("RED: implement in Plan 02")
+    p = _import_patcher()
+    base = _read_fixture("with-comments.md")
+    # Mutate prose body only — frontmatter unchanged. SHA must be identical.
+    mutated = base.rstrip() + "\n\nappended prose paragraph that the user wrote\n"
+    assert p.block_sha256(base) == p.block_sha256(mutated)
+    # Sanity: changing the frontmatter DOES change the hash.
+    fm_changed = base.replace("Read, Bash", "Read, Bash, Grep")
+    assert p.block_sha256(base) != p.block_sha256(fm_changed)
 
 
 def test_block_sha256_normalizes_crlf() -> None:
-    pytest.fail("RED: implement in Plan 02")
+    p = _import_patcher()
+    lf = _read_fixture("csv-patchable.md")
+    crlf = lf.replace("\n", "\r\n")
+    assert p.block_sha256(lf) == p.block_sha256(crlf)
 
 
 # ---------------------------------------------------------------------------
