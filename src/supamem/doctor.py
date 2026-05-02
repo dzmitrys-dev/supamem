@@ -36,7 +36,8 @@ def _client_targets() -> tuple[tuple[str, Path], ...]:
         ("opencode", Path.home() / "AGENTS.md"),
     )
 
-_VERSION_RE = re.compile(r"BEGIN SUPAMEM v([\d\.]+) MANAGED BLOCK")
+# PEP 440 versions accept alpha/beta/rc/dev suffixes; matches config_io._FENCE_RE.
+_VERSION_RE = re.compile(r"BEGIN SUPAMEM v([\w\.\+\-]+) MANAGED BLOCK")
 
 
 def _redact(value: str, *, enabled: bool) -> str:

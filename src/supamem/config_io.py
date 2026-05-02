@@ -176,13 +176,17 @@ def atomic_write_json(
 
 _BEGIN_FMT = "# BEGIN SUPAMEM v{version} MANAGED BLOCK — DO NOT EDIT"
 _END_FMT = "# END SUPAMEM v{version} MANAGED BLOCK"
+# PEP 440 versions can include alpha/beta/rc/dev suffixes (e.g. 0.2.5a1,
+# 1.0.0rc2, 2.1.dev0), so the marker version-token char-class must accept
+# letters, digits, dots, plus, minus, and underscore — not just `[\d\.]+`.
+# Anchor with leading `v` to keep the marker unambiguous.
 _FENCE_RE = re.compile(
-    r"# BEGIN SUPAMEM v[\d\.]+ MANAGED BLOCK — DO NOT EDIT\n"
+    r"# BEGIN SUPAMEM v[\w\.\+\-]+ MANAGED BLOCK — DO NOT EDIT\n"
     r"(?P<owned>.*?)\n"
-    r"# END SUPAMEM v[\d\.]+ MANAGED BLOCK",
+    r"# END SUPAMEM v[\w\.\+\-]+ MANAGED BLOCK",
     re.DOTALL,
 )
-_BEGIN_RE = re.compile(r"# BEGIN SUPAMEM v[\d\.]+ MANAGED BLOCK — DO NOT EDIT")
+_BEGIN_RE = re.compile(r"# BEGIN SUPAMEM v[\w\.\+\-]+ MANAGED BLOCK — DO NOT EDIT")
 
 
 def wrap_managed_block(content: str, version: str = __version__) -> str:
