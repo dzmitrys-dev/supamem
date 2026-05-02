@@ -34,12 +34,39 @@ def _autodetect() -> Optional[str]:
 VALID_SCOPES = ("project", "user")
 
 
+def _maybe_prepare_models(skip_models: bool) -> None:
+    """Eager-fetch ML model prerequisites unless air-gapped opt-out (D-FETCH-01).
+
+    Idempotent: when ``_manifest_matches`` reports a healthy cache the
+    network roundtrip is skipped (D-FETCH-03). Failures are non-fatal —
+    the client config still wires; user re-runs ``supamem repair`` later.
+    """
+    if skip_models:
+        info("--skip-models: skipping ML model pre-fetch")
+        return
+    try:
+        from supamem.config import load_config  # noqa: PLC0415
+        from supamem.rerankers import prepare  # noqa: PLC0415
+
+        cfg, _ = load_config()
+        if getattr(cfg, "reranker_name", "off") != "off":
+            prepare(cfg.reranker_model_id)
+            ok("reranker model cached")
+    except RuntimeError:
+        # err_console already surfaced the actionable error; do not abort.
+        from supamem.console import warn as _warn  # noqa: PLC0415
+        _warn("reranker model fetch failed — run `supamem repair` later")
+    except Exception as exc:  # noqa: BLE001 — config / loader pathologies must not block install
+        log.debug("model pre-fetch skipped: %r", exc)
+
+
 def install(
     client: Optional[str],
     *,
     dry_run: bool = False,
     scope: str = "project",
     enforce_search: bool = False,
+    skip_models: bool = False,
 ) -> int:
     """Install supamem into the named client (or auto-detect).
 
@@ -68,6 +95,9 @@ def install(
     written = ensure_share_dir()
     if written:
         ok(f"synced {len(written)} share artifact(s)")
+
+    # Eager-fetch ML prerequisites BEFORE client dispatch (D-FETCH-01).
+    _maybe_prepare_models(skip_models)
 
     if client == "claude-code":
         from supamem.install import claude_code
@@ -126,6 +156,7 @@ def repair(
     *,
     dry_run: bool = False,
     enforce_search: bool = False,
+    skip_models: bool = False,
 ) -> int:
     """Re-install at project scope and strip stale GLOBAL supamem entries.
 
@@ -178,8 +209,14 @@ def repair(
             rc_overall = uninstall_rc
             continue
         # Re-install at project scope so per-workspace files are recreated.
+        # skip_models flows through to prepare() which is itself idempotent
+        # via _manifest_matches (D-FETCH-03): healthy cache → no network call.
         install_rc = install(
-            tgt, dry_run=dry_run, scope="project", enforce_search=enforce_search
+            tgt,
+            dry_run=dry_run,
+            scope="project",
+            enforce_search=enforce_search,
+            skip_models=skip_models,
         )
         if install_rc != 0:
             rc_overall = install_rc

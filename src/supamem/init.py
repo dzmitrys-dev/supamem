@@ -130,6 +130,7 @@ def run_init(
     yes: bool = False,
     qdrant_url: Optional[str] = None,
     force: bool = False,
+    skip_models: bool = False,
 ) -> int:
     """Greenfield bootstrap. Returns 0 on success, non-zero on hard failure."""
     cwd = cwd.resolve()
@@ -147,6 +148,24 @@ def run_init(
             err("aborting — re-run with --yes to skip the prompt, or start Qdrant first")
             return 2
         warn("--yes set: continuing under the assumption Qdrant will be reachable shortly")
+
+    # ── 1b. Eager-fetch ML prerequisites (D-FETCH-01) ──────────────────────
+    if not skip_models:
+        try:
+            from supamem.config import load_config
+            from supamem.rerankers import prepare
+
+            cfg, _ = load_config()
+            if getattr(cfg, "reranker_name", "off") != "off":
+                info("pre-fetching reranker model (idempotent on cache hit)")
+                prepare(cfg.reranker_model_id)
+                ok("reranker model cached")
+        except RuntimeError:
+            warn("reranker model fetch failed — run `supamem repair` later")
+        except Exception as exc:  # noqa: BLE001 — non-fatal
+            log.debug("model pre-fetch skipped: %r", exc)
+    else:
+        info("--skip-models: skipping ML model pre-fetch")
 
     # ── 2. Slug + collection name ──────────────────────────────────────────
     slug = _slugify(cwd.name)

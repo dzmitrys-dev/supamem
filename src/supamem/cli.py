@@ -395,6 +395,14 @@ def cmd_install(
             "'user': global (~/.claude.json or ~/.cursor/mcp.json) — last install wins."
         ),
     ),
+    skip_models: bool = typer.Option(
+        False,
+        "--skip-models / --no-skip-models",
+        help=(
+            "Skip eager ML model download (air-gapped first-run; backfill "
+            "via `supamem repair` once network is available)."
+        ),
+    ),
     enforce_search: bool = typer.Option(
         False,
         "--enforce-search",
@@ -415,6 +423,7 @@ def cmd_install(
             dry_run=dry_run,
             scope=scope.value,
             enforce_search=enforce_search,
+            skip_models=skip_models,
         )
     )
 
@@ -442,6 +451,11 @@ def cmd_repair(
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Show what would change without applying."
     ),
+    skip_models: bool = typer.Option(
+        False,
+        "--skip-models / --no-skip-models",
+        help="Skip ML model re-fetch step (air-gapped repair).",
+    ),
 ) -> None:
     """Re-run install in project scope and strip stale legacy global entries.
 
@@ -463,6 +477,7 @@ def cmd_repair(
             client=client.value if client else None,
             enforce_search=enforce_search,
             dry_run=dry_run,
+            skip_models=skip_models,
         )
     )
 
@@ -484,13 +499,21 @@ def cmd_init(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompts."),
     force: bool = typer.Option(False, "--force", help="Overwrite existing config / collection."),
     qdrant_url: Optional[str] = typer.Option(None, "--qdrant-url", help="Qdrant URL (defaults to QDRANT_URL env or http://localhost:6333)."),
+    skip_models: bool = typer.Option(
+        False,
+        "--skip-models / --no-skip-models",
+        help="Skip ML model pre-fetch (air-gapped first-run; backfill via `supamem repair`).",
+    ),
 ) -> None:
     """Greenfield bootstrap on a new project."""
     from pathlib import Path
 
     from supamem.init import run_init
 
-    raise typer.Exit(run_init(cwd=Path.cwd(), yes=yes, qdrant_url=qdrant_url, force=force))
+    raise typer.Exit(run_init(
+        cwd=Path.cwd(), yes=yes, qdrant_url=qdrant_url, force=force,
+        skip_models=skip_models,
+    ))
 
 
 class MigratePath(str, Enum):
