@@ -100,6 +100,148 @@ def _collection_health(client: Any, name: str) -> dict[str, Any]:
     return {"present": True, "sparse": sparse}
 
 
+def _render_subagent_reachability_panel() -> None:
+    """Render the Subagent reachability panel (Phase 08.1 D-DOCTOR-01..05).
+
+    Read-only by construction (P9): never invokes patch_all / unpatch_all
+    nor writes any file. Walks ``scan_agent_dirs`` to surface the CURRENT
+    on-disk state, cross-referenced against the manifest for the
+    patched/covered/inheritance/skipped state.
+
+    Exit code is NEVER bumped by this panel (D-DOCTOR-04): every entry —
+    including ``skipped:*`` rows — is informational. Broad try/except
+    around the manifest load + each per-file probe so a malformed
+    manifest or unreadable agent file never breaks the rest of doctor
+    (T-08.1.05-03 mitigation).
+    """
+    # Lazy imports keep doctor cold-start cheap and avoid a hard import
+    # cycle if the patcher module ever grows a dependency on doctor.
+    from supamem.install.agent_patcher import (  # noqa: PLC0415
+        load_manifest,
+        manifest_path,
+        scan_agent_dirs,
+    )
+
+    console.print()
+    console.print("[supamem.brand]Subagent reachability[/supamem.brand]")
+
+    try:
+        manifest = load_manifest()
+    except Exception as exc:  # noqa: BLE001 — doctor must never crash here (T-08.1.05-03)
+        warn(f"manifest unreadable: {exc!r}")
+        manifest = {"patches": []}
+
+    patched_paths: set[str] = {
+        str(entry.get("path", ""))
+        for entry in manifest.get("patches", [])
+        if isinstance(entry, dict)
+    }
+    n_patches = len(patched_paths)
+
+    try:
+        scanned = scan_agent_dirs()
+    except Exception as exc:  # noqa: BLE001 — same defensive shape (T-08.1.05-03)
+        warn(f"agent scan failed: {exc!r}")
+        scanned = []
+
+    by_scope: dict[str, list[tuple[Path, str, bool]]] = {"global": [], "project": []}
+    for path, scope in scanned:
+        try:
+            from supamem.install.agent_patcher import detect_tools_state  # noqa: PLC0415
+
+            text = path.read_text(encoding="utf-8")
+            state = detect_tools_state(text)
+        except Exception as exc:  # noqa: BLE001 — per-file isolation
+            log.debug("doctor: %s read/classify failed: %r", path, exc)
+            state = "skipped:read-error"
+        is_patched = str(path) in patched_paths
+        by_scope[scope].append((path, state, is_patched))
+
+    # Detect manifest entries whose files no longer exist on disk
+    # (D-DOCTOR-05 stale-entry surface — info line, not an exit-bump).
+    on_disk_paths: set[str] = {str(p) for p, _, _ in by_scope["global"] + by_scope["project"]}
+    stale_entries = sorted(p for p in patched_paths if p and p not in on_disk_paths)
+
+    # Group rendering: global first (D-DOCTOR-03), then project.
+    for scope_name in ("global", "project"):
+        entries = by_scope[scope_name]
+        if not entries:
+            continue
+        if scope_name == "global":
+            console.print(
+                "  ~/.claude/agents/                                  [global]",
+                highlight=False,
+                markup=False,
+            )
+        else:
+            console.print(
+                "  <project>/.claude/agents/                          [project]",
+                highlight=False,
+                markup=False,
+            )
+        for path, state, is_patched in entries:
+            relpath = path.name
+            line = _format_reachability_row(relpath, state, is_patched)
+            console.print(line, highlight=False, markup=False)
+
+    # Stale manifest entries (file deleted but manifest still references it).
+    for stale in stale_entries:
+        info(f"manifest entry stale (file missing): {stale}")
+
+    # D-DOCTOR-05 + D-UNDO-01 REVISED footer.
+    mp = manifest_path()
+    if mp.exists() and n_patches > 0:
+        console.print(
+            f"  → manifest: {mp} ({n_patches} patches recorded)",
+            highlight=False,
+            markup=False,
+        )
+        console.print(
+            "  → run `supamem unpatch-agents` to restore originals "
+            "before `pip uninstall supamem`",
+            highlight=False,
+            markup=False,
+        )
+    else:
+        # Hint to run repair only if there is at least one patchable file
+        # AND no manifest exists. Skip the hint when everything is already
+        # covered or fully inheritance.
+        all_entries = by_scope["global"] + by_scope["project"]
+        has_patchable = any(
+            state.startswith("patchable") for _, state, _ in all_entries
+        )
+        if has_patchable:
+            console.print(
+                "  → run `supamem repair` to patch agent whitelists",
+                highlight=False,
+                markup=False,
+            )
+
+
+def _format_reachability_row(relpath: str, state: str, is_patched: bool) -> str:
+    """Format a single per-agent line per D-DOCTOR-02.
+
+    ``<status_icon>  <relpath>  — <state-description>``
+
+    Icons:
+      ✓ = healthy / patched / covered / inheritance
+      ⚠ = patchable (needs repair) / skipped:* / read-error
+    """
+    name_field = f"{relpath:<24s}"
+    if state.startswith("skipped"):
+        return f"    ⚠  {name_field} — {state}"
+    if state == "covered":
+        if is_patched:
+            return f"    ✓  {name_field} — patched (added mcp__supamem__*)"
+        return f"    ✓  {name_field} — OK (already covered)"
+    if state == "inheritance":
+        return f"    ✓  {name_field} — OK (full inheritance)"
+    if state in ("patchable_csv", "patchable_list"):
+        return f"    ⚠  {name_field} — needs patching (run `supamem repair`)"
+    # Unknown state — surface verbatim with a warn icon, never crash.
+    return f"    ⚠  {name_field} — {state}"
+
+
 def run_doctor(*, redact_secrets: bool = True) -> int:
     cfg, chain = load_config()
     banner("supamem doctor", f"v{__version__}")
@@ -344,6 +486,9 @@ def run_doctor(*, redact_secrets: bool = True) -> int:
         info(
             "(set retrieval.reranker = 'off' to disable; restores pre-Phase-8 latency)"
         )
+
+    # ── Section 2g: Subagent reachability (Phase 08.1 D-DOCTOR-01..05) ───
+    _render_subagent_reachability_panel()
 
     # ── Section 3: Installed clients drift ───────────────────────────────
     console.print()

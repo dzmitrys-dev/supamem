@@ -388,3 +388,249 @@ def test_doctor_reranker_p50_p95_verifiable(
             "Welford-mean path MUST label the line with literal 'approx' "
             "so users know the value is mean-derived (W3 verifiability)"
         )
+
+
+# ───── Plan 08.1-05 — Subagent reachability panel (D-DOCTOR-01..05) ──────
+
+
+CSV_PATCHABLE_AGENT = (
+    "---\n"
+    "name: csv-patchable\n"
+    "description: restrictive whitelist, no supamem coverage\n"
+    "tools: Read, Bash, Grep, mcp__context7__*\n"
+    "---\n"
+    "\n"
+    "body\n"
+)
+
+CSV_COVERED_AGENT = (
+    "---\n"
+    "name: covered\n"
+    "tools: Read, Bash, mcp__supamem__*\n"
+    "---\n"
+    "\n"
+    "body\n"
+)
+
+INHERITANCE_AGENT = (
+    "---\n"
+    "name: helper-readonly\n"
+    "description: full inheritance — no tools key\n"
+    "---\n"
+    "\n"
+    "body\n"
+)
+
+MALFORMED_AGENT = (
+    "---\n"
+    "name: broken\n"
+    "tools: [unclosed\n"
+    "---\n"
+    "\n"
+    "body\n"
+)
+
+
+def _seed_agent(home: Path, name: str, body: str) -> Path:
+    agents = home / ".claude" / "agents"
+    agents.mkdir(parents=True, exist_ok=True)
+    p = agents / name
+    p.write_text(body, encoding="utf-8")
+    return p
+
+
+def _seed_manifest(cache: Path, entries: list[dict]) -> Path:
+    import json as _json
+
+    cache.mkdir(parents=True, exist_ok=True)
+    mp = cache / "agent_patches.json"
+    mp.write_text(
+        _json.dumps(
+            {"schema_version": 1, "supamem_version": "0.0.0+test", "patches": entries},
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return mp
+
+
+def test_doctor_subagent_reachability_panel_present(
+    home: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """D-DOCTOR-01..03: panel header + per-agent rows for patched / covered /
+    inheritance / skipped fixtures, grouped under [global]."""
+    import supamem.doctor as mod
+
+    cache = tmp_path / "cache"
+    monkeypatch.setenv("SUPAMEM_CACHE_DIR", str(cache))
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: False)
+
+    # Seed 4 fixtures: 1 patched (covered + manifest entry), 1 covered-only,
+    # 1 inheritance, 1 malformed.
+    patched_path = _seed_agent(home, "patched.md", CSV_COVERED_AGENT)
+    _seed_agent(home, "covered.md", CSV_COVERED_AGENT)
+    _seed_agent(home, "helper-readonly.md", INHERITANCE_AGENT)
+    _seed_agent(home, "broken.md", MALFORMED_AGENT)
+
+    # Manifest records `patched.md` so its row gets the "patched" wording.
+    _seed_manifest(
+        cache,
+        [
+            {
+                "path": str(patched_path),
+                "scope": "global",
+                "patched_at": "2026-05-02T00:00:00Z",
+                "supamem_version": "0.0.0+test",
+                "original_frontmatter": "---\nname: patched\n---\n",
+                "original_frontmatter_sha256": "deadbeef",
+                "patched_frontmatter_sha256": "cafebabe",
+                "tools_form": "csv",
+            }
+        ],
+    )
+
+    rc = mod.run_doctor()
+    out = capsys.readouterr().out
+
+    assert "Subagent reachability" in out, out
+    assert "[global]" in out, out
+    assert "patched (added mcp__supamem__*)" in out, out
+    assert "OK (already covered)" in out, out
+    assert "OK (full inheritance)" in out, out
+    # Skipped row for the malformed agent
+    assert "skipped:" in out, out
+    # rc is 1 because qdrant unreachable, NOT because of skipped rows
+    assert rc == 1
+
+
+def test_doctor_subagent_reachability_no_manifest_shows_repair_hint(
+    home: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """D-DOCTOR-05: a patchable file present + no manifest → repair hint."""
+    import supamem.doctor as mod
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setenv("SUPAMEM_CACHE_DIR", str(cache))
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: False)
+
+    _seed_agent(home, "csv-patchable.md", CSV_PATCHABLE_AGENT)
+
+    mod.run_doctor()
+    out = capsys.readouterr().out
+
+    assert "Subagent reachability" in out, out
+    assert "needs patching" in out, out
+    assert "supamem repair" in out, out
+    # No unpatch reminder when manifest absent
+    assert "supamem unpatch-agents" not in out, out
+
+
+def test_doctor_subagent_reachability_does_not_change_exit_code(
+    home: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D-DOCTOR-04: a `skipped:` row MUST NOT flip GREEN → YELLOW.
+
+    Compare the exit code from a tmp HOME with a malformed agent against
+    the exit code from a tmp HOME with no agents at all. Both rest of the
+    environment (qdrant unreachable, no clients) is identical, so any
+    delta would isolate the new panel as the cause.
+    """
+    import supamem.doctor as mod
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setenv("SUPAMEM_CACHE_DIR", str(cache))
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: False)
+
+    # Baseline: empty home, no agents.
+    rc_baseline = mod.run_doctor()
+
+    # Now seed a malformed agent and re-run.
+    _seed_agent(home, "broken.md", MALFORMED_AGENT)
+    rc_with_skipped = mod.run_doctor()
+
+    assert rc_with_skipped == rc_baseline, (
+        f"skipped: row should not change exit code "
+        f"(baseline={rc_baseline}, with_skipped={rc_with_skipped})"
+    )
+
+
+def test_doctor_renders_unpatch_reminder_when_manifest_present(
+    home: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """D-UNDO-01 REVISED: when manifest exists, the panel reminds users to
+    run ``supamem unpatch-agents`` before ``pip uninstall supamem``."""
+    import supamem.doctor as mod
+
+    cache = tmp_path / "cache"
+    monkeypatch.setenv("SUPAMEM_CACHE_DIR", str(cache))
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: False)
+
+    p = _seed_agent(home, "covered.md", CSV_COVERED_AGENT)
+    _seed_manifest(
+        cache,
+        [
+            {
+                "path": str(p),
+                "scope": "global",
+                "patched_at": "2026-05-02T00:00:00Z",
+                "supamem_version": "0.0.0+test",
+                "original_frontmatter": "---\nname: covered\n---\n",
+                "original_frontmatter_sha256": "deadbeef",
+                "patched_frontmatter_sha256": "cafebabe",
+                "tools_form": "csv",
+            }
+        ],
+    )
+
+    mod.run_doctor()
+    out = capsys.readouterr().out
+    # Rich autodetects terminal width when capsys captures stdout, so the
+    # reminder line can wrap across physical rows. Collapse whitespace so
+    # substring assertions match the logical message regardless of width.
+    flat = " ".join(out.split())
+
+    assert "supamem unpatch-agents" in flat, out
+    assert "pip uninstall supamem" in flat, out
+    assert "manifest:" in flat, out
+
+
+def test_doctor_handles_empty_global_dir(
+    home: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """No ``~/.claude/agents/`` directory at all → header renders, no rows,
+    no traceback, no `[global]` line, no repair hint."""
+    import supamem.doctor as mod
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setenv("SUPAMEM_CACHE_DIR", str(cache))
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: False)
+
+    rc = mod.run_doctor()
+    out = capsys.readouterr().out
+    err = capsys.readouterr().err
+
+    assert "Subagent reachability" in out, out
+    assert "[global]" not in out, out
+    assert "[project]" not in out, out
+    assert "Traceback" not in (out + err)
+    # Repair hint only renders when there is a patchable file on disk.
+    assert "run `supamem repair` to patch" not in out, out
+    # rc is 1 because qdrant unreachable; doctor itself didn't crash.
+    assert rc == 1
