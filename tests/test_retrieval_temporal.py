@@ -168,7 +168,6 @@ def test_decay_multiplier_values():
     assert _decay_multiplier(age_days=28, alpha=0.7, half_life_days=14.0) == pytest.approx(0.775)
 
 
-@pytest.mark.skip(reason="GREEN in Plan 04 — wires _apply_transcript_decay into query()")
 def test_decay_off_byte_identical_code_ranking():
     """Pitfall 2 mitigation + success criterion #3.
 
@@ -188,7 +187,6 @@ def test_decay_off_byte_identical_code_ranking():
     assert code_off == code_on, "code/ADR/doc ranking MUST be invariant under decay flag flips"
 
 
-@pytest.mark.skip(reason="GREEN in Plan 04 — wires _apply_transcript_decay into query()")
 def test_decay_on_only_transcripts_affected():
     """D-COMPOSE-09: only ``chunker == 'transcript'`` payloads get the multiplier.
 
@@ -214,7 +212,6 @@ def test_decay_on_only_transcripts_affected():
             )
 
 
-@pytest.mark.skip(reason="GREEN in Plan 04 — wires _apply_transcript_decay into query()")
 def test_malformed_valid_from_skips_decay_keeps_score():
     """Threat-V7 mitigation: malformed ``valid_from`` → keep raw score, never crash.
 
