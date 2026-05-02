@@ -1,6 +1,6 @@
 **语言:** [English](README.md) · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [日本語](README.ja.md) · [Русский](README.ru.md)
 
-<!-- synced-with: README.md @ f96d0a1 -->
+<!-- synced-with: README.md @ dcd3185 -->
 
 > 本翻译由 AI 协助生成。欢迎母语开发者通过 PR 修正用词。
 
@@ -158,6 +158,7 @@ supamem doctor
 |------|------|
 | 🔍 **混合检索** | 调优后的稀疏(BM25) + 密集(MiniLM)融合,锁定 schema D-25 |
 | 🎯 **代码感知重排器** | 交叉编码器 `mxbai-rerank-base-v2`(Apache-2.0)默认对 `tuned_hybrid` 候选重新打分。通过 `retrieval.reranker = "off"` 关闭,恢复 v0.2.4a1 之前的行为。(Phase 8, RERANK-01..04) |
+| ⏳ **按来源时序有效性** | 每个 chunk 都带 `valid_from`/`valid_to`;重新索引被修改的文件会原子性地把旧 chunk 标记为已失效,检索期过滤器在所有后端中统一排除已失效点。可选的 transcript 专属衰减(默认关闭)。`retention_days = 90` 之后自动 GC(设为 `0` 即永不删除 / 审计模式)。(Phase 9, TEMP-01..03) |
 | 📚 **Markdown chunker** | 按 H 头切分,200-token 目标 / 250-token 软上限(T-1) |
 | 🤖 **MCP 服务器** | `stdio`(默认)和 `http` 传输,基于官方 `mcp` SDK |
 | 🪝 **多客户端钩子** | Claude Code 会话开始 / OpenCode 会话开始 / Cursor MDC |
@@ -452,6 +453,77 @@ my_reranker = "my_pkg.module:MyReranker"
 
 插件协议:`rerank(query: str, candidates: list[RetrievedChunk]) -> list[RetrievedChunk]`。
 首次调用时懒加载模型;预热由 install/init/repair 的 fetch 流程驱动。
+
+---
+
+## ⏳ 按来源时序有效性(v0.3.0a1+)
+
+每个被索引的 chunk 都携带二元字段 `valid_to`:
+
+- `valid_to = null` → 当前生效
+- `valid_to ≤ now()` → 已被取代(从所有检索中过滤掉)
+
+当文件发生变更并重新索引时,索引器原子性地完成:
+
+1. scroll 出该文件路径下的全部既有 chunk。
+2. 对每条调用 `set_payload(valid_to = now())`(关闭其有效性窗口)。
+3. 用基于内容哈希生成的 UUID upsert 新 chunk,且 `valid_to = null`。
+
+新旧 chunk 在 Qdrant 中共存,检索只返回新 chunk;直到自动 GC 在 `retention_days`
+之后清理旧 chunk。检索期过滤器只在一处构建并被所有后端继承(`tuned_hybrid` 的两条
+Prefetch 臂、`dense`、`bm25`、`qdrant_find`、`dual_memory_search`)——使用 Qdrant
+的 `IsEmptyCondition` 而非 `IsNullCondition`(详见
+[Qdrant#5342](https://github.com/qdrant/qdrant/issues/5342):`IsNull` 不会匹配缺失字段)。
+
+在 `.supamem/config.toml` 中配置:
+
+```toml
+[supamem.retrieval.temporal]
+retention_days = 90          # 0 = 永不删除(合规 / 审计场景)
+```
+
+### Transcript 专属时序衰减(可选,默认关闭)
+
+代码、ADR、文档不会"过期"。但 transcript 经常会过期——旧的支持对话里残留着已被废弃
+的 API,会让 agent 偏离当前讨论。Phase 9 提供了一个可选的乘性带下限衰减开关,**只**
+对 transcript chunk 生效,在 rerank 之后运行,绝不会自动作用于代码 / ADR / 文档:
+
+```toml
+[supamem.retrieval.recency.per_source.transcript]
+enabled        = true            # 默认 false
+half_life_days = 14.0
+alpha          = 0.7             # 下限:最旧的 transcript 仍保留 0.7 倍得分
+```
+
+锁定默认值下的样例(`alpha = 0.7`,`half_life_days = 14`):
+
+| Age (days) | Multiplier         |
+|------------|--------------------|
+| 0          | 1.000              |
+| 7          | 0.924              |
+| 14         | 0.850              |
+| 28         | 0.775              |
+| ∞          | 0.700 (floor at α) |
+
+切换该开关时,代码 / ADR / 文档的排序保持字节级一致——由端到端字节相等性测试覆盖
+(TEMP-03 验收标准)。
+
+参考:[Customers.ai recency-weighted scoring](https://customers.ai/recency-weighted-scoring)、
+[Snowflake Cortex Search scoring docs](https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-search/cortex-search-customize-scoring)。
+
+### Doctor 面板
+
+`supamem doctor` 在 Reranker 与 Subagent reachability 之间新增 `Temporal validity` 面板,
+展示 live / superseded / awaiting_gc / future-dated 计数、按来源拆分、`valid_from`
+最旧/最新值,以及 `retention_days` 的来源行。仅读,绝不会改变 doctor 退出码。
+
+### 迁移
+
+升级后第一次运行 `supamem index` 会回填遗留点的 `valid_to=null`(由 manifest
+保留键控制,后续运行幂等)。这是与 `IsEmpty` 运行期过滤器并行的纵深防御。
+
+> ⚠ **默认 retention 是破坏性的**:从 v0.2.x 升级且持有超过 90 天的审计型集合的用户
+> 受影响。设置 `[supamem.retrieval.temporal] retention_days = 0` 即可完全禁用自动 GC。
 
 ---
 

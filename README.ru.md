@@ -1,6 +1,6 @@
 **Языки:** [English](README.md) · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [日本語](README.ja.md) · [Русский](README.ru.md)
 
-<!-- synced-with: README.md @ f96d0a1 -->
+<!-- synced-with: README.md @ dcd3185 -->
 
 > Перевод выполнен с помощью ИИ. Корректировки от носителей языка приветствуются — открывайте PR.
 
@@ -164,6 +164,7 @@ supamem doctor
 |---|---|
 | 🔍 **Гибридный retrieval** | Настроенная фьюжн sparse (BM25) + dense (MiniLM), зафиксированная схема D-25 |
 | 🎯 **Code-aware reranker** | Cross-encoder `mxbai-rerank-base-v2` (Apache-2.0) по умолчанию переоценивает кандидатов `tuned_hybrid`. Отключается `retrieval.reranker = "off"` — возврат к поведению до v0.2.4a1. (Phase 8, RERANK-01..04) |
+| ⏳ **Per-source временная валидность** | Каждый чанк несёт `valid_from`/`valid_to`; переиндексация изменённого файла атомарно помечает прежние чанки как устаревшие, а фильтр на этапе retrieval единообразно исключает устаревшие точки во всех бэкендах. Опциональный recency-decay только для транскриптов (по умолчанию OFF). Авто-GC после `retention_days = 90` (`0` = хранить вечно / для аудит-коллекций). (Phase 9, TEMP-01..03) |
 | 📚 **Markdown-чанкер** | Header-aware, чанки по 200 токенов с мягким потолком 250 (T-1) |
 | 🤖 **MCP-сервер** | Транспорты `stdio` (по умолчанию) и `http`, официальный SDK `mcp` |
 | 🪝 **Multi-client хуки** | session-start Claude Code, session-start OpenCode, MDC Cursor |
@@ -475,6 +476,86 @@ my_reranker = "my_pkg.module:MyReranker"
 Контракт плагина: `rerank(query: str, candidates: list[RetrievedChunk]) -> list[RetrievedChunk]`.
 Ленивая загрузка модели на первом вызове; eager-прогрев идёт через
 fetch-pipeline команд install/init/repair.
+
+---
+
+## ⏳ Per-source временная валидность (v0.3.0a1+)
+
+Каждый индексируемый чанк несёт бинарное поле `valid_to`:
+
+- `valid_to = null` → активный
+- `valid_to ≤ now()` → устаревший (отфильтровывается из любого retrieval-запроса)
+
+Когда файл изменяется и вы его переиндексируете, индексер атомарно:
+
+1. Скроллит все существующие чанки для этого пути.
+2. Выставляет `set_payload(valid_to = now())` на каждом (закрывает прежнее окно
+   валидности).
+3. Делает upsert новых чанков с UUID на основе хеша содержимого и `valid_to = null`.
+
+Старые и новые чанки сосуществуют в Qdrant; в выдачу попадают только новые — пока
+авто-GC не удалит устаревшие после `retention_days`. Фильтр на этапе retrieval
+конструируется в одном месте и наследуется всеми бэкендами (обеими ветвями Prefetch
+у `tuned_hybrid`, `dense`, `bm25`, `qdrant_find`, `dual_memory_search`) — использует
+`IsEmptyCondition` Qdrant (НЕ `IsNullCondition` — см.
+[Qdrant#5342](https://github.com/qdrant/qdrant/issues/5342): `IsNull` не матчит
+отсутствующие поля).
+
+Конфигурация в `.supamem/config.toml`:
+
+```toml
+[supamem.retrieval.temporal]
+retention_days = 90          # 0 = хранить вечно (compliance / аудит)
+```
+
+### Recency-decay только для транскриптов (opt-in, по умолчанию OFF)
+
+Код, ADR и документация не «устаревают». А вот транскрипты — часто: старые ходы
+саппорт-чатов с устаревшими API уводят агента от текущего диалога. Phase 9 даёт
+opt-in мультипликативный decay с полом, который применяется **только** к чанкам
+транскриптов, после rerank, и никогда не активируется автоматически для код / ADR /
+docs:
+
+```toml
+[supamem.retrieval.recency.per_source.transcript]
+enabled        = true            # default false
+half_life_days = 14.0
+alpha          = 0.7             # пол: самый старый транскрипт всё ещё получает 0.7x от score
+```
+
+Пример с зафиксированными дефолтами (`alpha = 0.7`, `half_life_days = 14`):
+
+| Age (days) | Multiplier         |
+|------------|--------------------|
+| 0          | 1.000              |
+| 7          | 0.924              |
+| 14         | 0.850              |
+| 28         | 0.775              |
+| ∞          | 0.700 (floor at α) |
+
+При переключении knob ранжирование код / ADR / docs остаётся побайтово идентичным —
+покрыто end-to-end тестом байтового равенства (приёмочный критерий TEMP-03).
+
+Источники: [Customers.ai recency-weighted scoring](https://customers.ai/recency-weighted-scoring),
+[Snowflake Cortex Search scoring docs](https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-search/cortex-search-customize-scoring).
+
+### Панель doctor
+
+`supamem doctor` показывает панель `Temporal validity` (между Reranker и Subagent
+reachability) со счётчиками live / superseded / awaiting_gc / future-dated, разбивкой
+по источникам, самым старым и самым новым `valid_from` в коллекции и provenance-
+строкой `retention_days`. По построению read-only; никогда не меняет код выхода
+doctor.
+
+### Миграция
+
+Первый `supamem index` после апгрейда заполняет `valid_to=null` на легаси-точках
+(управляется зарезервированным ключом манифеста, идемпотентен на последующих
+запусках). Эшелонированная защита параллельно с runtime-фильтром `IsEmpty`.
+
+> ⚠ **Дефолтный retention — деструктивный** для пользователей, переходящих с v0.2.x
+> с аудит-коллекциями старше 90 дней. Установите
+> `[supamem.retrieval.temporal] retention_days = 0`, чтобы полностью отключить авто-GC.
 
 ---
 

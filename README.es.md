@@ -1,6 +1,6 @@
 **Idiomas:** [English](README.md) · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [日本語](README.ja.md) · [Русский](README.ru.md)
 
-<!-- synced-with: README.md @ f96d0a1 -->
+<!-- synced-with: README.md @ dcd3185 -->
 
 > Esta traducción fue generada con asistencia de IA. Las correcciones de hablantes nativos son bienvenidas vía PR.
 
@@ -165,6 +165,7 @@ El **banner SessionStart** (v0.1.4+) también lanza una línea de estado en tu c
 |---|---|
 | 🔍 **Retrieval híbrido** | Fusión sparse (BM25) + dense (MiniLM) afinada, schema fijo D-25 |
 | 🎯 **Reranker consciente del código** | Cross-encoder `mxbai-rerank-base-v2` (Apache-2.0) re-puntúa los candidatos de `tuned_hybrid` por defecto. Desactívalo con `retrieval.reranker = "off"` para volver al comportamiento previo a v0.2.4a1. (Phase 8, RERANK-01..04) |
+| ⏳ **Validez temporal por fuente** | Cada chunk lleva `valid_from`/`valid_to`; reindexar un archivo modificado supersede atómicamente los chunks previos y el filtro de retrieval excluye los puntos superados en todos los backends. Decay de recencia opcional solo para transcripciones (apagado por defecto). Auto-GC tras `retention_days = 90` (`0` = conservar siempre / colecciones de auditoría). (Phase 9, TEMP-01..03) |
 | 📚 **Chunker Markdown** | Consciente de headers, chunks de 200-token con tope suave de 250-token (T-1) |
 | 🤖 **Servidor MCP** | Transportes `stdio` (default) y `http`, SDK oficial `mcp` |
 | 🪝 **Hooks multi-cliente** | session-start de Claude Code, session-start de OpenCode, MDC de Cursor |
@@ -477,6 +478,85 @@ my_reranker = "my_pkg.module:MyReranker"
 Protocolo de plugin: `rerank(query: str, candidates: list[RetrievedChunk]) -> list[RetrievedChunk]`.
 Carga perezosa del modelo en la primera llamada; el calentamiento eager corre a
 través del pipeline de fetch de install/init/repair.
+
+---
+
+## ⏳ Validez temporal por fuente (v0.3.0a1+)
+
+Cada chunk indexado lleva un campo binario `valid_to`:
+
+- `valid_to = null` → vigente
+- `valid_to ≤ now()` → superado (filtrado fuera de toda búsqueda)
+
+Cuando un archivo cambia y lo reindexas, el indexador, atómicamente:
+
+1. Hace scroll de todos los chunks existentes para esa ruta de archivo.
+2. Aplica `set_payload(valid_to = now())` a cada uno (cierra la ventana de validez previa).
+3. Hace upsert de los nuevos chunks bajo UUIDs derivados de un hash de contenido,
+   con `valid_to = null`.
+
+Los chunks viejos y nuevos coexisten en Qdrant; solo los nuevos se devuelven en retrieval
+hasta que el barrido de auto-GC borra los viejos pasados de `retention_days`. El filtro
+de retrieval se construye en un único sitio y lo heredan todos los backends
+(`tuned_hybrid` ambas ramas Prefetch, `dense`, `bm25`, `qdrant_find`,
+`dual_memory_search`) — usa el `IsEmptyCondition` de Qdrant (NO `IsNullCondition`,
+ver [Qdrant#5342](https://github.com/qdrant/qdrant/issues/5342): `IsNull` no matchea
+campos ausentes).
+
+Configura en `.supamem/config.toml`:
+
+```toml
+[supamem.retrieval.temporal]
+retention_days = 90          # 0 = conservar siempre (compliance / auditoría)
+```
+
+### Decay de recencia solo para transcripciones (opt-in, apagado por defecto)
+
+El código, los ADRs y la documentación no "envejecen". Las transcripciones, sí — los
+turnos antiguos de soporte con APIs deprecadas distraen al agente del diálogo actual.
+Phase 9 incorpora un knob de decay multiplicativo con piso (multiplicative-floor) que
+corre **solo** sobre chunks de transcripción, después del rerank, y nunca se activa
+automáticamente para código / ADR / docs:
+
+```toml
+[supamem.retrieval.recency.per_source.transcript]
+enabled        = true            # default false
+half_life_days = 14.0
+alpha          = 0.7             # piso: la transcripción más vieja conserva 0.7x del score
+```
+
+Ejemplo trabajado con los defaults bloqueados (`alpha = 0.7`, `half_life_days = 14`):
+
+| Age (days) | Multiplier         |
+|------------|--------------------|
+| 0          | 1.000              |
+| 7          | 0.924              |
+| 14         | 0.850              |
+| 28         | 0.775              |
+| ∞          | 0.700 (floor at α) |
+
+El ranking de código / ADR / docs queda byte-idéntico cuando se cambia el knob —
+verificado por un test end-to-end de identidad de bytes (criterio TEMP-03).
+
+Referencias: [Customers.ai recency-weighted scoring](https://customers.ai/recency-weighted-scoring),
+[Snowflake Cortex Search scoring docs](https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-search/cortex-search-customize-scoring).
+
+### Doctor
+
+`supamem doctor` muestra un panel `Temporal validity` (entre Reranker y Subagent
+reachability) que lista contadores de live / superseded / awaiting_gc / future-dated,
+desglose por fuente, `valid_from` más antiguo y más reciente, y la procedencia de
+`retention_days`. Solo lectura por construcción; nunca cambia el exit code de doctor.
+
+### Migración
+
+El primer `supamem index` post-upgrade rellena `valid_to=null` en puntos legados
+(controlado por una clave reservada del manifest, idempotente en sucesivas corridas).
+Defensa en profundidad junto al filtro `IsEmpty` de runtime.
+
+> ⚠ **El retention por defecto es destructivo** para usuarios que vienen de v0.2.x
+> con colecciones modo auditoría de más de 90 días. Setea
+> `[supamem.retrieval.temporal] retention_days = 0` para deshabilitar el auto-GC.
 
 ---
 

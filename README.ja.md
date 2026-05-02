@@ -1,6 +1,6 @@
 **言語:** [English](README.md) · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [日本語](README.ja.md) · [Русский](README.ru.md)
 
-<!-- synced-with: README.md @ f96d0a1 -->
+<!-- synced-with: README.md @ dcd3185 -->
 
 > この翻訳は AI 支援によるものです。ネイティブスピーカーによる修正 PR を歓迎します。
 
@@ -159,6 +159,7 @@ supamem doctor
 |---|---|
 | 🔍 **ハイブリッド検索** | 調整済み sparse(BM25) + dense(MiniLM) 融合、ロックされたスキーマ D-25 |
 | 🎯 **コード対応リランカー** | クロスエンコーダ `mxbai-rerank-base-v2`(Apache-2.0)が既定で `tuned_hybrid` の候補を再採点します。`retrieval.reranker = "off"` で無効化すると v0.2.4a1 以前の挙動に戻ります。(Phase 8, RERANK-01..04) |
+| ⏳ **ソース別の時間有効性** | 各 chunk に `valid_from`/`valid_to` を付与;変更されたファイルを再インデックスすると、旧 chunk をアトミックに無効化し、検索時フィルタが全バックエンド共通で無効化済み点を除外します。トランスクリプト専用の任意の recency 減衰(既定 OFF)。`retention_days = 90` を超えると自動 GC(`0` で恒久保持 / 監査用コレクション)。(Phase 9, TEMP-01..03) |
 | 📚 **Markdown チャンカー** | ヘッダー意識、200 トークン目標 / 250 トークン軟上限(T-1) |
 | 🤖 **MCP サーバー** | `stdio`(デフォルト)と `http` トランスポート、公式 `mcp` SDK |
 | 🪝 **マルチクライアントフック** | Claude Code セッション開始、OpenCode セッション開始、Cursor MDC |
@@ -466,6 +467,83 @@ my_reranker = "my_pkg.module:MyReranker"
 プラグインプロトコル:`rerank(query: str, candidates: list[RetrievedChunk]) -> list[RetrievedChunk]`。
 初回呼び出しでモデルを遅延ロード;eager ウォームアップは install/init/repair の
 fetch パイプラインで実行されます。
+
+---
+
+## ⏳ ソース別の時間有効性(v0.3.0a1+)
+
+インデックスされた各 chunk は二値の `valid_to` フィールドを持ちます:
+
+- `valid_to = null` → 有効
+- `valid_to ≤ now()` → 置き換え済み(あらゆる検索で除外)
+
+ファイルが変更されて再インデックスを行うと、インデクサはアトミックに:
+
+1. そのファイルパスの既存 chunk すべてを scroll します。
+2. 各々に `set_payload(valid_to = now())` を適用(従前の有効期間を閉じる)。
+3. 内容ハッシュベースの UUID で `valid_to = null` の新 chunk を upsert します。
+
+新旧の chunk は Qdrant 内に共存し、検索結果には新 chunk のみが返ります。`retention_days`
+を超えた古い chunk は自動 GC スイープで削除されます。検索時フィルタは単一の場所で
+構築され、すべてのバックエンド(`tuned_hybrid` の両 Prefetch アーム、`dense`、
+`bm25`、`qdrant_find`、`dual_memory_search`)に継承されます。Qdrant の
+`IsEmptyCondition` を使用します(`IsNullCondition` は使いません — 詳細は
+[Qdrant#5342](https://github.com/qdrant/qdrant/issues/5342):`IsNull` は欠損フィールドに
+マッチしません)。
+
+`.supamem/config.toml` で設定:
+
+```toml
+[supamem.retrieval.temporal]
+retention_days = 90          # 0 = 恒久保持(コンプライアンス / 監査用コレクション)
+```
+
+### トランスクリプト専用の recency 減衰(opt-in、既定 OFF)
+
+コード、ADR、ドキュメントは「古くなる」ことはありません。しかしトランスクリプトはしばしば
+古くなります — 旧サポートチャットの非推奨 API がエージェントを現在の対話から逸脱させます。
+Phase 9 ではトランスクリプト chunk **のみ**に作用し、rerank 後に走り、コード / ADR /
+ドキュメントには絶対に自動適用されない、乗法フロア型の任意 decay knob を提供します:
+
+```toml
+[supamem.retrieval.recency.per_source.transcript]
+enabled        = true            # 既定 false
+half_life_days = 14.0
+alpha          = 0.7             # フロア:最古のトランスクリプトでも 0.7 倍の score を保つ
+```
+
+ロックされた既定値での例(`alpha = 0.7`、`half_life_days = 14`):
+
+| Age (days) | Multiplier         |
+|------------|--------------------|
+| 0          | 1.000              |
+| 7          | 0.924              |
+| 14         | 0.850              |
+| 28         | 0.775              |
+| ∞          | 0.700 (floor at α) |
+
+knob を切り替えてもコード / ADR / ドキュメントのランキングはバイト一致 — エンドツーエンド
+のバイト同一性テストで検証されています(TEMP-03 受け入れ基準)。
+
+参考:[Customers.ai recency-weighted scoring](https://customers.ai/recency-weighted-scoring)、
+[Snowflake Cortex Search scoring docs](https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-search/cortex-search-customize-scoring)。
+
+### Doctor パネル
+
+`supamem doctor` は Reranker と Subagent reachability の間に `Temporal validity`
+パネルを追加し、live / superseded / awaiting_gc / future-dated のカウント、ソース別
+内訳、コレクション内の最古/最新の `valid_from`、そして `retention_days` のプロビナンス
+を表示します。構造的に読み取り専用で、doctor の終了コードを変えることはありません。
+
+### マイグレーション
+
+アップグレード後の最初の `supamem index` は、レガシーポイントに `valid_to=null` を
+バックフィルします(マニフェストの予約キーで管理、以降の実行は冪等)。ランタイムの
+`IsEmpty` フィルタと並行する、深層防御です。
+
+> ⚠ **既定の retention は破壊的**:90 日を超える監査モードコレクションを持つ v0.2.x
+> からのアップグレードユーザは要注意。`[supamem.retrieval.temporal] retention_days = 0`
+> に設定すれば自動 GC を完全に無効化できます。
 
 ---
 
