@@ -1,6 +1,6 @@
 **语言:** [English](README.md) · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [日本語](README.ja.md) · [Русский](README.ru.md)
 
-<!-- synced-with: README.md @ ac5e38f -->
+<!-- synced-with: README.md @ __NEW_SHA__ -->
 
 > 本翻译由 AI 协助生成。欢迎母语开发者通过 PR 修正用词。
 
@@ -157,6 +157,7 @@ supamem doctor
 | 功能 | 说明 |
 |------|------|
 | 🔍 **混合检索** | 调优后的稀疏(BM25) + 密集(MiniLM)融合,锁定 schema D-25 |
+| 🎯 **代码感知重排器** | 交叉编码器 `mxbai-rerank-base-v2`(Apache-2.0)默认对 `tuned_hybrid` 候选重新打分。通过 `retrieval.reranker = "off"` 关闭,恢复 v0.2.4a1 之前的行为。(Phase 8, RERANK-01..04) |
 | 📚 **Markdown chunker** | 按 H 头切分,200-token 目标 / 250-token 软上限(T-1) |
 | 🤖 **MCP 服务器** | `stdio`(默认)和 `http` 传输,基于官方 `mcp` SDK |
 | 🪝 **多客户端钩子** | Claude Code 会话开始 / OpenCode 会话开始 / Cursor MDC |
@@ -266,6 +267,16 @@ supamem --version
 > **最新:** `v0.1.5` 已发布到 [PyPI](https://pypi.org/project/supamem/)。通过 Trusted
 > Publisher OIDC 发布 — 每个 wheel 都附带来源证明。
 
+### 安装时缓存模型
+
+`supamem install <client>` 与 `supamem init` 会通过进度条主动下载所有 ML 前置依赖
+(MiniLM ~90 MB、BM25 ~10 MB、mxbai-rerank-base-v2 ~1 GB)。安装后冷启动的 CLI 调用
+(`supamem --help`、`supamem doctor`、`supamem --version`)不会触发任何网络请求。
+气隙首次启动?加 `--skip-models`,等网络可用后再跑一次 `supamem repair` 补齐。
+
+模型缓存目录:`platformdirs.user_cache_dir("supamem")/models/`
+(可用 `SUPAMEM_CACHE_DIR` 覆盖)。
+
 ---
 
 ## 🎯 CLI 一览
@@ -362,6 +373,48 @@ frontend   = ["frontend", "web", "client", "components"]
 
 转录类 chunk(chunker == `transcript`)按设计归类为 `room = null` —— 请通过现有的
 `payload.chunker` key 过滤它们。
+
+---
+
+## 🎯 代码感知重排器(v0.2.4a1+)
+
+每次 `tuned_hybrid` 查询现在**默认**通过交叉编码器
+(`mixedbread-ai/mxbai-rerank-base-v2`,Apache-2.0,~1 GB)对 RRF 融合后的候选重新打分。
+代码类查询的精度更锐利;v0.2.0 的回退选项是 `retrieval.reranker = "off"`,可恢复
+Phase 8 之前完全字节一致的行为。
+
+```toml
+[supamem.retrieval]
+reranker = "mxbai_v2"  # v0.2.4a1+ 的默认值;"off" 恢复 Phase 8 之前的行为
+
+[supamem.retrieval.reranker]
+model_id         = "mixedbread-ai/mxbai-rerank-base-v2"
+top_n            = 50   # 重排池大小;若大于融合候选数会自动收敛
+prefetch_per_arm = 50   # 重排器开启时从默认 20 加宽到 50
+batch_size       = 16
+```
+
+重排器开启时,`tuned_hybrid` 会把 `PREFETCH_LIMIT` 加宽到每条 arm 50,跳过 T-4
+的时间衰减乘子(交叉编码器叠加 recency-prior 在代码检索上是反向作用,详见
+PROJECT.md),并把 T-5 余弦去重 + T-8 token 预算挪到重排之后执行。
+`RetrievedChunk.rerank_score` 会带上交叉编码器 logit;主 `score` 字段也会被替换。
+
+`supamem doctor` 在原有 Retrieval 面板之后新增 **Reranker** 面板:当前重排器名称、
+model_id、缓存路径、磁盘大小 + 半下载检测、上一次加载延迟、近 100 次查询的重排
+p50/p95、检测到的设备(cuda/mps/cpu)。当缓存损坏或缺文件时,运行
+`supamem repair` —— 这是 doctor 驱动的自愈入口,会重新拉取缺失的模型文件、重新
+同步 `share/`、修复受管的 CLAUDE.md/AGENTS.md 块、恢复客户端配置。幂等。
+
+第三方可以通过新的 `supamem.reranker` 插件入口点组(第 4 个组,与
+retrieval / embedder / chunker 并列)注册自定义重排器:
+
+```toml
+[project.entry-points."supamem.reranker"]
+my_reranker = "my_pkg.module:MyReranker"
+```
+
+插件协议:`rerank(query: str, candidates: list[RetrievedChunk]) -> list[RetrievedChunk]`。
+首次调用时懒加载模型;预热由 install/init/repair 的 fetch 流程驱动。
 
 ---
 

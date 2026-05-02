@@ -1,6 +1,6 @@
 **Языки:** [English](README.md) · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [日本語](README.ja.md) · [Русский](README.ru.md)
 
-<!-- synced-with: README.md @ ac5e38f -->
+<!-- synced-with: README.md @ __NEW_SHA__ -->
 
 > Перевод выполнен с помощью ИИ. Корректировки от носителей языка приветствуются — открывайте PR.
 
@@ -163,6 +163,7 @@ supamem doctor
 | Возможность | Описание |
 |---|---|
 | 🔍 **Гибридный retrieval** | Настроенная фьюжн sparse (BM25) + dense (MiniLM), зафиксированная схема D-25 |
+| 🎯 **Code-aware reranker** | Cross-encoder `mxbai-rerank-base-v2` (Apache-2.0) по умолчанию переоценивает кандидатов `tuned_hybrid`. Отключается `retrieval.reranker = "off"` — возврат к поведению до v0.2.4a1. (Phase 8, RERANK-01..04) |
 | 📚 **Markdown-чанкер** | Header-aware, чанки по 200 токенов с мягким потолком 250 (T-1) |
 | 🤖 **MCP-сервер** | Транспорты `stdio` (по умолчанию) и `http`, официальный SDK `mcp` |
 | 🪝 **Multi-client хуки** | session-start Claude Code, session-start OpenCode, MDC Cursor |
@@ -272,6 +273,18 @@ supamem --version
 > **Актуальная версия:** `v0.1.5` опубликован на [PyPI](https://pypi.org/project/supamem/).
 > Релиз через Trusted Publisher OIDC — у каждого wheel есть подтверждение происхождения.
 
+### Модели кешируются при установке
+
+`supamem install <client>` и `supamem init` проактивно скачивают все ML-зависимости
+(MiniLM ~90 МБ, BM25 ~10 МБ, mxbai-rerank-base-v2 ~1 ГБ) с прогресс-баром.
+Холодные CLI-вызовы после установки (`supamem --help`, `supamem doctor`,
+`supamem --version`) не делают ни одного сетевого запроса. Первый запуск
+без сети? Передайте `--skip-models`, а после появления сети выполните
+`supamem repair`, чтобы дозагрузить недостающее.
+
+Модели хранятся в `platformdirs.user_cache_dir("supamem")/models/`
+(переопределяется через `SUPAMEM_CACHE_DIR`).
+
 ---
 
 ## 🎯 Команды CLI
@@ -372,6 +385,55 @@ sweep** при следующем `supamem index` — `set_payload` Qdrant по 
 
 Чанки транскриптов (chunker == `transcript`) по построению попадают в `room = null` —
 фильтруйте их через существующий ключ `payload.chunker`.
+
+---
+
+## 🎯 Code-aware reranker (v0.2.4a1+)
+
+Каждый запрос `tuned_hybrid` теперь **по умолчанию** переоценивает RRF-фьюжн
+кандидатов через cross-encoder (`mixedbread-ai/mxbai-rerank-base-v2`,
+Apache-2.0, ~1 ГБ). Это даёт более резкую точность на code-shaped запросах;
+аварийный выход v0.2.0 — `retrieval.reranker = "off"`, что восстанавливает
+байт-в-байт идентичное поведение до Phase 8.
+
+```toml
+[supamem.retrieval]
+reranker = "mxbai_v2"  # default в v0.2.4a1+; "off" восстанавливает поведение до Phase 8
+
+[supamem.retrieval.reranker]
+model_id         = "mixedbread-ai/mxbai-rerank-base-v2"
+top_n            = 50   # размер пула rerank; кламп до числа фьюжн-кандидатов
+prefetch_per_arm = 50   # увеличено с дефолтных 20, когда reranker включён
+batch_size       = 16
+```
+
+Когда reranker включён, `tuned_hybrid` расширяет `PREFETCH_LIMIT` до 50 на
+каждый arm, пропускает T-4 recency-множитель (cross-encoder + recency-prior
+противонаправлены для code retrieval, см. PROJECT.md), а T-5 cosine-dedup и
+T-8 token-budget исполняются ПОСЛЕ rerank. `RetrievedChunk.rerank_score`
+несёт логит cross-encoder; основное поле `score` тоже заменяется им.
+
+`supamem doctor` добавляет панель **Reranker** после существующей панели
+Retrieval: имя активного reranker, model_id, путь кеша, размер на диске +
+детект частичной загрузки, latency последней загрузки, p50/p95 за последние
+100 запросов rerank, обнаруженное устройство (cuda/mps/cpu). Если кеш
+повреждён или неполон, запустите `supamem repair` — канонический
+doctor-driven self-heal entry-point: дотягивает недостающие файлы модели,
+ре-синхронизирует `share/`, чинит управляемые блоки CLAUDE.md/AGENTS.md,
+восстанавливает конфиг клиента. Идемпотентен.
+
+Сторонние пакеты регистрируют свои rerankers через новую группу
+entry-point `supamem.reranker` (4-я группа, рядом с retrieval / embedder /
+chunker):
+
+```toml
+[project.entry-points."supamem.reranker"]
+my_reranker = "my_pkg.module:MyReranker"
+```
+
+Контракт плагина: `rerank(query: str, candidates: list[RetrievedChunk]) -> list[RetrievedChunk]`.
+Ленивая загрузка модели на первом вызове; eager-прогрев идёт через
+fetch-pipeline команд install/init/repair.
 
 ---
 

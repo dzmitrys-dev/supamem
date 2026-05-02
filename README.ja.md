@@ -1,6 +1,6 @@
 **言語:** [English](README.md) · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [日本語](README.ja.md) · [Русский](README.ru.md)
 
-<!-- synced-with: README.md @ ac5e38f -->
+<!-- synced-with: README.md @ __NEW_SHA__ -->
 
 > この翻訳は AI 支援によるものです。ネイティブスピーカーによる修正 PR を歓迎します。
 
@@ -158,6 +158,7 @@ supamem doctor
 | 機能 | 説明 |
 |---|---|
 | 🔍 **ハイブリッド検索** | 調整済み sparse(BM25) + dense(MiniLM) 融合、ロックされたスキーマ D-25 |
+| 🎯 **コード対応リランカー** | クロスエンコーダ `mxbai-rerank-base-v2`(Apache-2.0)が既定で `tuned_hybrid` の候補を再採点します。`retrieval.reranker = "off"` で無効化すると v0.2.4a1 以前の挙動に戻ります。(Phase 8, RERANK-01..04) |
 | 📚 **Markdown チャンカー** | ヘッダー意識、200 トークン目標 / 250 トークン軟上限(T-1) |
 | 🤖 **MCP サーバー** | `stdio`(デフォルト)と `http` トランスポート、公式 `mcp` SDK |
 | 🪝 **マルチクライアントフック** | Claude Code セッション開始、OpenCode セッション開始、Cursor MDC |
@@ -267,6 +268,18 @@ supamem --version
 > **最新:** `v0.1.5` は [PyPI](https://pypi.org/project/supamem/) で公開されています。Trusted
 > Publisher OIDC でリリース — すべての wheel は来歴証明付きです。
 
+### インストール時にモデルをキャッシュ
+
+`supamem install <client>` と `supamem init` は ML 前提条件(MiniLM ~90 MB、
+BM25 ~10 MB、mxbai-rerank-base-v2 ~1 GB)をプログレスバー付きで先行ダウンロード
+します。インストール後の冷起動 CLI 呼び出し(`supamem --help`、`supamem doctor`、
+`supamem --version`)はネットワーク送信ゼロです。エアギャップ環境での初回起動?
+`--skip-models` を渡し、ネットワークが利用可能になった後に `supamem repair` を
+一度実行してバックフィルしてください。
+
+モデルは `platformdirs.user_cache_dir("supamem")/models/` 配下に置かれます
+(`SUPAMEM_CACHE_DIR` で上書き可)。
+
 ---
 
 ## 🎯 CLI 一覧
@@ -367,6 +380,52 @@ frontend   = ["frontend", "web", "client", "components"]
 
 トランスクリプト由来のチャンク(chunker == `transcript`)は構造上 `room = null` に
 分類されます —— 既存の `payload.chunker` キーで絞り込んでください。
+
+---
+
+## 🎯 コード対応リランカー(v0.2.4a1+)
+
+すべての `tuned_hybrid` クエリは、**既定で** RRF で融合された候補をクロスエンコーダ
+(`mixedbread-ai/mxbai-rerank-base-v2`、Apache-2.0、~1 GB)で再採点します。コード
+中心のクエリで精度が鋭くなります。v0.2.0 のエスケープハッチは
+`retrieval.reranker = "off"` で、Phase 8 以前のバイト一致の挙動に戻ります。
+
+```toml
+[supamem.retrieval]
+reranker = "mxbai_v2"  # v0.2.4a1+ の既定値;"off" で Phase 8 以前の挙動に戻る
+
+[supamem.retrieval.reranker]
+model_id         = "mixedbread-ai/mxbai-rerank-base-v2"
+top_n            = 50   # リランクのプールサイズ;融合候補数を超えるとクランプ
+prefetch_per_arm = 50   # リランカー有効時に既定の 20 から拡張
+batch_size       = 16
+```
+
+リランカー有効時、`tuned_hybrid` は `PREFETCH_LIMIT` を arm ごと 50 に拡張し、
+T-4 リーセンシー乗数をスキップ(クロスエンコーダ + recency-prior はコード検索で
+反作用、PROJECT.md 参照)、T-5 コサイン重複排除と T-8 トークン予算は
+リランクの **後** に実行します。`RetrievedChunk.rerank_score` には
+クロスエンコーダの logit が入ります。プライマリ `score` も同値で置換されます。
+
+`supamem doctor` は既存の Retrieval パネルの後に **Reranker** パネルを追加します:
+有効なリランカー名、model_id、キャッシュパス、ディスク使用量 + 部分ダウンロード
+検出、最終ロード遅延、直近 100 件のリランク p50/p95、検出デバイス
+(cuda/mps/cpu)。キャッシュが破損または不完全な場合は `supamem repair` を
+実行してください —— doctor 主導のセルフヒール正規入口で、欠損したモデル
+ファイルを再取得し、`share/` を再同期し、管理対象の CLAUDE.md/AGENTS.md ブロック
+を修復し、クライアント設定を復元します。冪等です。
+
+サードパーティは新しい `supamem.reranker` プラグイン入口グループ(retrieval /
+embedder / chunker と並ぶ 4 つ目のグループ)を介してカスタムリランカーを登録できます:
+
+```toml
+[project.entry-points."supamem.reranker"]
+my_reranker = "my_pkg.module:MyReranker"
+```
+
+プラグインプロトコル:`rerank(query: str, candidates: list[RetrievedChunk]) -> list[RetrievedChunk]`。
+初回呼び出しでモデルを遅延ロード;eager ウォームアップは install/init/repair の
+fetch パイプラインで実行されます。
 
 ---
 

@@ -2,7 +2,7 @@
 
 All notable changes to `supamem` will be documented in this file.
 
-## [__NEW_VERSION__] — __DATE__
+## [0.2.4a1] — 2026-05-01
 
 First alpha of the v0.2.4 line. Ships the **code-aware reranker**
 (Phase 8 of the v0.2.0 milestone train) — every `tuned_hybrid` query

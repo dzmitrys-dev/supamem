@@ -158,6 +158,7 @@ The **SessionStart banner** (v0.1.4+) also lands a one-line status in your AI cl
 | Feature | Description |
 |---------|-------------|
 | 🔍 **Hybrid retrieval** | Tuned sparse (BM25) + dense (MiniLM) fusion, locked schema D-25 |
+| 🎯 **Code-aware reranker** | Cross-encoder `mxbai-rerank-base-v2` (Apache-2.0) rescores `tuned_hybrid` candidates by default. Disable with `retrieval.reranker = "off"` for pre-v0.2.4a1 behavior. (Phase 8, RERANK-01..04) |
 | 📚 **Markdown chunker** | Header-aware, 200-token chunks with 250-token soft max (T-1) |
 | 🤖 **MCP server** | `stdio` (default) and `http` transports, official `mcp` SDK |
 | 🪝 **Multi-client hooks** | Claude Code session-start, OpenCode session-start, Cursor MDC |
@@ -266,6 +267,17 @@ You should see a colorful banner and the credit line. 🎨
 
 > **Latest:** `v0.1.4` is published on [PyPI](https://pypi.org/project/supamem/). Released via Trusted
 > Publisher OIDC — every wheel is provenance-attested.
+
+### Models cached at install
+
+`supamem install <client>` and `supamem init` proactively download all ML prerequisites
+(MiniLM ~90 MB, BM25 ~10 MB, mxbai-rerank-base-v2 ~1 GB) with a progress bar. Cold
+post-install CLI invocations (`supamem --help`, `supamem doctor`, `supamem --version`)
+trigger zero network egress. Air-gapped first-run? Pass `--skip-models`, then run
+`supamem repair` once network is available.
+
+Models live under `platformdirs.user_cache_dir("supamem")/models/` (override with
+`SUPAMEM_CACHE_DIR`).
 
 ---
 
@@ -397,6 +409,52 @@ Pre-v0.2.3 collections auto-migrate on first post-upgrade index invocation.
 
 Transcript chunks (chunker == `transcript`) classify to `room = null` by construction —
 filter them via the existing `payload.chunker` key.
+
+---
+
+## 🎯 Code-aware reranker (v0.2.4a1+)
+
+Every `tuned_hybrid` query now rescores RRF-fused candidates through a cross-encoder
+(`mixedbread-ai/mxbai-rerank-base-v2`, Apache-2.0, ~1 GB) by **default**. Sharper
+precision on code-shaped queries; the v0.2.0 escape hatch is `retrieval.reranker = "off"`,
+which restores pre-Phase-8 byte-identical behavior.
+
+```toml
+[supamem.retrieval]
+reranker = "mxbai_v2"  # default in v0.2.4a1+; "off" restores pre-Phase-8 behavior
+
+[supamem.retrieval.reranker]
+model_id         = "mixedbread-ai/mxbai-rerank-base-v2"
+top_n            = 50   # rerank pool size; clamps to fused-candidate count
+prefetch_per_arm = 50   # widened from default 20 when reranker is on
+batch_size       = 16
+```
+
+When the reranker is on, `tuned_hybrid` widens `PREFETCH_LIMIT` to 50 per arm, skips
+the T-4 recency multiplier (cross-encoder + recency-prior is anti-aligned for code
+retrieval per PROJECT.md), and runs T-5 cosine-dedup + T-8 token-budget AFTER
+rerank. `RetrievedChunk.rerank_score` carries the cross-encoder logit when reranker
+is on; the primary `score` is replaced by it.
+
+`supamem doctor` adds a **Reranker** panel after the existing Retrieval panel:
+active reranker name, model_id, cache path, on-disk size + partial-download
+detection, last-load latency, last-100-query rerank p50/p95, and detected device
+(cuda/mps/cpu). When the cache is partial or corrupted, run `supamem repair` —
+the canonical doctor-driven self-heal entry point that re-fetches missing model
+files, re-syncs `share/`, repairs managed CLAUDE.md/AGENTS.md blocks, and
+restores client config. Idempotent.
+
+Third parties register custom rerankers via the new `supamem.reranker` plugin
+entry-point group (4th group alongside retrieval / embedder / chunker):
+
+```toml
+[project.entry-points."supamem.reranker"]
+my_reranker = "my_pkg.module:MyReranker"
+```
+
+Plugin protocol: `rerank(query: str, candidates: list[RetrievedChunk]) -> list[RetrievedChunk]`.
+Lazy model-load on first call; eager warm-up runs through the install/init/repair
+fetch pipeline.
 
 ---
 

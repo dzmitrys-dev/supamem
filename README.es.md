@@ -1,6 +1,6 @@
 **Idiomas:** [English](README.md) · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [日本語](README.ja.md) · [Русский](README.ru.md)
 
-<!-- synced-with: README.md @ ac5e38f -->
+<!-- synced-with: README.md @ __NEW_SHA__ -->
 
 > Esta traducción fue generada con asistencia de IA. Las correcciones de hablantes nativos son bienvenidas vía PR.
 
@@ -164,6 +164,7 @@ El **banner SessionStart** (v0.1.4+) también lanza una línea de estado en tu c
 | Funcionalidad | Descripción |
 |---|---|
 | 🔍 **Retrieval híbrido** | Fusión sparse (BM25) + dense (MiniLM) afinada, schema fijo D-25 |
+| 🎯 **Reranker consciente del código** | Cross-encoder `mxbai-rerank-base-v2` (Apache-2.0) re-puntúa los candidatos de `tuned_hybrid` por defecto. Desactívalo con `retrieval.reranker = "off"` para volver al comportamiento previo a v0.2.4a1. (Phase 8, RERANK-01..04) |
 | 📚 **Chunker Markdown** | Consciente de headers, chunks de 200-token con tope suave de 250-token (T-1) |
 | 🤖 **Servidor MCP** | Transportes `stdio` (default) y `http`, SDK oficial `mcp` |
 | 🪝 **Hooks multi-cliente** | session-start de Claude Code, session-start de OpenCode, MDC de Cursor |
@@ -273,6 +274,18 @@ Deberías ver un banner de colores y la línea de créditos. 🎨
 > **Última versión:** `v0.1.5` está publicado en [PyPI](https://pypi.org/project/supamem/). Lanzado vía
 > Trusted Publisher OIDC — cada wheel tiene atestación de procedencia.
 
+### Modelos en caché en la instalación
+
+`supamem install <client>` y `supamem init` descargan proactivamente todos los
+prerrequisitos ML (MiniLM ~90 MB, BM25 ~10 MB, mxbai-rerank-base-v2 ~1 GB) con
+una barra de progreso. Las invocaciones CLI en frío después de la instalación
+(`supamem --help`, `supamem doctor`, `supamem --version`) no disparan ningún
+egreso de red. ¿Primer arranque sin red? Pasa `--skip-models` y luego ejecuta
+`supamem repair` cuando la red esté disponible.
+
+Los modelos viven bajo `platformdirs.user_cache_dir("supamem")/models/`
+(sobreescribible con `SUPAMEM_CACHE_DIR`).
+
 ---
 
 ## 🎯 Superficie CLI
@@ -373,6 +386,55 @@ primera invocación de `index` tras la actualización.
 
 Los chunks de transcripción (chunker == `transcript`) se clasifican como `room = null`
 por construcción — fíltralos mediante la clave existente `payload.chunker`.
+
+---
+
+## 🎯 Reranker consciente del código (v0.2.4a1+)
+
+Cada consulta `tuned_hybrid` ahora re-puntúa los candidatos fusionados por RRF a
+través de un cross-encoder (`mixedbread-ai/mxbai-rerank-base-v2`, Apache-2.0,
+~1 GB) **por defecto**. Mayor precisión en consultas centradas en código; la
+salida de emergencia v0.2.0 es `retrieval.reranker = "off"`, que restaura el
+comportamiento idéntico byte-a-byte previo a Phase 8.
+
+```toml
+[supamem.retrieval]
+reranker = "mxbai_v2"  # default en v0.2.4a1+; "off" restaura el comportamiento previo a Phase 8
+
+[supamem.retrieval.reranker]
+model_id         = "mixedbread-ai/mxbai-rerank-base-v2"
+top_n            = 50   # tamaño del pool de rerank; se ajusta al número de candidatos fusionados
+prefetch_per_arm = 50   # ampliado desde 20 cuando el reranker está activo
+batch_size       = 16
+```
+
+Cuando el reranker está activo, `tuned_hybrid` amplía `PREFETCH_LIMIT` a 50 por
+brazo, salta el multiplicador de recencia T-4 (cross-encoder + recency-prior es
+contraproducente para retrieval de código según PROJECT.md), y ejecuta el
+cosine-dedup T-5 + token-budget T-8 DESPUÉS del rerank.
+`RetrievedChunk.rerank_score` lleva el logit del cross-encoder cuando el
+reranker está activo; el `score` primario también se reemplaza por él.
+
+`supamem doctor` añade un panel **Reranker** después del panel Retrieval
+existente: nombre del reranker activo, model_id, ruta de caché, tamaño en disco
++ detección de descarga parcial, latencia de la última carga, p50/p95 de las
+últimas 100 consultas, y dispositivo detectado (cuda/mps/cpu). Cuando la caché
+está parcial o corrupta, ejecuta `supamem repair` — el punto canónico de
+self-heal dirigido por doctor que re-descarga archivos del modelo, re-sincroniza
+`share/`, repara los bloques administrados de CLAUDE.md/AGENTS.md y restaura la
+configuración del cliente. Idempotente.
+
+Terceros pueden registrar rerankers personalizados mediante el nuevo grupo de
+entry-point `supamem.reranker` (4º grupo junto a retrieval / embedder / chunker):
+
+```toml
+[project.entry-points."supamem.reranker"]
+my_reranker = "my_pkg.module:MyReranker"
+```
+
+Protocolo de plugin: `rerank(query: str, candidates: list[RetrievedChunk]) -> list[RetrievedChunk]`.
+Carga perezosa del modelo en la primera llamada; el calentamiento eager corre a
+través del pipeline de fetch de install/init/repair.
 
 ---
 
