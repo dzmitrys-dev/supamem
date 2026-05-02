@@ -1,6 +1,6 @@
 **Idiomas:** [English](README.md) · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [日本語](README.ja.md) · [Русский](README.ru.md)
 
-<!-- synced-with: README.md @ __NEW_SHA__ -->
+<!-- synced-with: README.md @ 79dbf18 -->
 
 > Esta traducción fue generada con asistencia de IA. Las correcciones de hablantes nativos son bienvenidas vía PR.
 

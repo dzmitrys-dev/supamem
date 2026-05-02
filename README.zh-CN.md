@@ -1,6 +1,6 @@
 **语言:** [English](README.md) · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [日本語](README.ja.md) · [Русский](README.ru.md)
 
-<!-- synced-with: README.md @ __NEW_SHA__ -->
+<!-- synced-with: README.md @ 79dbf18 -->
 
 > 本翻译由 AI 协助生成。欢迎母语开发者通过 PR 修正用词。
 
