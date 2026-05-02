@@ -403,6 +403,14 @@ def cmd_install(
             "via `supamem repair` once network is available)."
         ),
     ),
+    skip_patch_agents: bool = typer.Option(
+        False,
+        "--skip-patch-agents / --no-skip-patch-agents",
+        help=(
+            "Skip auto-patching ~/.claude/agents/ tools whitelists for "
+            "supamem MCP reachability (D-LOCK-06)."
+        ),
+    ),
     enforce_search: bool = typer.Option(
         False,
         "--enforce-search",
@@ -424,6 +432,7 @@ def cmd_install(
             scope=scope.value,
             enforce_search=enforce_search,
             skip_models=skip_models,
+            skip_patch_agents=skip_patch_agents,
         )
     )
 
@@ -456,6 +465,14 @@ def cmd_repair(
         "--skip-models / --no-skip-models",
         help="Skip ML model re-fetch step (air-gapped repair).",
     ),
+    skip_patch_agents: bool = typer.Option(
+        False,
+        "--skip-patch-agents / --no-skip-patch-agents",
+        help=(
+            "Skip auto-patching ~/.claude/agents/ tools whitelists for "
+            "supamem MCP reachability (D-LOCK-06)."
+        ),
+    ),
 ) -> None:
     """Re-run install in project scope and strip stale legacy global entries.
 
@@ -478,6 +495,7 @@ def cmd_repair(
             enforce_search=enforce_search,
             dry_run=dry_run,
             skip_models=skip_models,
+            skip_patch_agents=skip_patch_agents,
         )
     )
 
@@ -504,6 +522,14 @@ def cmd_init(
         "--skip-models / --no-skip-models",
         help="Skip ML model pre-fetch (air-gapped first-run; backfill via `supamem repair`).",
     ),
+    skip_patch_agents: bool = typer.Option(
+        False,
+        "--skip-patch-agents / --no-skip-patch-agents",
+        help=(
+            "Skip auto-patching ~/.claude/agents/ tools whitelists for "
+            "supamem MCP reachability (D-LOCK-06)."
+        ),
+    ),
 ) -> None:
     """Greenfield bootstrap on a new project."""
     from pathlib import Path
@@ -513,6 +539,7 @@ def cmd_init(
     raise typer.Exit(run_init(
         cwd=Path.cwd(), yes=yes, qdrant_url=qdrant_url, force=force,
         skip_models=skip_models,
+        skip_patch_agents=skip_patch_agents,
     ))
 
 

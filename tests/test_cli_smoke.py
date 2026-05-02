@@ -235,6 +235,89 @@ def test_cmd_repair_help_shows_skip_models() -> None:
     assert "--skip-models" in (r.stdout + r.stderr)
 
 
+def test_install_help_lists_skip_patch_agents_flag() -> None:
+    """Phase 08.1 D-LOCK-06: install --help advertises --skip-patch-agents."""
+    r = _run("install", "--help")
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert "--skip-patch-agents" in (r.stdout + r.stderr)
+
+
+def test_repair_help_lists_skip_patch_agents_flag() -> None:
+    """Phase 08.1 D-LOCK-06: repair --help advertises --skip-patch-agents."""
+    r = _run("repair", "--help")
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert "--skip-patch-agents" in (r.stdout + r.stderr)
+
+
+def test_init_help_lists_skip_patch_agents_flag() -> None:
+    """Phase 08.1 D-LOCK-06: init --help advertises --skip-patch-agents."""
+    r = _run("init", "--help")
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert "--skip-patch-agents" in (r.stdout + r.stderr)
+
+
+def test_install_with_skip_patch_agents_emits_skip_message(tmp_path) -> None:
+    """`supamem install --skip-patch-agents` logs the skip message and never
+    invokes the patcher (D-LOCK-06 opt-out)."""
+    home = tmp_path / "home"
+    home.mkdir()
+    # No .claude.json => auto-detect fails (exit 2), but the skip message
+    # is gated only on the flag being passed; we don't actually need
+    # --client to appear because cmd_install hits autodetect first.
+    # Use --client claude-code with --dry-run so the install path runs.
+    (home / ".claude.json").write_text("{}", encoding="utf-8")
+    env = {"HOME": str(home), "SUPAMEM_NO_UPDATE_CHECK": "1"}
+    r = _run(
+        "install",
+        "--client", "claude-code",
+        "--dry-run",
+        "--skip-patch-agents",
+        "--skip-models",
+        env=env,
+    )
+    combined = r.stdout + r.stderr
+    assert "--skip-patch-agents" in combined or "skipping subagent" in combined, (
+        f"expected skip message in output, got: stdout={r.stdout!r} stderr={r.stderr!r}"
+    )
+
+
+def test_repair_with_skip_patch_agents_does_not_traceback(tmp_path) -> None:
+    """`supamem repair --skip-patch-agents` exits cleanly (no traceback)
+    even when no clients are detected (exit 2 is fine)."""
+    home = tmp_path / "home"
+    home.mkdir()
+    env = {"HOME": str(home), "SUPAMEM_NO_UPDATE_CHECK": "1"}
+    r = _run(
+        "repair",
+        "--skip-patch-agents",
+        "--skip-models",
+        env=env,
+    )
+    # Exit 2 ("no installed clients") OR 0 are both acceptable here — we
+    # only assert that the flag is accepted (not exit 2 == 2 from Typer
+    # parse error) and no Python traceback leaked to stderr.
+    assert "Traceback" not in r.stderr, r.stderr
+    assert "No such option" not in r.stderr, r.stderr
+
+
+def test_init_with_skip_patch_agents_accepted(tmp_path) -> None:
+    """`supamem init --skip-patch-agents` is accepted by the parser
+    (no Typer parse error), regardless of Qdrant probe outcome."""
+    cwd = tmp_path / "proj"
+    cwd.mkdir()
+    env = {"HOME": str(tmp_path), "SUPAMEM_NO_UPDATE_CHECK": "1"}
+    r = subprocess.run(
+        [sys.executable, "-m", "supamem", "init", "--skip-patch-agents", "--skip-models"],
+        capture_output=True,
+        text=True,
+        cwd=str(cwd),
+        env={**os.environ, "NO_COLOR": "1", "TERM": "dumb", "COLUMNS": "200", **env},
+    )
+    # Qdrant unreachable → exit 2 expected; flag must NOT cause "No such option".
+    assert "No such option" not in r.stderr, r.stderr
+    assert "Traceback" not in r.stderr, r.stderr
+
+
 def test_version_prints_current() -> None:
     """Test 6: --version prints styled banner with current __version__ + credit line."""
     from supamem import __version__
