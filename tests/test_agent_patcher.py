@@ -34,9 +34,6 @@ from __future__ import annotations
 from io import StringIO
 from pathlib import Path
 
-import pytest
-
-
 _FIXTURES = Path(__file__).parent / "_fixtures" / "agents"
 
 
@@ -124,23 +121,82 @@ def test_detect_state_malformed_yaml_skipped() -> None:
 
 
 def test_patch_csv_appends_at_end_preserves_spacing() -> None:
-    pytest.fail("RED: implement in Plan 02")
+    p = _import_patcher()
+    src = _read_fixture("csv-patchable.md")
+    new_text, fragment = p.patch_yaml(src)
+    assert fragment is not None
+    assert fragment["tools_form"] == "csv"
+    assert "mcp__supamem__*" in new_text
+    # Original used `, ` separators — preserve that.
+    assert ", mcp__supamem__*" in new_text
+    # Frontmatter SHA changed; original recorded.
+    assert fragment["original_frontmatter_sha256"] != fragment["patched_frontmatter_sha256"]
+    assert fragment["original_frontmatter"].startswith("---\n")
 
 
 def test_patch_csv_no_spaces_appends_no_spaces() -> None:
-    pytest.fail("RED: implement in Plan 02")
+    p = _import_patcher()
+    src = (
+        "---\n"
+        "name: tight\n"
+        "description: no-space CSV\n"
+        "tools: Read,Bash,Grep\n"
+        "---\n\n"
+        "body\n"
+    )
+    new_text, fragment = p.patch_yaml(src)
+    assert fragment is not None
+    assert fragment["tools_form"] == "csv"
+    # No space added — matches the user's existing style.
+    assert "Read,Bash,Grep,mcp__supamem__*" in new_text
+    # Sanity: did NOT inject a leading space.
+    assert ", mcp__supamem__*" not in new_text
 
 
 def test_patch_block_list_appends_with_matching_indent() -> None:
-    pytest.fail("RED: implement in Plan 02")
+    p = _import_patcher()
+    src = _read_fixture("block-list-patchable.md")
+    new_text, fragment = p.patch_yaml(src)
+    assert fragment is not None
+    assert fragment["tools_form"] == "block-list"
+    # Block-list item with the standard 2-space indent (matches siblings).
+    assert "\n  - mcp__supamem__*\n" in new_text
+    # Original block items still present.
+    assert "\n  - Read\n" in new_text
+    assert "\n  - mcp__context7__*\n" in new_text
 
 
 def test_patch_preserves_comments_in_frontmatter() -> None:
-    pytest.fail("RED: implement in Plan 02")
+    p = _import_patcher()
+    src = _read_fixture("with-comments.md")
+    new_text, fragment = p.patch_yaml(src)
+    assert fragment is not None
+    # The standalone comment on its own line MUST round-trip verbatim.
+    assert "# user-authored comment that ruamel.yaml MUST preserve" in new_text
+    # The inline comment is preserved somewhere in the frontmatter; ruamel may
+    # reposition it relative to the appended token, so we just verify it
+    # survives anywhere in the patched output.
+    assert "# inline trailing comment" in new_text
+    # The supamem token was actually appended.
+    assert "mcp__supamem__*" in new_text
 
 
 def test_patch_idempotent_when_already_covered() -> None:
-    pytest.fail("RED: implement in Plan 02")
+    p = _import_patcher()
+    # Already-covered file: patch_yaml is a no-op.
+    covered = _read_fixture("csv-supamem-wildcard-covered.md")
+    out, fragment = p.patch_yaml(covered)
+    assert out == covered
+    assert fragment is None
+
+    # End-to-end: patching a patchable file once produces patched output;
+    # patching that output a SECOND time MUST be a no-op (D-COVER-03).
+    raw = _read_fixture("csv-patchable.md")
+    once_text, once_fragment = p.patch_yaml(raw)
+    assert once_fragment is not None
+    twice_text, twice_fragment = p.patch_yaml(once_text)
+    assert twice_text == once_text
+    assert twice_fragment is None
 
 
 # ---------------------------------------------------------------------------

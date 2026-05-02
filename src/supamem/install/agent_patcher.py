@@ -79,9 +79,13 @@ _SUPAMEM_TOKEN = "mcp__supamem__*"
 
 # Module-level YAML instance — round-trip preserves CSV scalars, block-list
 # style, comments, and quoting (P5: preserve_quotes keeps `'a'` from becoming
-# `a` after a load/dump cycle).
+# `a` after a load/dump cycle). Default ruamel block-sequence indent is 0
+# (`- item` flush with parent), but Claude Code agents follow the prevailing
+# YAML convention of 2-space indented siblings (`  - item`); set indent
+# accordingly so dumped output matches the user's existing style (D-YAML-03).
 _yaml = YAML(typ="rt")
 _yaml.preserve_quotes = True
+_yaml.indent(mapping=2, sequence=4, offset=2)
 
 # Regex for the leading frontmatter block. Matches `---\n<body>\n---\n` only
 # at absolute file start (P2: frontmatter `---` is a markdown convention,
