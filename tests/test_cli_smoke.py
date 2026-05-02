@@ -183,6 +183,58 @@ def test_transcript_entry_point_loadable() -> None:
     assert callable(fn)
 
 
+def test_cold_cli_no_network(tmp_path) -> None:
+    """Plan 08-02 success criterion: cold post-install CLI invocations trigger
+    ZERO HF network egress (D-FETCH-01 cold-help purity)."""
+    env = {
+        "NO_COLOR": "1",
+        "TERM": "dumb",
+        "COLUMNS": "200",
+        "PATH": os.environ["PATH"],
+        "HOME": os.environ.get("HOME", str(tmp_path)),
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "SUPAMEM_NO_UPDATE_CHECK": "1",
+    }
+    env.pop("FORCE_COLOR", None)
+    for cmd in (["--help"], ["--version"]):
+        r = subprocess.run(
+            [sys.executable, "-m", "supamem", *cmd],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert r.returncode == 0, (cmd, r.stdout, r.stderr)
+        low = (r.stdout + r.stderr).lower()
+        assert "snapshot_download" not in low
+        assert "downloading" not in low
+
+
+def test_cmd_init_help_shows_skip_models() -> None:
+    """B1 fix: cmd_init Typer command MUST expose --skip-models, otherwise
+    the truth-statement 'supamem init calls prepare() unless --skip-models'
+    is unverifiable (running `supamem init --skip-models` would error
+    'no such option')."""
+    r = _run("init", "--help")
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert "--skip-models" in (r.stdout + r.stderr)
+
+
+def test_cmd_install_help_shows_skip_models() -> None:
+    """Mirror for cmd_install (D-FETCH-07)."""
+    r = _run("install", "--help")
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert "--skip-models" in (r.stdout + r.stderr)
+
+
+def test_cmd_repair_help_shows_skip_models() -> None:
+    """Mirror for cmd_repair (D-FETCH-07 air-gapped repair symmetry)."""
+    r = _run("repair", "--help")
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert "--skip-models" in (r.stdout + r.stderr)
+
+
 def test_version_prints_current() -> None:
     """Test 6: --version prints styled banner with current __version__ + credit line."""
     from supamem import __version__
