@@ -311,6 +311,8 @@ def test_run_index_skips_sweep_when_gate_stamped(tmp_path, monkeypatch):
         sweep_calls.append((client, cfg))
         return 0
 
+    (tmp_path / "doc.md").write_text("# heading\n\nbody\n")
+
     # Patch out heavy bits so run_index can boot.
     fake_qdrant = MagicMock()
     fake_qdrant.get_collections.return_value = MagicMock()
@@ -341,6 +343,11 @@ def test_run_index_runs_sweep_and_stamps_when_gate_none(tmp_path):
     m = Manifest()
     m.validity_migration = "0.3.1"
     m.save(manifest_file)
+
+    # ``run_index`` short-circuits when no .md/.jsonl sources are found —
+    # plant a minimal markdown file so the boot block (including our gate)
+    # is exercised.
+    (tmp_path / "doc.md").write_text("# heading\n\nbody\n")
 
     fake_qdrant = MagicMock()
     fake_qdrant.get_collections.return_value = MagicMock()
@@ -374,6 +381,8 @@ def test_run_index_does_not_stamp_on_failure(tmp_path):
     m = Manifest()
     m.validity_migration = "0.3.1"
     m.save(manifest_file)
+
+    (tmp_path / "doc.md").write_text("# heading\n\nbody\n")
 
     fake_qdrant = MagicMock()
     fake_qdrant.get_collections.return_value = MagicMock()

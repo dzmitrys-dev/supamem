@@ -301,6 +301,65 @@ def _eager_validity_migration(
     return migrated
 
 
+def _eager_path_prefixes_migration(
+    client: Any,
+    cfg: ResolvedConfig,
+    *,
+    batch: int = 512,
+) -> int:
+    """Back-fill ``path_prefixes`` on legacy chunks. Phase 11 D-PFX-06.
+
+    Scrolls every point with payload, recomputes ``path_prefixes`` from
+    ``payload["file_path"]`` via :func:`_path_prefixes`, groups updates by
+    the recomputed prefix tuple, and issues ONE batched ``set_payload`` per
+    group (Phase 7 D-09 batching invariant — mirrors :func:`_reclassify_sweep`).
+
+    Skip-on-missing-file_path matches Phase 7 ``_reclassify_sweep`` precedent
+    (Pitfall 6). Per-point ``if "path_prefixes" in payload: continue`` makes
+    re-run idempotent under crash. ``wait=True`` for per-batch durability.
+
+    Gated externally by ``manifest.path_prefixes_migration is None`` — trips
+    once per upgrade, BEFORE the per-file upsert loop so newly-upserted
+    chunks already carry ``path_prefixes`` and are never consumed by this
+    sweep (skip-guard handles the in-flight overlap window).
+
+    Returns the number of points whose payload was updated.
+    """
+    offset: Any = None
+    migrated = 0
+    while True:
+        points, offset = client.scroll(
+            collection_name=cfg.collection,
+            limit=batch,
+            with_payload=True,
+            with_vectors=False,
+            offset=offset,
+        )
+        if not points:
+            break
+        ids_to_update: dict[tuple[str, ...], list[Any]] = {}
+        for p in points:
+            payload = p.payload or {}
+            if "path_prefixes" in payload:
+                continue  # idempotent skip-guard (D-PFX-06)
+            file_path = payload.get("file_path")
+            if not file_path:
+                continue  # Pitfall 6 — legacy points may lack file_path
+            new_prefixes = tuple(_path_prefixes(file_path))
+            ids_to_update.setdefault(new_prefixes, []).append(p.id)
+        for prefixes_tuple, ids in ids_to_update.items():
+            client.set_payload(
+                collection_name=cfg.collection,
+                payload={"path_prefixes": list(prefixes_tuple)},
+                points=ids,
+                wait=True,
+            )
+            migrated += len(ids)
+        if offset is None:
+            break
+    return migrated
+
+
 def _gc_sweep(
     client: Any,
     cfg: ResolvedConfig,
@@ -362,13 +421,19 @@ def _gc_sweep(
     return deleted
 
 
-def _ensure_temporal_indexes(client: Any, cfg: ResolvedConfig) -> None:
-    """Create payload indexes on ``valid_to`` (DATETIME) and ``chunker`` (KEYWORD).
+def _ensure_payload_indexes(client: Any, cfg: ResolvedConfig) -> None:
+    """Create payload indexes on ``valid_to`` (DATETIME), ``chunker`` (KEYWORD),
+    and ``path_prefixes`` (KEYWORD on_disk).
 
-    D-INDEX-01..02: idempotent — qdrant-client treats re-creation of the
-    same-schema index as a no-op (RESEARCH §R-3). Without these, the
-    always-on ``Range(gt=now)`` temporal clause and the per-source decay
-    fan-out fall back to brute-force scans.
+    D-INDEX-01..02 (Phase 9) + D-PFX-04 (Phase 11): idempotent —
+    qdrant-client treats re-creation of the same-schema index as a no-op
+    (RESEARCH §R-3). Without these, the always-on ``Range(gt=now)``
+    temporal clause, the per-source decay fan-out, AND the path-prefix
+    filter fall back to brute-force scans.
+
+    The path_prefixes index uses the verbose ``KeywordIndexParams(type="keyword",
+    on_disk=True)`` form per D-PFX-04 — ``on_disk=True`` keeps the
+    high-cardinality prefix-string keyword index off the hot RAM path.
 
     Fail-soft + SURFACE per CLAUDE.md: errors go to ``err_console`` and
     indexing continues. The single sanctioned blanket except in the indexer
@@ -394,6 +459,23 @@ def _ensure_temporal_indexes(client: Any, cfg: ResolvedConfig) -> None:
         err_console.print(
             f"[red]temporal index creation failed: "
             f"{type(exc).__name__}: {exc}[/red]"
+        )
+
+    # Phase 11 D-PFX-04 — path_prefixes keyword index (on_disk for cardinality
+    # cost). Verbose ``KeywordIndexParams`` form rather than
+    # ``PayloadSchemaType.KEYWORD`` so we can pin ``on_disk=True``. Wrapped in
+    # its own try/except so a path_prefixes failure does NOT prevent the
+    # temporal indexes above (and vice-versa).
+    try:
+        client.create_payload_index(
+            collection_name=cfg.collection,
+            field_name="path_prefixes",
+            field_schema=qmodels.KeywordIndexParams(type="keyword", on_disk=True),
+        )
+    except Exception as exc:  # noqa: BLE001 — fail-soft + SURFACE per CLAUDE.md
+        err_console.print(
+            f"[yellow]warn:[/] could not create path_prefixes index: "
+            f"{type(exc).__name__}: {exc}"
         )
 
 
@@ -615,6 +697,7 @@ def _index_records(
             "content_hash": content_hash,
             "document": rec.text,
             "room": default_room,
+            "path_prefixes": _path_prefixes(abs_path),  # Phase 11 D-PFX-02
             "valid_from": valid_from,
             "valid_to": None,
             **rec.metadata,
@@ -768,17 +851,24 @@ def run_index(
     manifest_path = _manifest_path(cfg)
     manifest = Manifest.load(manifest_path)
 
-    # ── Phase 9 — strict ordering at run_index boot (Pitfall 7) ───────────
-    # 1. _ensure_temporal_indexes  — idempotent payload-index creation.
-    # 2. _eager_validity_migration — back-fill valid_to=None on legacy
-    #    points BEFORE per-file close-old can consume them via IsEmpty.
-    # 3. existing classifier-hash sweep gate (untouched).
-    # 4. per-file close-old BEFORE upsert (in _process_one_source).
-    # 5. _gc_sweep at end of run, AFTER all upserts.
+    # ── Phase 9 + Phase 11 — strict ordering at run_index boot (Pitfall 7) ──
+    # 1. _ensure_payload_indexes        — idempotent payload-index creation
+    #                                     (valid_to, chunker, path_prefixes).
+    # 2. _eager_validity_migration      — back-fill valid_to=None on legacy
+    #                                     points BEFORE per-file close-old
+    #                                     can consume them via IsEmpty.
+    # 3. _eager_path_prefixes_migration — back-fill path_prefixes on legacy
+    #                                     points (Phase 11 D-PFX-06);
+    #                                     independent of validity but
+    #                                     grouped here for boot-time
+    #                                     readability.
+    # 4. existing classifier-hash sweep gate (untouched).
+    # 5. per-file close-old BEFORE upsert (in _process_one_source).
+    # 6. _gc_sweep at end of run, AFTER all upserts.
     # Out-of-order writes resurrect closed legacy chunks.
 
-    # ── Phase 9 D-INDEX-01 / D-INDEX-02 — payload indexes (idempotent) ────
-    _ensure_temporal_indexes(client, cfg)
+    # ── Phase 9 D-INDEX-01..02 + Phase 11 D-PFX-04 — payload indexes ──────
+    _ensure_payload_indexes(client, cfg)
 
     # ── Phase 9 D-NULL-03 / Pitfall 7 — eager validity migration gate ─────
     # Mirrors classifier_hash gate; trips exactly once post-upgrade.
@@ -803,6 +893,33 @@ def run_index(
             # Persist gate ONLY on full success; otherwise leave None to retry.
             from supamem import __version__ as _supamem_version  # noqa: PLC0415
             manifest.validity_migration = _supamem_version
+
+    # ── Phase 11 D-PFX-06 / Pitfall 4 — eager path-prefixes migration gate ─
+    # Mirrors validity_migration gate; trips exactly once post-upgrade.
+    # Stamp ONLY inside the ``if sweep_ok:`` block so a partial / failed
+    # sweep leaves the gate None and the next run retries (the per-point
+    # ``if "path_prefixes" in payload: continue`` skip-guard inside the
+    # sweep makes that retry near-no-op for already-migrated points).
+    if manifest.path_prefixes_migration is None:
+        err_console.print(
+            "[supamem.brand]Path-prefix migration — back-filling "
+            "path_prefixes on legacy chunks…[/supamem.brand]"
+        )
+        sweep_ok = False
+        try:
+            migrated = _eager_path_prefixes_migration(client, cfg)
+            sweep_ok = True
+            err_console.print(
+                f"  back-filled {migrated} legacy chunks with path_prefixes"
+            )
+        except Exception as exc:  # noqa: BLE001 — fail-soft, but SURFACE
+            err_console.print(
+                f"[red]path_prefixes migration failed: "
+                f"{type(exc).__name__}: {exc}[/red]"
+            )
+        if sweep_ok:
+            from supamem import __version__ as _supamem_version  # noqa: PLC0415
+            manifest.path_prefixes_migration = _supamem_version
 
     # Plan 07-02 D-08 / D-09 / R-04: gate the classifier sweep on hash drift.
     # Pre-Phase-7 manifests have classifier_hash=None, which trips the gate

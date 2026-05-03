@@ -28,7 +28,7 @@ Pitfall references:
 - Pitfall 4 (chunk-id collision): ``_chunk_id`` and ``_transcript_chunk_id``
   MUST NEVER produce equal uuids for any reasonable inputs.
 - Pitfall 7 (eager-migration ordering): strict order in ``run_index`` is
-  ``_ensure_temporal_indexes → _eager_validity_migration → existing
+  ``_ensure_payload_indexes → _eager_validity_migration → existing
   reclassify_sweep → per-file close-old → upsert → _gc_sweep``. The
   validity migration MUST run BEFORE per-file close-old, otherwise legacy
   pre-Phase-9 points have no ``valid_to`` payload and the close-window
@@ -250,7 +250,7 @@ def test_eager_migration_sets_valid_to_null_on_legacy_points():
 def test_eager_migration_runs_BEFORE_close_old():
     """Pitfall 7: strict ordering invariant.
 
-    ``_ensure_temporal_indexes → _eager_validity_migration → reclassify_sweep
+    ``_ensure_payload_indexes → _eager_validity_migration → reclassify_sweep
     → per-file close-old → upsert → _gc_sweep``.
 
     The eager migration MUST run BEFORE per-file close-old; otherwise legacy
@@ -357,16 +357,16 @@ def test_gc_batches_at_512():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# D-INDEX-01 / D-INDEX-02 — _ensure_temporal_indexes
+# D-INDEX-01 / D-INDEX-02 — _ensure_payload_indexes
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _import_ensure_temporal_indexes():
+def _import_ensure_payload_indexes():
     try:
-        from supamem.indexer import _ensure_temporal_indexes
+        from supamem.indexer import _ensure_payload_indexes
     except ImportError:
-        pytest.skip("Plan 03 lands _ensure_temporal_indexes")
-    return _ensure_temporal_indexes
+        pytest.skip("Plan 03 lands _ensure_payload_indexes")
+    return _ensure_payload_indexes
 
 
 def test_ensure_indexes_creates_valid_to_datetime():
@@ -375,7 +375,7 @@ def test_ensure_indexes_creates_valid_to_datetime():
     Without this, the always-on Range(gt=now) clause falls back to a
     brute-force scan and degrades latency on large collections.
     """
-    fn = _import_ensure_temporal_indexes()
+    fn = _import_ensure_payload_indexes()
     client = MagicMock()
     cfg = _cfg_with_temporal()
     fn(client, cfg)
@@ -394,7 +394,7 @@ def test_ensure_indexes_creates_chunker_keyword():
     Lets the transcript-decay loop iterate only candidates with
     ``chunker == 'transcript'`` without a brute-force scan.
     """
-    fn = _import_ensure_temporal_indexes()
+    fn = _import_ensure_payload_indexes()
     client = MagicMock()
     cfg = _cfg_with_temporal()
     fn(client, cfg)
@@ -413,7 +413,7 @@ def test_ensure_indexes_idempotent_on_failure_surfaces_error(capsys):
     qdrant-client raises on truly-unrecoverable index ops; CLAUDE.md
     forbids silent except-pass on indexing paths — error MUST be surfaced.
     """
-    fn = _import_ensure_temporal_indexes()
+    fn = _import_ensure_payload_indexes()
     client = MagicMock()
     client.create_payload_index.side_effect = RuntimeError("boom")
     cfg = _cfg_with_temporal()
