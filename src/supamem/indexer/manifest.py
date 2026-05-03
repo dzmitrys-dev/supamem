@@ -29,6 +29,12 @@ CLASSIFIER_HASH_KEY = "__classifier_hash__"
 # Mirrors :data:`CLASSIFIER_HASH_KEY` precedent (byte-stable rollback when
 # the field is None — the key is omitted from the JSON dump entirely).
 VALIDITY_MIGRATION_KEY = "__validity_migration__"
+# Phase 11 D-PFX-06 — gate for one-shot eager path-prefixes migration sweep.
+# Set to ``supamem.__version__`` on first successful sweep; absent on
+# pre-Phase-11 manifests so the gate trips exactly once post-upgrade.
+# Mirrors :data:`VALIDITY_MIGRATION_KEY` precedent (byte-stable rollback when
+# the field is None — the key is omitted from the JSON dump entirely).
+PATH_PREFIXES_MIGRATION_KEY = "__path_prefixes_migration__"
 
 
 @dataclass
@@ -45,6 +51,12 @@ class Manifest:
     # eager-validity-migration sweep. Missing key on Phase-8-era manifests
     # loads as None which trips the gate exactly once on first post-upgrade
     # run (mirrors classifier_hash gate). Byte-stable rollback: the key is
+    # NOT emitted to JSON when the field is None.
+    path_prefixes_migration: Optional[str] = None
+    # Phase 11 D-PFX-06: stamped to ``supamem.__version__`` on first successful
+    # eager-path-prefixes-migration sweep. Missing key on pre-Phase-11 manifests
+    # loads as None which trips the gate exactly once on first post-upgrade
+    # run (mirrors validity_migration gate). Byte-stable rollback: the key is
     # NOT emitted to JSON when the field is None.
 
     @classmethod
@@ -70,6 +82,14 @@ class Manifest:
         validity_migration = (
             str(raw_validity_migration)
             if isinstance(raw_validity_migration, str)
+            else None
+        )
+        # Phase 11 D-PFX-06: path-prefixes migration gate — top-level reserved
+        # key, missing → None (gate trips once on first post-upgrade run_index).
+        raw_path_prefixes_migration = raw.get(PATH_PREFIXES_MIGRATION_KEY)
+        path_prefixes_migration = (
+            str(raw_path_prefixes_migration)
+            if isinstance(raw_path_prefixes_migration, str)
             else None
         )
         transcripts: dict[str, dict[str, dict]] = {}
@@ -104,6 +124,7 @@ class Manifest:
             transcripts=transcripts,
             classifier_hash=classifier_hash,
             validity_migration=validity_migration,
+            path_prefixes_migration=path_prefixes_migration,
         )
 
     def save(self, path: Path) -> None:
@@ -121,6 +142,11 @@ class Manifest:
         # manifests round-trip byte-stable (mirrors classifier_hash convention).
         if self.validity_migration is not None:
             payload[VALIDITY_MIGRATION_KEY] = self.validity_migration
+        # Phase 11 D-PFX-06: emit path_prefixes_migration only when set so
+        # pre-Phase-11 manifests round-trip byte-stable (mirrors
+        # validity_migration / classifier_hash convention).
+        if self.path_prefixes_migration is not None:
+            payload[PATH_PREFIXES_MIGRATION_KEY] = self.path_prefixes_migration
         path.write_text(
             json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
         )
