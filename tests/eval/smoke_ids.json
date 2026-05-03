@@ -1,0 +1,52 @@
+{
+  "seed": 0,
+  "axes": [
+    "single-session-user",
+    "single-session-assistant",
+    "single-session-preference",
+    "temporal-reasoning",
+    "multi-session"
+  ],
+  "ids": [
+    {
+      "id": "lme_single-session-user_6",
+      "axis": "single-session-user"
+    },
+    {
+      "id": "lme_single-session-user_9",
+      "axis": "single-session-user"
+    },
+    {
+      "id": "lme_single-session-assistant_0",
+      "axis": "single-session-assistant"
+    },
+    {
+      "id": "lme_single-session-assistant_4",
+      "axis": "single-session-assistant"
+    },
+    {
+      "id": "lme_single-session-preference_8",
+      "axis": "single-session-preference"
+    },
+    {
+      "id": "lme_single-session-preference_7",
+      "axis": "single-session-preference"
+    },
+    {
+      "id": "lme_temporal-reasoning_6",
+      "axis": "temporal-reasoning"
+    },
+    {
+      "id": "lme_temporal-reasoning_4",
+      "axis": "temporal-reasoning"
+    },
+    {
+      "id": "lme_multi-session_7",
+      "axis": "multi-session"
+    },
+    {
+      "id": "lme_multi-session_5",
+      "axis": "multi-session"
+    }
+  ]
+}
