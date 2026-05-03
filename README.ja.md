@@ -547,6 +547,103 @@ knob を切り替えてもコード / ADR / ドキュメントのランキング
 
 ---
 
+## 🔭 フィルタ付き retrieval バックエンド(v0.3.0a3+)
+
+`filtered_dense` は、`tuned_hybrid` の上に `where` フィルタとヒットごとの preview 上限を
+重ねた "scoped+capped" な retrieval バックエンドです。「指定したパス/room にスコープした
+ランク済み結果を、preview を Qdrant から出る前に N 文字に切り詰めて返す」という挙動を
+バックエンドレベルで強制したいときに使います。
+
+```toml
+[supamem.retrieval]
+backend = "filtered_dense"
+
+[supamem.retrieval.filtered_dense]
+preview_chars = 240   # 既定 240;0 で truncation 完全無効
+```
+
+選び方は他のバックエンド(`tuned_hybrid`、`dense`、`bm25`)と同じです —
+`supamem.retrieval` プラグイン entry-point から登録され、切り替えはコードを書かずに
+config だけで完結します。MCP トランスポート層の上限(`mcp.caps.max_preview_chars`)は
+バックエンド上限のさらに上に重ねて適用され、両方とも `0` で個別に無効化できます。
+
+### `where` フィルタ — magic key
+
+`dual_memory_search`(およびエイリアス `qdrant_find`)は
+`where: dict[str, str | list[str]]` 引数を受け取り、Qdrant の payload フィルタに変換
+されます。Phase 7 の `room` キーに加えて、新たに 2 つの magic key を認識します:
+
+```python
+# 1. path_prefix — 左端アンカーの厳密パスセグメント一致
+dual_memory_search(query="auth flow", where={"path_prefix": "src/supamem/retrieval"})
+
+# 複数 prefix の OR(Qdrant MatchAny)
+dual_memory_search(
+    query="rate limit",
+    where={"path_prefix": ["src/supamem", "tests/test_filtered_dense.py"]},
+)
+
+# 2. valid_to: "now" — Phase 9 の常時オン時間条件の no-op エイリアス
+dual_memory_search(query="session", where={"valid_to": "now"})
+```
+
+セマンティクス:
+
+- **`path_prefix`** は `/` セグメント境界で左端アンカーされます。indexer は chunk ごとに
+  `payload.path_prefixes: list[str]` を保存します(例:
+  `src/supamem/retrieval/filters.py` →
+  `["src", "src/supamem", "src/supamem/retrieval", "src/supamem/retrieval/filters.py"]`)。
+  `path_prefix="src/supa"` は `src/supamem/...` に **一致しません** ——`"src/supa"` は
+  保存されている prefix セグメントではなく、完全な `/` セグメント境界のみが一致します
+  (ファイルシステムのパス意味論に従います)。
+- **`valid_to: "now"`** は no-op エイリアスとして受理され、Phase 9 の常時オン時間条件を
+  ドキュメント化します。それ以外の値は `ValueError` を投げます —— time-travel クエリは
+  スコープ外です。コレクションに残す履歴 chunk を制御するには `retention_days` を
+  使ってください。
+
+`where` の複数キーは AND、同一キー内のリスト値は OR(`MatchAny`)です。
+
+### マイグレーション
+
+レガシー chunk(v0.3.0a3 より前にインデックスされたもの)は `path_prefixes` を持ちません。
+アップグレード後最初の `supamem index` が一回限りの scroll-and-`set_payload` パスを実行し、
+chunk ごとに `path_prefixes` をバックフィルします —— 純粋なメタデータ更新で
+**re-embedding コストはゼロ**、以降の実行は冪等。`--force` 再インデックスは **不要**です。
+
+### Doctor パネル
+
+`supamem doctor` に「Filtered-dense backend」パネルが追加され、解決された
+`preview_chars` 値と `[source: ...]` 出典行を表示します。構造上 read-only;doctor の
+exit code を変えることはありません。
+
+---
+
+## 🚫 supamem が **やらないこと**
+
+`supamem` は **エージェント呼び出しに identity / wake-up / prelude コンテキストを自動
+注入しません** —— retrieval は常に明示的なクエリで明示的に要求されます。隠された
+「エージェント身元」層、SessionStart 時にモデルへ暗黙コンテキストを押し込む wake-up
+ペイロード、`query` が空のときに retrieval を発火させる MCP tool —— いずれも存在しません。
+
+これは 2 重に固定されています:
+
+1. **Schema レベル(v0.3.0a3+):** すべての retrieval tool の `query` 引数は
+   `Field(..., min_length=1, max_length=...)` —— 必須・非空で、tool 登録時に schema
+   レベルで強制されます。空の `query` は構造化された MCP バリデーションエラーで明示的に
+   拒否され、既定コンテキストで暗黙置換されることはありません。
+2. **テストレベル(FILT-02):** `tests/test_no_identity_tier.py` は CI で強制される
+   回帰テストで、登録された MCP tool 名が
+   `(?i)(wake[_-]?up|identity|prelude|inject)` に一致した場合、または retrieval tool の
+   JSON Schema が `query` を `required` から外す / `minLength >= 1` を失った場合に
+   ビルドを失敗させます。
+
+セッション開始時に supamem コンテキストをロードしたい場合は、既存の SessionStart バナー
+hook がサポート対象です —— 1 行のステータス(コレクション、chunk 数、audit ログパス)
+を注入するだけで、retrieval 結果をモデルに暗黙に流し込むことは決してしません。
+モデルがコーパスを読むには `dual_memory_search` を呼ぶ必要があります。
+
+---
+
 ## 🪛 クライアントへの配線
 
 <details>
