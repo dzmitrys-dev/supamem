@@ -1,6 +1,6 @@
 **Языки:** [English](README.md) · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [日本語](README.ja.md) · [Русский](README.ru.md)
 
-<!-- synced-with: README.md @ dcd3185 -->
+<!-- synced-with: README.md @ 3a24042 -->
 
 > Перевод выполнен с помощью ИИ. Корректировки от носителей языка приветствуются — открывайте PR.
 
@@ -341,7 +341,7 @@ pip uninstall supamem
 | `supamem stats` | Welford schema-v2 счётчики использования из `.supamem/state/` |
 | `supamem live` | 👀 Live-дашборд audit JSONL — безопасен в пайпе (plain JSONL вне TTY); обрабатывает ротацию, ресайз, Ctrl-C |
 | `supamem migrate` | Brownfield-миграция с уже существующей коллекции `dev_memory` |
-| `supamem eval` | Прогон регрессионного харнесса по встроенному корпусу из 33 запросов |
+| `supamem eval` | Запустить bench-харнесс. `--suite goldens` (по умолчанию, встроенный регрессионный корпус из 33 запросов) или `--suite longmemeval_s` (ленивая выгрузка LongMemEval_S, ~3 ГБ при первом запуске; быстрый путь CI — стратифицированный по осям подсет из 10 вопросов, полный прогон ~500 вопросов гейтится `--full`). Эмитит MTEB-style JSON envelope в `~/.supamem/eval/<utc-iso>.json`. Судья по умолчанию — оффлайновый эвристический; передайте `--judge ollama:<model>` для локального Ollama-судьи — SaaS-эндпоинты отвергаются (D-07). Опциональный extra: `pip install supamem[eval]` для триады RAGAS (v0.3.0a2+). Легаси-режим `--regress` сохранён. |
 | `supamem uninstall --client <name>` | Чисто откатить `supamem install` |
 | `supamem unpatch-agents` | 🔄 Откатить патчи доступности субагентов (v0.2.5+). Восстанавливает файлы агентов в их допатчевую форму по манифесту `~/.cache/supamem/agent_patches.json`. Файлы, отредактированные вами после патча, пропускаются с предупреждением. Запускайте ПЕРЕД `pip uninstall supamem` для чистой деинсталляции. |
 

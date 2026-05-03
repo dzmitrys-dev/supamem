@@ -1,6 +1,6 @@
 **言語:** [English](README.md) · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [日本語](README.ja.md) · [Русский](README.ru.md)
 
-<!-- synced-with: README.md @ dcd3185 -->
+<!-- synced-with: README.md @ 3a24042 -->
 
 > この翻訳は AI 支援によるものです。ネイティブスピーカーによる修正 PR を歓迎します。
 
@@ -335,7 +335,7 @@ pip uninstall supamem
 | `supamem stats` | `.supamem/state/` からの Welford schema-v2 利用カウンタ |
 | `supamem live` | 👀 audit JSONL を追跡するライブダッシュボード — パイプセーフ(非 TTY 時はプレーン JSONL);ローテーション、リサイズ、Ctrl-C を処理 |
 | `supamem migrate` | 既存 `dev_memory` コレクションからのブラウンフィールド移行 |
-| `supamem eval` | 内蔵 33 クエリ正解コーパスに対するリグレッションハーネス実行 |
+| `supamem eval` | bench ハーネスを実行。`--suite goldens`(デフォルト、内蔵 33 クエリのリグレッション正解コーパス)または `--suite longmemeval_s`(初回実行時に LongMemEval_S を遅延フェッチ、~3 GB;CI 高速パスは軸別層化された 10 問サブセット、完全な ~500 問は `--full` でゲート)。MTEB 形式の JSON envelope を `~/.supamem/eval/<utc-iso>.json` に出力。デフォルトジャッジはオフラインのヒューリスティック;ローカル Ollama ジャッジは `--judge ollama:<model>` で指定 — SaaS エンドポイントは拒否されます(D-07)。オプション extra: `pip install supamem[eval]` で RAGAS トライアド有効(v0.3.0a2+)。レガシー `--regress` モードは温存。 |
 | `supamem uninstall --client <name>` | `supamem install` をクリーンに反転 |
 | `supamem unpatch-agents` | 🔄 サブエージェント到達性パッチを反転(v0.2.5+)。`~/.cache/supamem/agent_patches.json` のマニフェストに従って agent ファイルをパッチ前の形に復元。あなたが編集済みのファイルは警告付きでスキップ。クリーンなアンインストールのため `pip uninstall supamem` の前に実行してください。 |
 

@@ -1,6 +1,6 @@
 **语言:** [English](README.md) · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [日本語](README.ja.md) · [Русский](README.ru.md)
 
-<!-- synced-with: README.md @ dcd3185 -->
+<!-- synced-with: README.md @ 3a24042 -->
 
 > 本翻译由 AI 协助生成。欢迎母语开发者通过 PR 修正用词。
 
@@ -329,7 +329,7 @@ pip uninstall supamem
 | `supamem stats` | 来自 `.supamem/state/` 的 Welford schema-v2 使用计数 |
 | `supamem live` | 👀 跟踪 audit JSONL 的实时仪表盘 — 管道安全(非 TTY 时输出纯 JSONL);处理日志轮转、终端尺寸变化、Ctrl-C |
 | `supamem migrate` | 从已有 `dev_memory` 集合的棕地迁移 |
-| `supamem eval` | 对内置 33 条 golden 查询跑回归测试 |
+| `supamem eval` | 跑 bench 套件。`--suite goldens`(默认,内置 33 条 golden 回归语料)或 `--suite longmemeval_s`(首次运行时按需拉取 LongMemEval_S,~3 GB;CI 快路径为 10 题按轴分层子集,完整 ~500 题需 `--full`)。输出 MTEB 风格 JSON 到 `~/.supamem/eval/<utc-iso>.json`。默认裁判为离线启发式;传 `--judge ollama:<model>` 接本机 Ollama —— 拒绝 SaaS 端点(D-07)。可选附加包:`pip install supamem[eval]` 启用 RAGAS 三件套(v0.3.0a2+)。保留旧版 `--regress` 模式。 |
 | `supamem uninstall --client <name>` | 干净反向 `supamem install` |
 | `supamem unpatch-agents` | 🔄 反向子代理可达性补丁(v0.2.5+)。按 `~/.cache/supamem/agent_patches.json` 清单将 agent 文件还原到打补丁前的形态。已被你修改过的文件会带告警跳过。`pip uninstall supamem` 之前先跑这条以获得干净卸载。 |
 
