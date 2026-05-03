@@ -471,6 +471,31 @@ def test_unpatch_agents_warns_on_user_edited_file(tmp_path) -> None:
     )
 
 
+# ───── Phase 10 Plan 10-01 — `supamem eval` surface (D-CLI-01, D-CLI-02) ─
+
+
+def test_eval_help_smoke() -> None:
+    """Plan 10-01: ``supamem eval --help`` exits 0 and surfaces the public
+    flag set from D-CLI-01 (``--suite`` and ``--judge`` minimum)."""
+    r = _run("eval", "--help")
+    assert r.returncode == 0, r.stderr
+    out = r.stdout + r.stderr
+    assert "--suite" in out, f"expected --suite in eval --help, got: {out!r}"
+    assert "--judge" in out, f"expected --judge in eval --help, got: {out!r}"
+
+
+def test_eval_list_suites() -> None:
+    """D-CLI-02: ``supamem eval --list-suites`` exits 0 and prints both
+    registered suites for discoverability without nesting subcommands."""
+    r = _run("eval", "--list-suites")
+    assert r.returncode == 0, r.stderr
+    out = r.stdout + r.stderr
+    assert "goldens" in out, f"expected 'goldens' suite in --list-suites, got: {out!r}"
+    assert "longmemeval_s" in out, (
+        f"expected 'longmemeval_s' suite in --list-suites, got: {out!r}"
+    )
+
+
 def test_version_prints_current() -> None:
     """Test 6: --version prints styled banner with current __version__ + credit line."""
     from supamem import __version__
