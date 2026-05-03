@@ -12,10 +12,12 @@ from supamem.eval.auto_goldens import (
     assert_no_saas_llm_env,
     derive_required_substrings,
 )
+from supamem.eval.report import REPORT_METRIC_NAMES
 from supamem.eval.runner import BASELINE, run_bench
 
 __all__ = [
     "BASELINE",
+    "REPORT_METRIC_NAMES",
     "assert_no_saas_llm_env",
     "derive_required_substrings",
     "run_bench",

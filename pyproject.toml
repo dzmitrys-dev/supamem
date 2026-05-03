@@ -69,6 +69,7 @@ include = [
   "src/supamem/**/*.mdc",
   "src/supamem/**/*.sh",
   "src/supamem/**/*.jsonl",
+  "src/supamem/**/*.json",
   "src/supamem/**/*.toml",
 ]
 

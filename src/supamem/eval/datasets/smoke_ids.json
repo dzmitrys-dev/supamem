@@ -1,0 +1,52 @@
+{
+  "seed": 0,
+  "axes": [
+    "single_session_user",
+    "single_session_assistant",
+    "multi_session",
+    "temporal_reasoning",
+    "knowledge_update"
+  ],
+  "ids": [
+    {
+      "id": "7e974930",
+      "axis": "knowledge_update"
+    },
+    {
+      "id": "c6853660",
+      "axis": "knowledge_update"
+    },
+    {
+      "id": "gpt4_59c863d7",
+      "axis": "multi_session"
+    },
+    {
+      "id": "gpt4_d84a3211",
+      "axis": "multi_session"
+    },
+    {
+      "id": "16c90bf4",
+      "axis": "single_session_assistant"
+    },
+    {
+      "id": "4baee567",
+      "axis": "single_session_assistant"
+    },
+    {
+      "id": "af8d2e46",
+      "axis": "single_session_user"
+    },
+    {
+      "id": "bc8a6e93_abs",
+      "axis": "single_session_user"
+    },
+    {
+      "id": "gpt4_61e13b3c",
+      "axis": "temporal_reasoning"
+    },
+    {
+      "id": "gpt4_93f6379c",
+      "axis": "temporal_reasoning"
+    }
+  ]
+}
