@@ -333,7 +333,7 @@ discover this flow naturally.
 | `supamem stats` | Welford schema-v2 usage counters from `.supamem/state/` |
 | `supamem live` | 👀 Live dashboard tailing the audit JSONL — pipe-safe (plain JSONL when not a TTY); handles rotation, resize, Ctrl-C |
 | `supamem migrate` | Brownfield migration from a pre-existing `dev_memory` collection |
-| `supamem eval` | Run the regression harness against the bundled 33-query golden corpus |
+| `supamem eval` | Run the bench harness. `--suite goldens` (default, bundled 33-query regression corpus) or `--suite longmemeval_s` (lazy-fetched LongMemEval_S, ~3 GB on first run; CI fast-path is a 10-Q axis-stratified subset, full ~500-Q gated by `--full`). Outputs an MTEB-style JSON envelope to `~/.supamem/eval/<utc-iso>.json`. Default judge is heuristic (offline); pass `--judge ollama:<model>` for a localhost Ollama judge — SaaS endpoints are refused (D-07). Optional extra: `pip install supamem[eval]` for the RAGAS triad (v0.3.0a2+). Legacy `--regress` mode preserved. |
 | `supamem uninstall --client <name>` | Reverse `supamem install` cleanly. Strips supamem from BOTH project and user scopes. |
 | `supamem unpatch-agents` | 🔄 Reverse subagent reachability patches (v0.2.5+). Restores agent files to their pre-patch form per the manifest at `~/.cache/supamem/agent_patches.json`. Skips files you've edited since with a per-file warning. Run BEFORE `pip uninstall supamem` for a clean uninstall. |
 
