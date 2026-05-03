@@ -19,3 +19,4 @@ class RetrievedChunk(BaseModel):
     headers: Optional[dict[str, str]] = None
     payload: Optional[dict[str, Any]] = None
     rerank_score: Optional[float] = None
+    preview: Optional[str] = None  # Phase 11 D-PREV-04 (additive — backend-side per-hit cap)
