@@ -1,0 +1,13 @@
+[
+  {
+    "question_id": "fixture_ssu_0",
+    "question_type": "single-session-user",
+    "question": "What did the user mention about their morning routine?",
+    "question_date": "2024-01-15",
+    "answer": "The user wakes at 6am and runs 5km.",
+    "answer_session_ids": ["s_001"],
+    "haystack_dates": ["2024-01-10"],
+    "haystack_session_ids": ["s_001"],
+    "haystack_sessions": [[{"role": "user", "content": "I run 5km every morning at 6am."}]]
+  }
+]
