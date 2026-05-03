@@ -111,6 +111,15 @@ class ResolvedConfig:
     recency_per_source_transcript_half_life_days: float = 14.0
     recency_per_source_transcript_alpha: float = 0.7
     temporal_retention_days: int = 90  # 0 = kept-forever escape hatch
+    # ── Phase 11 (FILT-01) ────────────────────────────────────────────────
+    # Backend-level per-hit preview cap for the ``filtered_dense`` retrieval
+    # backend. Mapped from ``[supamem.retrieval.filtered_dense] preview_chars``
+    # via ``_NESTED_TABLES``. ``0`` disables truncation (preview becomes the
+    # full text); positive values cap each hit's preview at N chars with the
+    # ellipsis-on-truncate semantics from ``mcp_server.py:227`` (D-PREV-02).
+    # Independent of the MCP transport cap (``mcp_caps_max_preview_chars``);
+    # both caps act on the SAME RAW INPUT (``h.text``) — never composed (D-PREV-03).
+    retrieval_filtered_dense_preview_chars: int = 240
 
 
 @dataclass
@@ -149,6 +158,8 @@ class ConfigChain:
     recency_per_source_transcript_half_life_days: Source = "default"
     recency_per_source_transcript_alpha: Source = "default"
     temporal_retention_days: Source = "default"
+    # Phase 11 FILT-01.
+    retrieval_filtered_dense_preview_chars: Source = "default"
 
 
 _LEGACY_ENV: dict[str, str] = {
@@ -225,6 +236,15 @@ _NESTED_TABLES: list[tuple[str, dict[str, str]]] = [
         "temporal",
         {
             "retention_days": "temporal_retention_days",
+        },
+    ),
+    # ── Phase 11 FILT-01 — [supamem.retrieval.filtered_dense] ────────────
+    # Two-level dotted key; _apply_nested .split(".") traversal handles
+    # arbitrary depth (verified via existing two-level [supamem.mcp.caps]).
+    (
+        "retrieval.filtered_dense",
+        {
+            "preview_chars": "retrieval_filtered_dense_preview_chars",
         },
     ),
 ]
@@ -436,6 +456,14 @@ def load_config(cwd: Path | None = None) -> tuple[ResolvedConfig, ConfigChain]:
         err_console.print(
             f"[supamem.err]config: temporal.retention_days="
             f"{cfg.temporal_retention_days} must be >= 0 (0 = kept-forever)"
+        )
+        raise SystemExit(2)
+    # Phase 11 FILT-01 D-PREV-01 — preview_chars >= 0; 0 disables truncation.
+    if cfg.retrieval_filtered_dense_preview_chars < 0:
+        err_console.print(
+            f"[supamem.err]config: retrieval.filtered_dense.preview_chars="
+            f"{cfg.retrieval_filtered_dense_preview_chars} must be >= 0 "
+            "(0 disables truncation, positive values cap each hit's preview)."
         )
         raise SystemExit(2)
 
