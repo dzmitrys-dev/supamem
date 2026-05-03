@@ -839,6 +839,20 @@ def run_doctor(*, redact_secrets: bool = True) -> int:
     # ── Section 2i: Subagent reachability (Phase 08.1 D-DOCTOR-01..05) ───
     _render_subagent_reachability_panel()
 
+    # ── Section 2j: Filtered-dense backend (Phase 11 D-CS-02) ────────────
+    # Read-only one-line panel — NEVER flips exit code (mirrors Plan 08.1
+    # D-DOCTOR-04 invariant). Surfaces the resolved per-hit preview cap so
+    # users wiring `retrieval.backend = "filtered_dense"` can confirm their
+    # `[retrieval.filtered_dense] preview_chars` override landed.
+    console.print()
+    console.print("[supamem.brand]Filtered-dense backend[/supamem.brand]")
+    pcap = getattr(cfg, "retrieval_filtered_dense_preview_chars", 240)
+    pcap_src = getattr(chain, "retrieval_filtered_dense_preview_chars", "default")
+    if pcap == 0:
+        ok(f"preview_chars  = {pcap}  [source: {pcap_src}]  (0 = full text, no truncation)")
+    else:
+        ok(f"preview_chars  = {pcap}  [source: {pcap_src}]")
+
     # ── Section 3: Installed clients drift ───────────────────────────────
     console.print()
     console.print("[supamem.brand]Installed clients[/supamem.brand]")
