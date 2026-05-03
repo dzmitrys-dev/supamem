@@ -574,6 +574,101 @@ the `IsEmpty` runtime filter.
 
 ---
 
+## 🔭 Filtered retrieval backend (v0.3.0a3+)
+
+`filtered_dense` is a scoped+capped retrieval backend that wraps `tuned_hybrid` with a
+`where` filter and a per-hit preview cap. Use it when you want backend-level enforcement
+of "give me ranked results scoped to *this* path/room, with previews capped at *N* chars
+before they ever leave Qdrant".
+
+```toml
+[supamem.retrieval]
+backend = "filtered_dense"
+
+[supamem.retrieval.filtered_dense]
+preview_chars = 240   # default 240; 0 disables truncation entirely
+```
+
+Selection mirrors every other backend (`tuned_hybrid`, `dense`, `bm25`) — registered via
+the `supamem.retrieval` plugin entry-point group; switching is a config-only change with
+no code edits. The MCP transport cap (`mcp.caps.max_preview_chars`) continues to apply on
+top of the backend cap; both are independently disable-able by setting to `0`.
+
+### `where` filter — magic keys
+
+`dual_memory_search` (and the `qdrant_find` alias) accept a `where: dict[str, str | list[str]]`
+parameter that translates to a Qdrant payload filter. Beyond the Phase 7 `room` key, two
+new magic keys are recognized:
+
+```python
+# 1. path_prefix — left-anchored exact path-segment match
+dual_memory_search(query="auth flow", where={"path_prefix": "src/supamem/retrieval"})
+
+# OR across multiple prefixes (Qdrant MatchAny)
+dual_memory_search(
+    query="rate limit",
+    where={"path_prefix": ["src/supamem", "tests/test_filtered_dense.py"]},
+)
+
+# 2. valid_to: "now" — no-op alias for the always-on temporal clause (Phase 9)
+dual_memory_search(query="session", where={"valid_to": "now"})
+```
+
+Semantics:
+
+- **`path_prefix`** is left-anchored on `/`-segment boundaries. Indexer stores
+  `payload.path_prefixes: list[str]` per chunk (e.g. `src/supamem/retrieval/filters.py`
+  → `["src", "src/supamem", "src/supamem/retrieval", "src/supamem/retrieval/filters.py"]`).
+  `path_prefix="src/supa"` does **not** match `src/supamem/...` because `"src/supa"` is
+  not a stored prefix segment — only complete `/`-segment boundaries match (mirrors
+  filesystem path semantics).
+- **`valid_to: "now"`** is accepted as a no-op alias documenting the always-on Phase 9
+  temporal clause. Any other value raises `ValueError` — time-travel queries are out of
+  scope. Use `retention_days` to control which historical chunks remain in the
+  collection.
+
+Multiple `where` keys are AND'd; list values within a key are OR'd (`MatchAny`).
+
+### Migration
+
+Legacy chunks (indexed before v0.3.0a3) lack `path_prefixes`. The first post-upgrade
+`supamem index` runs a one-shot eager scroll-and-`set_payload` sweep that back-fills
+`path_prefixes` per chunk — pure metadata update, **zero re-embedding cost**, idempotent
+on subsequent runs. No `--force` reindex required.
+
+### Doctor surface
+
+`supamem doctor` adds a "Filtered-dense backend" panel surfacing the resolved
+`preview_chars` value with `[source: ...]` provenance. Read-only by construction; never
+flips the doctor exit code.
+
+---
+
+## 🚫 What supamem does NOT do
+
+`supamem` does **NOT** auto-inject identity / wake-up / prelude context into agent calls
+— retrieval is always solicited via an explicit query. There is no hidden "agent
+identity" tier, no SessionStart-time wake-up payload that pushes ambient context into
+the model, no MCP tool that fires retrieval when the `query` is empty.
+
+This is locked from two sides:
+
+1. **Schema-level (v0.3.0a3+):** Every retrieval tool's `query` parameter is
+   `Field(..., min_length=1, max_length=...)` — required, non-empty, schema-enforced at
+   tool registration time. An empty `query` is rejected with a structured MCP
+   validation error, not silently substituted with default context.
+2. **Test-level (FILT-02):** `tests/test_no_identity_tier.py` is a CI-enforced
+   regression test that fails the build if any registered MCP tool name matches
+   `(?i)(wake[_-]?up|identity|prelude|inject)` OR if any retrieval tool's JSON Schema
+   drops `query` from `required` / loses `minLength >= 1`.
+
+If you want supamem context loaded at session-open, the existing SessionStart banner
+hook is the supported surface — it injects a one-line status (collection, chunk count,
+audit-log path), never silently pulls retrieval results into the model. The model still
+has to `dual_memory_search` to read the corpus.
+
+---
+
 ## 🪛 Wiring into your client
 
 <details>
