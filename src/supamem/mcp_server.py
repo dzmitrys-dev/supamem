@@ -305,11 +305,12 @@ def _register_dual_memory_tool(app: Any, config: ResolvedConfig) -> None:
     )
     async def dual_memory_search_tool(  # noqa: ARG001  (FastMCP wraps this)
         query: str = Field(
-            "",
+            ...,
             description=(
                 f"Natural-language question. Hybrid (BM25 + dense) search over "
                 f"project memory. Max {max_q} chars (server enforced)."
             ),
+            min_length=1,
             max_length=max_q,
         ),
         top_k: int = Field(
@@ -395,11 +396,12 @@ def _register_dual_memory_tool(app: Any, config: ResolvedConfig) -> None:
         )
         async def qdrant_find_alias(  # noqa: ARG001
             query: str = Field(
-                "",
+                ...,
                 description=(
                     f"Search query (alias of dual_memory_search). "
                     f"Max {max_q} chars (server enforced)."
                 ),
+                min_length=1,
                 max_length=max_q,
             ),
             top_k: int = Field(
