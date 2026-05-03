@@ -370,15 +370,101 @@ def cmd_stats(
 
 @app.command("eval")
 def cmd_evalbench(
-    regress: bool = typer.Option(False, "--regress", help="Run regression suite against bundled goldens."),
-    goldens: Optional[str] = typer.Option(None, "--goldens", help="Custom goldens JSONL path."),
+    suite: str = typer.Option(
+        "goldens", "--suite",
+        help="Bench suite: goldens | longmemeval_s.",
+    ),
+    full: bool = typer.Option(
+        False, "--full",
+        help=(
+            "Run full LongMemEval_S (~500 QA, ~3 GB cache). "
+            "Default: 10-question CI subset."
+        ),
+    ),
+    judge: Optional[str] = typer.Option(
+        None, "--judge",
+        help=(
+            "Judge spec: heuristic (default) or ollama:<model>. "
+            "SaaS prefixes refused (D-07)."
+        ),
+    ),
+    report: str = typer.Option(
+        "json", "--report",
+        help="Report format. Currently only 'json' is supported.",
+    ),
+    out: Optional[Path] = typer.Option(
+        None, "--out",
+        help="Output path. Default: ~/.supamem/eval/<utc-iso>.json.",
+    ),
+    baseline: str = typer.Option(
+        "v0.1.5", "--baseline",
+        help="Baseline version for delta computation.",
+    ),
+    dataset_path: Optional[Path] = typer.Option(
+        None, "--dataset-path",
+        help="Local LongMemEval mirror path (skips HF fetch). D-VEND-03.",
+    ),
+    verbose: bool = typer.Option(
+        False, "--verbose",
+        help="Include per_question array in the JSON report.",
+    ),
+    list_suites: bool = typer.Option(
+        False, "--list-suites",
+        help="List registered suites + default judge tier and exit.",
+    ),
+    # Backward-compat (v0.1.x):
+    regress: bool = typer.Option(
+        False, "--regress",
+        help="Legacy v0.1.x regression mode (goldens suite, threshold gates).",
+    ),
+    goldens: Optional[str] = typer.Option(
+        None, "--goldens",
+        help="Legacy v0.1.x custom goldens JSONL path.",
+    ),
 ) -> None:
-    """Run the regression harness against the Phase 80.1 golden corpus."""
+    """Run the supamem bench harness (Phase 10).
+
+    Default: ``supamem eval`` -> --suite goldens --report json
+    -> ~/.supamem/eval/<iso>.json
+
+    Milestone gate: ``supamem eval --suite longmemeval_s --full``.
+    """
+    # --list-suites short-circuit (D-CLI-02)
+    if list_suites:
+        console.print("Suites:")
+        console.print(
+            "  goldens         (default judge: heuristic) — "
+            "bundled v0.1.x regression baseline"
+        )
+        console.print(
+            "  longmemeval_s   (default judge: heuristic) — "
+            "LongMemEval_S, lazy-fetched from HF"
+        )
+        raise typer.Exit(0)
+
+    if report not in ("json",):
+        err_console.print(
+            f"[supamem.error]unknown --report format: {report!r} "
+            "(only 'json' is supported)[/]"
+        )
+        raise typer.Exit(2)
+
     from supamem.config import load_config
     from supamem.eval.runner import run_bench
 
     cfg, _chain = load_config()
-    raise typer.Exit(run_bench(regress=regress, goldens_path=goldens, config=cfg))
+    raise typer.Exit(run_bench(
+        suite=suite,
+        full=full,
+        judge=judge,
+        out=out,
+        baseline_version=baseline,
+        dataset_path=dataset_path,
+        verbose=verbose,
+        regress=regress,
+        goldens_path=goldens,
+        config=cfg,
+    ))
 
 
 @app.command("install")
