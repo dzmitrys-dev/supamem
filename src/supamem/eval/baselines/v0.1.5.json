@@ -1,0 +1,19 @@
+{
+  "version": "v0.1.5",
+  "captured_at": "2026-05-03T00:00:00Z",
+  "suite": "longmemeval_s",
+  "judge": {"kind": "heuristic", "model": "n/a"},
+  "scores": {
+    "recall_at_5": 0.0,
+    "context_precision": null,
+    "context_recall": null,
+    "answer_relevance": null,
+    "tokens_per_correct_answer": 0.0,
+    "context_compression_ratio": 0.0,
+    "input_tokens_p50": 0.0,
+    "input_tokens_p95": 0.0,
+    "write_cost": 0.0
+  },
+  "_baseline_pending": true,
+  "notes": "Pending real capture against the v0.1.5 release tag with heuristic judge. Plan 10-06 (release) replaces these placeholders with measured numbers before tagging. The runner's load_baseline tolerates this stub via the _baseline_pending flag and emits an err_console hint."
+}

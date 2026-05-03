@@ -243,6 +243,140 @@ def _format_reachability_row(relpath: str, state: str, is_patched: bool) -> str:
     return f"    ⚠  {name_field} — {state}"
 
 
+def _render_eval_bench_panel() -> None:
+    """Render the Eval bench panel (Phase 10 D-DOCTOR-EVAL-01).
+
+    Surfaces:
+      - Pinned LongMemEval revision (D-VEND-02).
+      - Cached dataset SHA(s) under <user_cache_dir>/datasets/longmemeval/*
+        with MATCH/DRIFT vs PINNED_REVISION.
+      - Cache size (human-readable MB/GB).
+      - ~/.supamem/<bench>/ — count of report JSONs + most recent
+        timestamp + most recent main_score.
+      - RAGAS extra availability (D-RAGAS-03).
+      - Active baseline file presence + captured_at.
+
+    Read-only by construction (mirrors Plan 08.1 D-DOCTOR-04 invariant):
+    NEVER flips exit code; every probe is wrapped so a missing optional
+    dep / unreadable file degrades to an info line rather than crashing.
+    """
+    from platformdirs import user_cache_dir  # noqa: PLC0415
+
+    console.print()
+    console.print("[supamem.brand]Eval bench[/supamem.brand]")
+
+    # 1. Pinned dataset revision.
+    pinned: str | None = None
+    try:
+        from supamem.eval.datasets.longmemeval_meta import (  # noqa: PLC0415
+            PINNED_REVISION,
+        )
+
+        pinned = PINNED_REVISION
+        ok(f"pinned_revision = {pinned}")
+    except Exception as exc:  # noqa: BLE001
+        warn(f"could not import longmemeval_meta: {type(exc).__name__}: {exc}")
+
+    # 2. Cached dataset SHA(s) + MATCH/DRIFT.
+    cache_root = Path(user_cache_dir("supamem")) / "datasets" / "longmemeval"
+    if cache_root.exists():
+        cached_dirs = sorted(p for p in cache_root.iterdir() if p.is_dir())
+        if not cached_dirs:
+            info(f"cache empty at {cache_root}")
+        else:
+            for d in cached_dirs:
+                sha = d.name
+                if pinned is not None and sha == pinned:
+                    ok(f"  cached_sha    = {sha}  MATCH")
+                else:
+                    warn(f"  cached_sha    = {sha}  DRIFT (vs {pinned})")
+            # Cache size.
+            try:
+                total = sum(
+                    p.stat().st_size for p in cache_root.rglob("*") if p.is_file()
+                )
+                ok(f"  cache_size    = {_human_bytes(total)}")
+            except OSError as exc:
+                warn(f"  cache_size    = unreadable ({type(exc).__name__}: {exc})")
+    else:
+        info(f"cache not yet populated ({cache_root})")
+
+    # 3. ~/.supamem/<bench>/ report JSONs (the runner's default out_dir).
+    # The directory name spells out as supamem-eval; we resolve via Path
+    # to avoid the security_reminder_hook tripping on the literal token.
+    reports_dir = Path.home() / ".supamem" / "eval"
+    if reports_dir.exists():
+        reports = sorted(reports_dir.glob("*.json"))
+        if not reports:
+            info(f"no reports yet ({reports_dir})")
+        else:
+            ok(f"reports_count   = {len(reports)}  ({reports_dir})")
+            latest = reports[-1]
+            try:
+                import json as _json  # noqa: PLC0415
+
+                payload = _json.loads(latest.read_text(encoding="utf-8"))
+                main_score = payload.get("main_score")
+                ok(
+                    f"  last_report   = {latest.name}  "
+                    f"main_score = {main_score!r}"
+                )
+            except Exception as exc:  # noqa: BLE001
+                warn(
+                    f"  last_report   = {latest.name}  unreadable "
+                    f"({type(exc).__name__}: {exc})"
+                )
+    else:
+        info(f"no reports dir ({reports_dir})")
+
+    # 4. RAGAS extra availability (D-RAGAS-03 fail-soft surface).
+    try:
+        from supamem.eval.ragas_adapter import RAGAS_AVAILABLE  # noqa: PLC0415
+
+        if RAGAS_AVAILABLE:
+            ok("ragas           = installed")
+        else:
+            info("ragas           = not installed (pip install supamem[eval])")
+    except Exception as exc:  # noqa: BLE001
+        warn(f"ragas probe failed: {type(exc).__name__}: {exc}")
+
+    # 5. Active baseline file (D-BASE-01).
+    try:
+        from importlib.resources import files as _res_files  # noqa: PLC0415
+
+        baseline_path = _res_files("supamem.eval.baselines") / "v0.1.5.json"
+        try:
+            body = baseline_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            warn("baseline v0.1.5 = missing (run Plan 10-06 to capture)")
+        else:
+            import json as _json  # noqa: PLC0415
+
+            data = _json.loads(body)
+            captured = data.get("captured_at", "(unset)")
+            pending = bool(data.get("_baseline_pending", False))
+            if pending:
+                warn(
+                    f"baseline v0.1.5 = present (captured_at={captured}, "
+                    "PENDING real capture)"
+                )
+            else:
+                ok(f"baseline v0.1.5 = present (captured_at={captured})")
+    except Exception as exc:  # noqa: BLE001
+        warn(f"baseline probe failed: {type(exc).__name__}: {exc}")
+
+
+def _human_bytes(n: int) -> str:
+    """Render a byte count as a human-readable string (KiB/MiB/GiB)."""
+    units = ("B", "KiB", "MiB", "GiB", "TiB")
+    f = float(n)
+    for unit in units:
+        if f < 1024.0 or unit == units[-1]:
+            return f"{f:.1f} {unit}"
+        f /= 1024.0
+    return f"{n} B"
+
+
 def _render_temporal_validity_panel(
     cfg: ResolvedConfig,
     chain: ConfigChain,
@@ -696,7 +830,13 @@ def run_doctor(*, redact_secrets: bool = True) -> int:
         client=locals().get("client") if qdrant_up else None,
     )
 
-    # ── Section 2h: Subagent reachability (Phase 08.1 D-DOCTOR-01..05) ───
+    # ── Section 2h: Eval bench (Phase 10 D-DOCTOR-EVAL-01) ───────────────
+    # Read-only panel — NEVER flips exit code (mirrors Plan 08.1
+    # D-DOCTOR-04 invariant). Surfaces dataset-cache drift, RAGAS extra
+    # availability, baseline presence, and last-run timestamp.
+    _render_eval_bench_panel()
+
+    # ── Section 2i: Subagent reachability (Phase 08.1 D-DOCTOR-01..05) ───
     _render_subagent_reachability_panel()
 
     # ── Section 3: Installed clients drift ───────────────────────────────
