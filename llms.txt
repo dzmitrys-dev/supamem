@@ -18,8 +18,8 @@ installed, AI coding assistants gain persistent semantic memory across projects.
 
 ## Distribution
 
-- [PyPI](https://pypi.org/project/supamem/): Released via Trusted Publisher OIDC; `pip install supamem` or `uv tool install supamem`. Current version: v0.3.0a1 (alpha pre-release; v0.2.0 / v0.2.1 already shipped).
-- [CHANGELOG](CHANGELOG.md): Per-version release notes (v0.1.0 initial, v0.1.1 update-check + AGENTS.md, v0.1.2 project-tunable regress baselines, v0.1.3 dual_memory_write + qdrant aliases, v0.1.4 SessionStart banner + supamem live dashboard, v0.1.5 SessionStart wired by installer, v0.2.0 mcp.caps + multi-project install + agent-discipline hooks, v0.2.1 user-visible banner + drift signal, v0.2.2a1 transcript chunker plugin, v0.2.3a1 coding-path classifier + where filter, v0.2.4a1 code-aware reranker + eager ML fetch + doctor-driven repair self-heal, v0.2.5a1 subagent reachability auto-patcher + unpatch-agents + doctor reachability panel, v0.3.0a1 per-source temporal validity + transcript-only recency decay + temporal doctor panel)
+- [PyPI](https://pypi.org/project/supamem/): Released via Trusted Publisher OIDC; `pip install supamem` or `uv tool install supamem`. Current version: v0.3.0a2 (alpha pre-release; v0.2.0 / v0.2.1 already shipped).
+- [CHANGELOG](CHANGELOG.md): Per-version release notes (v0.1.0 initial, v0.1.1 update-check + AGENTS.md, v0.1.2 project-tunable regress baselines, v0.1.3 dual_memory_write + qdrant aliases, v0.1.4 SessionStart banner + supamem live dashboard, v0.1.5 SessionStart wired by installer, v0.2.0 mcp.caps + multi-project install + agent-discipline hooks, v0.2.1 user-visible banner + drift signal, v0.2.2a1 transcript chunker plugin, v0.2.3a1 coding-path classifier + where filter, v0.2.4a1 code-aware reranker + eager ML fetch + doctor-driven repair self-heal, v0.2.5a1 subagent reachability auto-patcher + unpatch-agents + doctor reachability panel, v0.3.0a1 per-source temporal validity + transcript-only recency decay + temporal doctor panel, v0.3.0a2 bench harness (LongMemEval_S + RAGAS triad) + [eval] extra + two-tier judge + doctor Eval-bench panel)
 
 ## Translations
 
@@ -41,7 +41,7 @@ installed, AI coding assistants gain persistent semantic memory across projects.
 - [supamem stats](README.md#cli-surface): Welford schema-v2 usage counters
 - [supamem live](README.md#-see-it-work--supamem-live): Real-time terminal dashboard tailing the audit JSONL — visibility into PreToolUse hook injections (v0.1.4+)
 - [supamem migrate](README.md#cli-surface): Brownfield migration from an existing `dev_memory` collection
-- [supamem eval](README.md#cli-surface): Run the regression harness; project-tunable baselines via `[supamem.eval]` config (v0.1.2+)
+- [supamem eval](README.md#cli-surface): Run the bench harness — `--suite goldens` (bundled regression baseline, v0.1.2+) or `--suite longmemeval_s` (lazy-fetched LongMemEval_S, v0.3.0a2+); MTEB-style JSON envelope to `~/.supamem/eval/<utc-iso>.json`; project-tunable goldens baselines via `[supamem.eval]` config; legacy `--regress` mode preserved
 - [supamem uninstall](README.md#cli-surface): Reverse `supamem install` cleanly
 - [supamem unpatch-agents](README.md#cli-surface): Reverse subagent reachability patches recorded in `agent_patches.json`. Skips files the user has edited since (frontmatter SHA-256 match) with a per-file warning. Run BEFORE `pip uninstall supamem` — there is no portable pip/uv/pipx uninstall hook (v0.2.5a1+).
 
@@ -206,6 +206,22 @@ Read-only by construction; never flips the doctor exit code.
 ### Migration
 
 First post-upgrade `supamem index` back-fills `valid_to=null` on legacy points (gated by manifest `__validity_migration__` reserved key, idempotent on subsequent runs). Defense-in-depth alongside the `IsEmpty` runtime filter.
+
+## Bench harness (v0.3.0a2+)
+
+Bundled offline benchmark harness gating Phase 13's public claims. Two suites, one MTEB-style JSON envelope, two-tier judge, milestone-acceptance verdict against the v0.1.5 baseline. **No measured numbers ship in v0.3.0a2** — this release ships the harness only; Phase 13 owns the public claim.
+
+- `supamem eval --suite goldens|longmemeval_s [--full] [--judge heuristic|ollama:<model>] [--report json] [--out PATH] [--baseline vX.Y.Z] [--dataset-path PATH] [--verbose]` — run the harness; emits an MTEB-style JSON envelope to `~/.supamem/eval/<utc-iso>.json`. Default judge is heuristic (offline, fastembed-backed, no network). `EVAL_JUDGE_MODEL` env var overrides; SaaS prefixes (`openai|anthropic|cohere|mistral`) refused per the D-07 invariant (`assert_no_saas_llm_env()`).
+- `supamem eval --suite goldens` — extends the v0.1.x bundled regression baseline (`src/supamem/eval/goldens/`) to the new envelope shape. `main_score = recall_at_5`.
+- `supamem eval --suite longmemeval_s` — lazy-fetches LongMemEval_S (`xiaowu0162/longmemeval-cleaned`, ~3 GB) from a pinned HF revision SHA into `platformdirs.user_cache_dir("supamem")/datasets/longmemeval/<sha>/`. CI fast-path runs an axis-stratified seeded 10-question subset (`tests/eval/smoke_ids.json`); full ~500 QA run gated behind `--full`. `main_score = tokens_per_correct_answer`.
+- `supamem eval --list-suites` — list registered suites + default judge tier.
+- `supamem eval --regress` — legacy v0.1.x regression mode (preserved byte-identical for backward compatibility).
+- `--dataset-path PATH` — fully air-gapped CI mirrors override; skips the HF fetch entirely.
+- Optional extra: `pip install supamem[eval]` brings in `ragas==0.4.*`, `datasets`, and `huggingface_hub>=0.24` for the RAGAS triad (`context_precision`, `context_recall`, `answer_relevance`). Without it, RAGAS metrics report as `null` with a one-line `err_console` install hint — the harness never crashes on missing extra.
+- New env vars: `EVAL_JUDGE_MODEL=ollama:<model>` (Tier 2 judge override; SaaS refused), `EVAL_DATASET_CACHE` (override the dataset cache root for CI / air-gapped mirrors).
+- `supamem doctor` "Eval bench" panel surfaces dataset SHA drift vs the pinned revision, cache size, last-run timestamp, RAGAS extra availability, and the active baseline file. Read-only; never flips the doctor exit code.
+- Baseline storage: `src/supamem/eval/baselines/v0.1.5.json` (checked-in JSON; ships with `_baseline_pending: true` until Phase 13 measures). Selected via `--baseline vX.Y.Z` (defaults to previous milestone tag).
+- Report shape (D-REPORT-01): MTEB-style envelope keyed by `supamem_version`, `config_sha`, `collection`, `suite`, `dataset.{name,revision,n,subset_ids}`, `judge.{kind,model}`, `main_score`, `scores.{recall_at_5,context_precision,context_recall,answer_relevance,tokens_per_correct_answer,context_compression_ratio,input_tokens_p50,input_tokens_p95,write_cost}`, `by_axis`, `baseline.{version,delta}`, and `per_question` (verbose only).
 
 ## Architecture
 

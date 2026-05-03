@@ -2,6 +2,44 @@
 
 All notable changes to `supamem` will be documented in this file.
 
+## [0.3.0a2] — 2026-05-03 — Bench harness (LongMemEval + RAGAS)
+
+### Added
+
+- `supamem eval --suite longmemeval_s` — lazy-fetches LongMemEval_S
+  from a pinned HF revision and runs the supamem retrieval pipeline
+  through a heuristic/Ollama judge, emitting an MTEB-style JSON
+  envelope to `~/.supamem/eval/<utc-iso>.json`.
+- `supamem eval --suite goldens` — extends the existing v0.1.x bundled
+  regression baseline to the new envelope shape. Backward-compat:
+  `supamem eval --regress` continues to behave exactly as v0.1.5.
+- New optional extra: `pip install supamem[eval]` brings in
+  `ragas==0.4.*`, `datasets`, and pins `huggingface_hub>=0.24` for the
+  RAGAS triad metrics. Core install stays lean — RAGAS is fail-soft on
+  missing extra (heuristic-only metrics + `err_console` install hint).
+- Two-tier judge: heuristic (default, offline, fastembed-backed) or
+  `EVAL_JUDGE_MODEL=ollama:<model>` / `--judge ollama:<model>` for
+  localhost Ollama. SaaS endpoints (openai/anthropic/cohere/mistral)
+  are explicitly refused per the D-07 invariant
+  (`assert_no_saas_llm_env()`).
+- CI fast-path: 10-question axis-stratified seeded subset frozen at
+  `tests/eval/smoke_ids.json`. Full ~500 QA run gated behind `--full`.
+- `supamem doctor` gains an "Eval bench" panel showing dataset SHA
+  drift vs the pinned revision, cache size, last-run timestamp, RAGAS
+  extra availability, and active baseline file. Read-only — never
+  flips the doctor exit code.
+- `supamem eval --list-suites` for discoverability.
+
+### Notes
+
+- Phase 13 (Publish & Compare) is gated on `--full` validation
+  reporting `tokens_per_correct_answer` ≥30% reduction vs the v0.1.5
+  baseline (`src/supamem/eval/baselines/v0.1.5.json`, ships with
+  `_baseline_pending: true`). **No measured numbers are claimed in
+  this release** — this release ships the harness only. The PyPI tag
+  `v0.3.0a2` is held until either the gate clears or the user
+  explicitly chooses to ship the harness without measured claims.
+
 ## [0.3.0a1] — 2026-05-02 (Phase 9: Per-Source Temporal Validity)
 
 First alpha of the v0.3 line. Ships **per-source temporal validity** —
