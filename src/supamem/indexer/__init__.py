@@ -33,7 +33,7 @@ import json
 import os
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Literal, Optional
 
 from rich.progress import (
@@ -99,6 +99,28 @@ def _expand_sources(sources: Iterable[str]) -> list[Path]:
 
 def _compute_hash(content: str) -> str:
     return hashlib.sha256(content.encode()).hexdigest()
+
+
+def _path_prefixes(file_path: str) -> list[str]:
+    """Construct accumulated path prefixes for the path_prefixes payload field.
+
+    Phase 11 D-PFX-02. Verbatim case-preserved (matches stored file_path).
+    Edge cases verified against ``tests/test_indexer_path_prefixes.py``:
+      "src/a/b.py"   -> ["src", "src/a", "src/a/b.py"]
+      "./src/a.py"   -> ["src", "src/a.py"]      (leading ./ stripped)
+      "/abs/x.py"    -> ["abs", "abs/x.py"]      (leading / stripped)
+      "README.md"    -> ["README.md"]
+      ""             -> []                       (defensive: no path, no match)
+
+    The two ``lstrip`` calls are character-class strips; in our supported
+    inputs they only remove leading ``.`` and ``/``, never legitimate
+    payload characters (verified by edge-case unit tests).
+    """
+    if not file_path:
+        return []
+    normalized = file_path.lstrip("./").lstrip("/")
+    parts = PurePosixPath(normalized).parts
+    return ["/".join(parts[: i + 1]) for i in range(len(parts))]
 
 
 def _classifier_hash(rooms: dict[str, list[str]]) -> str:
