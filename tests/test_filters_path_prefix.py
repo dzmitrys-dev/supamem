@@ -87,9 +87,15 @@ def test_path_prefix_does_not_leak_to_generic_loop():
 def test_valid_to_now_is_noop():
     """D-VT-01: where={'valid_to': 'now'} is a no-op — produces wire shape
     identical to where={} (only the always-on temporal sub-filter remains).
+
+    Inject a fixed ``now`` so the two ISO timestamps embedded in the temporal
+    sub-filter compare equal (otherwise back-to-back calls drift by µs).
     """
-    flt_with_now = build_qdrant_filter({"valid_to": "now"})
-    flt_without = build_qdrant_filter({})
+    from datetime import datetime, timezone
+
+    fixed_now = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    flt_with_now = build_qdrant_filter({"valid_to": "now"}, now=fixed_now)
+    flt_without = build_qdrant_filter({}, now=fixed_now)
     body_with = json.loads(flt_with_now.model_dump_json(exclude_none=True))
     body_without = json.loads(flt_without.model_dump_json(exclude_none=True))
     assert body_with == body_without
