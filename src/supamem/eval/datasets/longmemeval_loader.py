@@ -90,10 +90,19 @@ def _normalize_record(raw: dict[str, Any]) -> dict[str, Any] | None:
     axis = _AXIS_ALIAS.get(upstream_axis)
     if axis is None or axis not in AXES:
         return None
+    # Phase 14 Plan B Task B1 (Rule 1 bugfix): ``sessions`` is the list of
+    # session-id strings from ``haystack_session_ids`` — NOT the list-of-
+    # lists of turn content from ``haystack_sessions``. The runner's
+    # scoped pass derives ``where={"session_id": list(rec["sessions"])}``
+    # from this field (D-SCOPE-01). Pre-Phase-14 the field stored turn
+    # content, which would have produced an unhashable Qdrant filter
+    # the moment the scoped pass landed. The raw upstream payload reaches
+    # the bench-only ingest path via ``iter_raw_longmemeval`` (Plan A) —
+    # production indexer paths do NOT consume this field.
     return {
         "id": raw["question_id"],
         "question": raw["question"],
-        "sessions": raw.get("haystack_sessions", []),
+        "sessions": list(raw.get("haystack_session_ids") or []),
         "answer": raw["answer"],
         "axis": axis,
     }

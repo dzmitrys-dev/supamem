@@ -318,7 +318,12 @@ def _config_sha(cfg: ResolvedConfig) -> str:
 
 
 def _aggregate_by_axis(per_record: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
-    """Group per-record metric rows by axis and average each metric."""
+    """Group per-record metric rows by axis and average each metric.
+
+    Legacy flat shape: ``per_record[i]["metrics"]`` is a flat dict of 9
+    metrics. Returns ``{<axis>: {<metric>: avg, ...}}``. Retained for
+    callers that pre-date Phase 14 Plan B.
+    """
     from supamem.eval.report import REPORT_METRIC_NAMES
 
     buckets: dict[str, dict[str, list[float]]] = {}
@@ -338,6 +343,115 @@ def _aggregate_by_axis(per_record: list[dict[str, Any]]) -> dict[str, dict[str, 
             name: (sum(vs) / len(vs)) if vs else 0.0 for name, vs in mvals.items()
         }
     return out
+
+
+def _aggregate_by_axis_per_pass(
+    per_record: list[dict[str, Any]],
+) -> dict[str, dict[str, dict[str, float]]]:
+    """Group per-record nested metrics by pass then by axis (Phase 14 Plan B).
+
+    Per RESEARCH §Q1 risk #7 the legacy ``_aggregate_by_axis`` is rewritten
+    rather than mutated — the legacy function stays put (no caller other
+    than the longmemeval path), this v2 walks the nested
+    ``metrics: {"unscoped": {...}, "scoped": {...}}`` shape and emits
+    sibling top-level keys.
+
+    Output shape::
+
+        {
+            "unscoped": {<axis>: {<metric>: avg, ...}, ...},
+            "scoped":   {<axis>: {<metric>: avg, ...}, ...},
+        }
+
+    Sub-passes whose per-record value is ``None`` (e.g. scoped pass on a
+    record with empty sessions) are silently dropped from the average so
+    the scoped-axis number still reflects only records where it ran.
+    """
+    from supamem.eval.report import REPORT_METRIC_NAMES
+
+    passes: tuple[str, ...] = ("unscoped", "scoped")
+    buckets: dict[str, dict[str, dict[str, list[float]]]] = {
+        p: {} for p in passes
+    }
+
+    for row in per_record:
+        axis = row.get("axis") or "unknown"
+        metrics = row.get("metrics") or {}
+        if not isinstance(metrics, dict):
+            continue
+        for pname in passes:
+            sub = metrics.get(pname)
+            if not isinstance(sub, dict):
+                continue
+            bucket = buckets[pname].setdefault(
+                axis, {name: [] for name in REPORT_METRIC_NAMES}
+            )
+            for mname, mval in sub.items():
+                if mname in bucket and mval is not None:
+                    try:
+                        bucket[mname].append(float(mval))
+                    except (TypeError, ValueError):
+                        continue
+
+    out: dict[str, dict[str, dict[str, float]]] = {p: {} for p in passes}
+    for pname in passes:
+        for axis, mvals in buckets[pname].items():
+            out[pname][axis] = {
+                mname: (sum(vs) / len(vs)) if vs else 0.0
+                for mname, vs in mvals.items()
+            }
+    return out
+
+
+def _record_metrics(
+    question: str,
+    answer: str,
+    chunks: list[RetrievedChunk],
+    judge: Any,
+) -> dict[str, float | None]:
+    """Compute the 9 REPORT_METRIC_NAMES for one pass's chunk list.
+
+    Extracted from the per-record loop in ``_run_longmemeval`` so the
+    unscoped and scoped passes share the metric-construction code path
+    verbatim (Phase 14 Plan B Task B1 — refactor target per RESEARCH §Q1
+    minimum-diff sketch). Body is lifted byte-for-byte from the legacy
+    inline construction (pre-Phase-14 :436-486) to avoid behavior drift
+    on the unscoped pass.
+    """
+    ctx_texts = [c.text or "" for c in chunks[:5]]
+    in_tokens = _estimate_tokens(question) + sum(
+        _estimate_tokens(t) for t in ctx_texts
+    )
+    ctx_tokens = sum(_estimate_tokens(t) for t in ctx_texts)
+    recall = _heuristic_recall_at_5(chunks, answer)
+    ar_result = judge.score_answer_relevance(
+        question=question, answer=answer, contexts=ctx_texts
+    )
+    return {
+        "recall_at_5": recall,
+        "context_precision": None,
+        "context_recall": None,
+        "answer_relevance": ar_result.value,
+        "tokens_per_correct_answer": (
+            in_tokens / recall if recall > 0 else float(in_tokens)
+        ),
+        "context_compression_ratio": ctx_tokens / max(1, _estimate_tokens(answer)),
+        "input_tokens_p50": float(in_tokens),
+        "input_tokens_p95": float(in_tokens),
+        "write_cost": float(in_tokens + _estimate_tokens(answer)),
+    }
+
+
+def _none_metrics() -> dict[str, float | None]:
+    """Return a dict carrying exactly the 9 REPORT_METRIC_NAMES, all None.
+
+    Used when the scoped pass is skipped for a record (empty sessions) —
+    the per-record envelope must still carry the 9-name shape so the
+    aggregator's bucket walk does not implicitly mirror unscoped values.
+    """
+    from supamem.eval.report import REPORT_METRIC_NAMES
+
+    return {name: None for name in REPORT_METRIC_NAMES}
 
 
 def _run_longmemeval(
@@ -434,6 +548,37 @@ def _run_longmemeval(
             "empty results.[/supamem.warn]"
         )
 
+    # Phase 14 Plan B Task B1 (D-FUT24-01): the SCOPED pass MUST run with
+    # rerank disabled even if the user invoked the runner with rerank-on.
+    # Confounding scoping with rerank composition is exactly what
+    # FUTURE-24 is for; Phase 14 strictly isolates from it.
+    #
+    # Implementation: lazy-built sibling backend whose cfg has
+    # ``reranker_name="off"``. Cached for the lifetime of this
+    # _run_longmemeval invocation so we don't pay re-init cost per record.
+    # When the unscoped backend already runs with reranker off, we reuse
+    # the same instance — building twice would just duplicate the embedder
+    # warm-up.
+    scoped_backend: TunedHybridBackend | None = None
+    if backend is not None:
+        unscoped_reranker = getattr(cfg, "reranker_name", "off")
+        if unscoped_reranker == "off":
+            scoped_backend = backend
+        else:
+            try:
+                from dataclasses import replace as _replace  # noqa: PLC0415
+
+                scoped_cfg = _replace(cfg, reranker_name="off")
+                scoped_backend = _build_backend(
+                    scoped_cfg, suite="longmemeval_s"
+                )
+            except Exception as exc:  # noqa: BLE001
+                err_console.print(
+                    f"[supamem.warn]supamem: scoped-backend init failed "
+                    f"({type(exc).__name__}: {exc}); scoped pass will yield "
+                    "empty results.[/supamem.warn]"
+                )
+
     per_record: list[dict[str, Any]] = []
     queries: list[str] = []
     retrieved_contexts: list[list[str]] = []
@@ -449,49 +594,79 @@ def _run_longmemeval(
         question = str(rec.get("question") or "").strip()
         answer = str(rec.get("answer") or "").strip()
         axis = rec.get("axis") or "unknown"
+        sessions = rec.get("sessions") or []
 
-        chunks: list[RetrievedChunk] = []
+        # Step 4 (Phase 14 Plan B Task B1) — DUAL pass at the single call
+        # site. Both passes share the same loop iteration; smoke vs full
+        # is decided BY the smoke_ids filter above, not by a second
+        # physical call site (RESEARCH §Q1).
+
+        # ── Unscoped pass: existing behavior, no `where`. ─────────────
+        chunks_unscoped: list[RetrievedChunk] = []
         t0 = time.perf_counter()
         if backend is not None and question:
             try:
-                chunks = backend.query(question, k=5)
+                chunks_unscoped = backend.query(question, k=5)
             except Exception as exc:  # noqa: BLE001
                 err_console.print(
-                    f"[supamem.warn]query for {rid!r} failed: "
+                    f"[supamem.warn]unscoped query for {rid!r} failed: "
                     f"{type(exc).__name__}[/supamem.warn]"
                 )
-        latency_ms = (time.perf_counter() - t0) * 1000.0
+        latency_unscoped_ms = (time.perf_counter() - t0) * 1000.0
 
-        ctx_texts = [c.text or "" for c in chunks[:5]]
-        in_tokens = _estimate_tokens(question) + sum(_estimate_tokens(t) for t in ctx_texts)
-        ctx_tokens = sum(_estimate_tokens(t) for t in ctx_texts)
-        recall = _heuristic_recall_at_5(chunks, answer)
+        # ── Scoped pass: where={"session_id": list(sessions)}. ────────
+        # session_id is NOT a magic key — flows through Phase 11's
+        # generic pass-through loop in retrieval/filters.py:120-132
+        # (D-SCOPE-03 lock). When sessions is empty, skip the pass — the
+        # per-record envelope still carries a 'scoped' sub-dict but with
+        # all-None metrics so the aggregator doesn't silently mirror.
+        chunks_scoped: list[RetrievedChunk] = []
+        latency_scoped_ms: float | None = None
+        scoped_metrics: dict[str, float | None] | None = None
+        if sessions and scoped_backend is not None and question:
+            scoped_filter = {"session_id": list(sessions)}
+            t1 = time.perf_counter()
+            try:
+                chunks_scoped = scoped_backend.query(
+                    question, k=5, where=scoped_filter
+                )
+            except Exception as exc:  # noqa: BLE001
+                err_console.print(
+                    f"[supamem.warn]scoped query for {rid!r} failed: "
+                    f"{type(exc).__name__}[/supamem.warn]"
+                )
+            latency_scoped_ms = (time.perf_counter() - t1) * 1000.0
+            scoped_metrics = _record_metrics(
+                question, answer, chunks_scoped, judge
+            )
+        else:
+            # Empty sessions or no scoped backend: emit a 9-name None dict
+            # so the by_axis aggregator drops the record from scoped
+            # averages instead of mirroring unscoped values.
+            scoped_metrics = _none_metrics()
 
-        # Step 4 — heuristic in-process metrics. answer_relevance via judge.
-        ar_result = judge.score_answer_relevance(
-            question=question, answer=answer, contexts=ctx_texts
+        unscoped_metrics = _record_metrics(
+            question, answer, chunks_unscoped, judge
         )
-        metrics: dict[str, float | None] = {
-            "recall_at_5": recall,
-            "context_precision": None,
-            "context_recall": None,
-            "answer_relevance": ar_result.value,
-            "tokens_per_correct_answer": (
-                in_tokens / recall if recall > 0 else float(in_tokens)
-            ),
-            "context_compression_ratio": ctx_tokens / max(1, _estimate_tokens(answer)),
-            "input_tokens_p50": float(in_tokens),
-            "input_tokens_p95": float(in_tokens),
-            "write_cost": float(in_tokens + _estimate_tokens(answer)),
-        }
+
         per_record.append(
             {
                 "id": rid,
                 "axis": axis,
-                "latency_ms": latency_ms,
-                "metrics": metrics,
+                "latency_ms": {
+                    "unscoped": latency_unscoped_ms,
+                    "scoped": latency_scoped_ms,
+                },
+                "metrics": {
+                    "unscoped": unscoped_metrics,
+                    "scoped": scoped_metrics,
+                },
             }
         )
+        # RAGAS triad inputs are sourced from the unscoped pass —
+        # Phase 14 keeps RAGAS scope unchanged (D-SCOPE-06: scoped pass
+        # is additive; existing aggregates remain unscoped).
+        ctx_texts = [c.text or "" for c in chunks_unscoped[:5]]
         queries.append(question)
         retrieved_contexts.append(ctx_texts)
         answers.append(answer)
@@ -512,41 +687,90 @@ def _run_longmemeval(
         judge_kind=judge.kind,
     )
 
-    def _mean(name: str) -> float:
-        vals = [
-            r["metrics"].get(name)
-            for r in per_record
-            if r["metrics"].get(name) is not None
-        ]
+    # Phase 14 Plan B Task B1: per-pass aggregators walk the nested
+    # per-record metrics dict. Each pass's scores sub-dict carries the
+    # 9 REPORT_METRIC_NAMES exactly.
+    def _mean_pass(pass_name: str, metric_name: str) -> float:
+        vals: list[float] = []
+        for r in per_record:
+            sub = (r.get("metrics") or {}).get(pass_name)
+            if not isinstance(sub, dict):
+                continue
+            v = sub.get(metric_name)
+            if v is None:
+                continue
+            try:
+                vals.append(float(v))
+            except (TypeError, ValueError):
+                continue
         if not vals:
             return 0.0
         return float(sum(vals) / len(vals))
 
-    def _pct(name: str, pct: float) -> float:
-        vals = [
-            float(r["metrics"].get(name) or 0.0)
-            for r in per_record
-            if r["metrics"].get(name) is not None
-        ]
+    def _pct_pass(pass_name: str, metric_name: str, pct: float) -> float:
+        vals: list[float] = []
+        for r in per_record:
+            sub = (r.get("metrics") or {}).get(pass_name)
+            if not isinstance(sub, dict):
+                continue
+            v = sub.get(metric_name)
+            if v is None:
+                continue
+            try:
+                vals.append(float(v))
+            except (TypeError, ValueError):
+                continue
         return _percentile(vals, pct)
 
-    scores: dict[str, Any] = {
-        "recall_at_5": _mean("recall_at_5"),
-        "context_precision": triad.get("context_precision"),
-        "context_recall": triad.get("context_recall"),
-        "answer_relevance": triad.get("answer_relevance"),
-        "tokens_per_correct_answer": _mean("tokens_per_correct_answer"),
-        "context_compression_ratio": _mean("context_compression_ratio"),
-        "input_tokens_p50": _pct("input_tokens_p50", 50.0),
-        "input_tokens_p95": _pct("input_tokens_p95", 95.0),
-        "write_cost": _mean("write_cost"),
-    }
-    assert set(scores.keys()) == set(REPORT_METRIC_NAMES), (
-        f"score key drift: {sorted(scores)} vs {sorted(REPORT_METRIC_NAMES)}"
-    )
+    def _scores_for(pass_name: str) -> dict[str, Any]:
+        """9-metric scores dict for one pass.
 
-    # Step 7 — by_axis rollup.
-    by_axis = _aggregate_by_axis(per_record)
+        Phase 14 D-FUT24-01: only the unscoped pass merges RAGAS triad
+        values (RAGAS runs once over the unscoped contexts). The scoped
+        pass surfaces None for triad metrics so we don't pretend a
+        triad ran twice.
+        """
+        triad_vals = (
+            {
+                "context_precision": triad.get("context_precision"),
+                "context_recall": triad.get("context_recall"),
+                "answer_relevance": triad.get("answer_relevance"),
+            }
+            if pass_name == "unscoped"
+            else {
+                "context_precision": None,
+                "context_recall": None,
+                "answer_relevance": None,
+            }
+        )
+        out = {
+            "recall_at_5": _mean_pass(pass_name, "recall_at_5"),
+            **triad_vals,
+            "tokens_per_correct_answer": _mean_pass(
+                pass_name, "tokens_per_correct_answer"
+            ),
+            "context_compression_ratio": _mean_pass(
+                pass_name, "context_compression_ratio"
+            ),
+            "input_tokens_p50": _pct_pass(pass_name, "input_tokens_p50", 50.0),
+            "input_tokens_p95": _pct_pass(pass_name, "input_tokens_p95", 95.0),
+            "write_cost": _mean_pass(pass_name, "write_cost"),
+        }
+        assert set(out.keys()) == set(REPORT_METRIC_NAMES), (
+            f"score key drift on pass {pass_name!r}: "
+            f"{sorted(out)} vs {sorted(REPORT_METRIC_NAMES)}"
+        )
+        return out
+
+    # Sibling-key envelope (Plan B): scores carries unscoped + scoped
+    # sub-dicts; build_report (Task B2) emits the nested envelope shape.
+    scores: dict[str, Any] = {
+        "unscoped": _scores_for("unscoped"),
+        "scoped": _scores_for("scoped"),
+    }
+
+    # Step 7 — by_axis rollup. Per-pass nested form (Plan B).
+    by_axis = _aggregate_by_axis_per_pass(per_record)
 
     # Step 8 — load baseline + delta tolerated by build_report.
     baseline_data: dict[str, Any] | None = None
