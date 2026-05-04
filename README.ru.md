@@ -341,7 +341,7 @@ pip uninstall supamem
 | `supamem stats` | Welford schema-v2 счётчики использования из `.supamem/state/` |
 | `supamem live` | 👀 Live-дашборд audit JSONL — безопасен в пайпе (plain JSONL вне TTY); обрабатывает ротацию, ресайз, Ctrl-C |
 | `supamem migrate` | Brownfield-миграция с уже существующей коллекции `dev_memory` |
-| `supamem eval` | Запустить bench-харнесс. `--suite goldens` (по умолчанию, встроенный регрессионный корпус из 33 запросов) или `--suite longmemeval_s` (ленивая выгрузка LongMemEval_S, ~3 ГБ при первом запуске; быстрый путь CI — стратифицированный по осям подсет из 10 вопросов, полный прогон ~500 вопросов гейтится `--full`). Эмитит MTEB-style JSON envelope в `~/.supamem/eval/<utc-iso>.json`. Судья по умолчанию — оффлайновый эвристический; передайте `--judge ollama:<model>` для локального Ollama-судьи — SaaS-эндпоинты отвергаются (D-07). Опциональный extra: `pip install supamem[eval]` для триады RAGAS (v0.3.0a2+). Легаси-режим `--regress` сохранён. |
+| `supamem eval` | Запустить bench-харнесс. `--suite goldens` (по умолчанию, встроенный регрессионный корпус из 33 запросов) или `--suite longmemeval_s` (ленивая выгрузка LongMemEval_S, ~3 ГБ при первом запуске; быстрый путь CI — стратифицированный по осям подсет из 10 вопросов, полный прогон ~500 вопросов гейтится `--full`). v0.3.0a4+: на каждый вопрос эмитятся два прохода — scoped и unscoped; публикационный gate работает **только по scoped** ([ADR-0001](docs/adr/0001-scoped-only-bench-gate.md)). Новый встроенный `--suite longmemeval_scoped_smoke` (≤5 вопросов, без ленивой выгрузки) для CI. Эмитит MTEB-style JSON envelope в `~/.supamem/eval/<utc-iso>.json`. Судья по умолчанию — оффлайновый эвристический; передайте `--judge ollama:<model>` для локального Ollama-судьи — SaaS-эндпоинты отвергаются (D-07). Опциональный extra: `pip install supamem[eval]` для триады RAGAS (v0.3.0a2+). Легаси-режим `--regress` сохранён. |
 | `supamem uninstall --client <name>` | Чисто откатить `supamem install` |
 | `supamem unpatch-agents` | 🔄 Откатить патчи доступности субагентов (v0.2.5+). Восстанавливает файлы агентов в их допатчевую форму по манифесту `~/.cache/supamem/agent_patches.json`. Файлы, отредактированные вами после патча, пропускаются с предупреждением. Запускайте ПЕРЕД `pip uninstall supamem` для чистой деинсталляции. |
 
@@ -617,6 +617,13 @@ dual_memory_search(query="session", where={"valid_to": "now"})
 Несколько ключей в `where` объединяются через AND; список значений внутри ключа — OR
 (`MatchAny`).
 
+| Ключ | Семантика |
+|------|-----------|
+| `room` | Phase 7 — фасет coding-path-классификатора (`backend`, `frontend`, `tests`, ...). Строка или список. Пишется `supamem index` поchunk-но. |
+| `path_prefix` | Phase 11 — left-anchored точное совпадение по сегментам пути относительно `payload.path_prefixes`. Строка или список. Пишется `supamem index` поchunk-но. |
+| `valid_to` | Phase 9 — принимает только `"now"` как no-op-алиас always-on temporal-клаузы. Любое другое значение бросает `ValueError`. |
+| `session_id` | **Только bench** — пишется LongMemEval-ингестом (`supamem.eval.longmemeval_ingest`); pass-through-ключ. **`supamem index` НЕ пишет это поле.** Используется scoped-проходом bench-а Phase 14 против выделенной коллекции `supamem_eval_longmemeval_s`. См. [ADR-0001](docs/adr/0001-scoped-only-bench-gate.md). |
+
 ### Миграция
 
 Легаси-chunk-и (проиндексированные до v0.3.0a3) не имеют `path_prefixes`. Первый
@@ -630,6 +637,46 @@ dual_memory_search(query="session", where={"valid_to": "now"})
 `supamem doctor` добавляет панель «Filtered-dense backend», показывающую разрешённое
 значение `preview_chars` со строкой провенанса `[source: ...]`. Read-only по
 построению; никогда не меняет exit code doctor.
+
+---
+
+## 📊 Бенчмарки (v0.3.0a4+)
+
+**Изменение методологии.** `supamem eval --suite longmemeval_s` теперь
+эмитит на каждый вопрос два прохода — **unscoped** и **scoped**.
+Scoped-проход использует выводимый из haystack-session-id-ов LongMemEval
+per-question `where`-фильтр (`{"session_id": [...]}`), задействуя
+индексные filter-payload-ы (`room`, `path_prefix`, `valid_to`,
+`session_id`), добавленные в Phases 7 / 9 / 11 / 14. Решение публикационного
+gate-а (delta `tokens_per_correct_answer` относительно baseline-а v0.1.5)
+читает **scoped**-проход; unscoped попадает в тот же envelope для
+прозрачности и не участвует в gate-е. Полное обоснование — в
+[ADR-0001](docs/adr/0001-scoped-only-bench-gate.md).
+
+**Оговорка о воспроизводимости.** Scoped-числа могут не воспроизводиться в
+дефолтных unscoped-вызовах `dual_memory_search` / `qdrant_find`. Тем, кому
+нужны сопоставимые числа, придётся явно передавать `where={...}` против
+коллекции, в chunk-ах которой лежит соответствующий payload — это
+методологическое раскрытие, а не дефект.
+
+**Корпус baseline-а.** Baseline v0.1.5 был **повторно снят** на выделенной
+bench-коллекции (`supamem_eval_longmemeval_s`). Абсолютные значения до
+Phase 14 напрямую не сопоставимы со значениями после Phase 14 — корпус
+изменился. Оригинальное число с devdocs-коллекции сохранено в
+`eval/baselines/v0.1.5.json` как `legacy_devdocs_unscoped_tpca` для
+исторической ссылки, но **в gate-е НЕ участвует**.
+
+**FUTURE-24 (rerank composition rework)** — родственный анблокер,
+отслеживается отдельно. Scoped-проход Phase 14 идёт с rerank-OFF, чтобы
+измеренная разница scoped-vs-unscoped чисто атрибутировалась scoping-у.
+Публичные утверждения о выигрышах от scoping-а **не** экстраполируются
+на «и когда rerank composition тоже починят — gate закроется ещё на X%».
+
+**Smoke-фикстура.** Встроенная статическая фикстура
+`src/supamem/eval/datasets/longmemeval_scoped_smoke.json` (≤5 вопросов,
+≤200 КБ, self-contained) выставлена под новым именем suite-а
+`longmemeval_scoped_smoke` — крутится в CI без триггера ленивой выгрузки
+~3 ГБ.
 
 ---
 

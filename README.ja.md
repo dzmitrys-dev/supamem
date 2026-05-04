@@ -335,7 +335,7 @@ pip uninstall supamem
 | `supamem stats` | `.supamem/state/` からの Welford schema-v2 利用カウンタ |
 | `supamem live` | 👀 audit JSONL を追跡するライブダッシュボード — パイプセーフ(非 TTY 時はプレーン JSONL);ローテーション、リサイズ、Ctrl-C を処理 |
 | `supamem migrate` | 既存 `dev_memory` コレクションからのブラウンフィールド移行 |
-| `supamem eval` | bench ハーネスを実行。`--suite goldens`(デフォルト、内蔵 33 クエリのリグレッション正解コーパス)または `--suite longmemeval_s`(初回実行時に LongMemEval_S を遅延フェッチ、~3 GB;CI 高速パスは軸別層化された 10 問サブセット、完全な ~500 問は `--full` でゲート)。MTEB 形式の JSON envelope を `~/.supamem/eval/<utc-iso>.json` に出力。デフォルトジャッジはオフラインのヒューリスティック;ローカル Ollama ジャッジは `--judge ollama:<model>` で指定 — SaaS エンドポイントは拒否されます(D-07)。オプション extra: `pip install supamem[eval]` で RAGAS トライアド有効(v0.3.0a2+)。レガシー `--regress` モードは温存。 |
+| `supamem eval` | bench ハーネスを実行。`--suite goldens`(デフォルト、内蔵 33 クエリのリグレッション正解コーパス)または `--suite longmemeval_s`(初回実行時に LongMemEval_S を遅延フェッチ、~3 GB;CI 高速パスは軸別層化された 10 問サブセット、完全な ~500 問は `--full` でゲート)。v0.3.0a4+:質問ごとに scoped と unscoped の 2 パスを発行し、公開 gate は **scoped 専用**([ADR-0001](docs/adr/0001-scoped-only-bench-gate.md))。CI 用に新たな内蔵 `--suite longmemeval_scoped_smoke`(≤5 問、遅延フェッチなし)を追加。MTEB 形式の JSON envelope を `~/.supamem/eval/<utc-iso>.json` に出力。デフォルトジャッジはオフラインのヒューリスティック;ローカル Ollama ジャッジは `--judge ollama:<model>` で指定 — SaaS エンドポイントは拒否されます(D-07)。オプション extra: `pip install supamem[eval]` で RAGAS トライアド有効(v0.3.0a2+)。レガシー `--regress` モードは温存。 |
 | `supamem uninstall --client <name>` | `supamem install` をクリーンに反転 |
 | `supamem unpatch-agents` | 🔄 サブエージェント到達性パッチを反転(v0.2.5+)。`~/.cache/supamem/agent_patches.json` のマニフェストに従って agent ファイルをパッチ前の形に復元。あなたが編集済みのファイルは警告付きでスキップ。クリーンなアンインストールのため `pip uninstall supamem` の前に実行してください。 |
 
@@ -603,6 +603,13 @@ dual_memory_search(query="session", where={"valid_to": "now"})
 
 `where` の複数キーは AND、同一キー内のリスト値は OR(`MatchAny`)です。
 
+| キー | 意味 |
+|------|------|
+| `room` | Phase 7 — coding-path 分類器のファセット(`backend`、`frontend`、`tests` など)。文字列またはリスト。`supamem index` が chunk 単位で書き込みます。 |
+| `path_prefix` | Phase 11 — `payload.path_prefixes` に対する left-anchored の path-segment 完全一致。文字列またはリスト。`supamem index` が chunk 単位で書き込みます。 |
+| `valid_to` | Phase 9 — 常時オンの temporal 句のエイリアスとして `"now"` のみ受理。それ以外の値は `ValueError`。 |
+| `session_id` | **bench 専用** — LongMemEval ingestion(`supamem.eval.longmemeval_ingest`)が書き込む pass-through キー。**`supamem index` は書き込みません。** Phase 14 の scoped bench パスが専用コレクション `supamem_eval_longmemeval_s` に対して使用します。詳細は [ADR-0001](docs/adr/0001-scoped-only-bench-gate.md) を参照。 |
+
 ### マイグレーション
 
 レガシー chunk(v0.3.0a3 より前にインデックスされたもの)は `path_prefixes` を持ちません。
@@ -615,6 +622,44 @@ chunk ごとに `path_prefixes` をバックフィルします —— 純粋な�
 `supamem doctor` に「Filtered-dense backend」パネルが追加され、解決された
 `preview_chars` 値と `[source: ...]` 出典行を表示します。構造上 read-only;doctor の
 exit code を変えることはありません。
+
+---
+
+## 📊 Benchmarks(v0.3.0a4+)
+
+**方法論の変更。** `supamem eval --suite longmemeval_s` は質問ごとに
+**unscoped** と **scoped** の両方の検索パスを発行します。scoped パスは
+LongMemEval の haystack session id から導出した質問ごとの `where` フィルタ
+(`{"session_id": [...]}`)を使用し、Phase 7 / 9 / 11 / 14 で追加された
+indexer 側のフィルタ payload(`room`、`path_prefix`、`valid_to`、
+`session_id`)をエンドツーエンドで動かします。公開 gate の判定
+(`tokens_per_correct_answer` の v0.1.5 baseline に対する delta)は **scoped**
+パスを読み、unscoped は同じ envelope に透明性のために載りますが gate には
+入りません。詳細は [ADR-0001](docs/adr/0001-scoped-only-bench-gate.md) を参照。
+
+**再現性に関する注意。** scoped の数値は `dual_memory_search` /
+`qdrant_find` のデフォルト unscoped 呼び出しでは再現しない可能性があります。
+比較可能な数値が欲しいユーザーは、対応する payload を持つ chunk を含む
+コレクションに対して明示的に `where={...}` を渡す必要があります —— これは
+方法論の開示であり欠陥ではありません。
+
+**Baseline コーパス。** v0.1.5 の baseline は専用 bench コレクション
+(`supamem_eval_longmemeval_s`)上で **再キャプチャ**されました。Phase 14
+以前の絶対値は Phase 14 以降の値と直接比較できません —— コーパスが変わった
+ためです。元の devdocs collection 由来の数値は
+`eval/baselines/v0.1.5.json` に `legacy_devdocs_unscoped_tpca` として歴史
+参照のために保存されますが、**gate には入りません**。
+
+**FUTURE-24(rerank composition rework)** は別途追跡される姉妹アンブロッカー
+です。Phase 14 の scoped パスは rerank-OFF で走るため、計測される
+scoped と unscoped の差分は scoping にきれいに帰属します。scoping の
+ゲインに関する公開クレームは「rerank composition も直れば gate がさらに
+X% 縮まる」とは **外挿しません**。
+
+**Smoke fixture。** 内蔵された静的 fixture
+`src/supamem/eval/datasets/longmemeval_scoped_smoke.json`(≤5 問、≤200 KB、
+self-contained)が新スイート名 `longmemeval_scoped_smoke` として公開され、
+~3 GB の遅延フェッチをトリガせずに CI で実行できます。
 
 ---
 

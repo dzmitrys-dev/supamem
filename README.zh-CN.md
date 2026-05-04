@@ -329,7 +329,7 @@ pip uninstall supamem
 | `supamem stats` | 来自 `.supamem/state/` 的 Welford schema-v2 使用计数 |
 | `supamem live` | 👀 跟踪 audit JSONL 的实时仪表盘 — 管道安全(非 TTY 时输出纯 JSONL);处理日志轮转、终端尺寸变化、Ctrl-C |
 | `supamem migrate` | 从已有 `dev_memory` 集合的棕地迁移 |
-| `supamem eval` | 跑 bench 套件。`--suite goldens`(默认,内置 33 条 golden 回归语料)或 `--suite longmemeval_s`(首次运行时按需拉取 LongMemEval_S,~3 GB;CI 快路径为 10 题按轴分层子集,完整 ~500 题需 `--full`)。输出 MTEB 风格 JSON 到 `~/.supamem/eval/<utc-iso>.json`。默认裁判为离线启发式;传 `--judge ollama:<model>` 接本机 Ollama —— 拒绝 SaaS 端点(D-07)。可选附加包:`pip install supamem[eval]` 启用 RAGAS 三件套(v0.3.0a2+)。保留旧版 `--regress` 模式。 |
+| `supamem eval` | 跑 bench 套件。`--suite goldens`(默认,内置 33 条 golden 回归语料)或 `--suite longmemeval_s`(首次运行时按需拉取 LongMemEval_S,~3 GB;CI 快路径为 10 题按轴分层子集,完整 ~500 题需 `--full`)。v0.3.0a4+:每题同时跑 scoped 与 unscoped 两条检索路径;发布 gate 仅依据 **scoped** 路径([ADR-0001](docs/adr/0001-scoped-only-bench-gate.md))。新增内置 `--suite longmemeval_scoped_smoke`(≤5 题,无需懒加载)用于 CI。输出 MTEB 风格 JSON 到 `~/.supamem/eval/<utc-iso>.json`。默认裁判为离线启发式;传 `--judge ollama:<model>` 接本机 Ollama —— 拒绝 SaaS 端点(D-07)。可选附加包:`pip install supamem[eval]` 启用 RAGAS 三件套(v0.3.0a2+)。保留旧版 `--regress` 模式。 |
 | `supamem uninstall --client <name>` | 干净反向 `supamem install` |
 | `supamem unpatch-agents` | 🔄 反向子代理可达性补丁(v0.2.5+)。按 `~/.cache/supamem/agent_patches.json` 清单将 agent 文件还原到打补丁前的形态。已被你修改过的文件会带告警跳过。`pip uninstall supamem` 之前先跑这条以获得干净卸载。 |
 
@@ -577,6 +577,13 @@ dual_memory_search(query="session", where={"valid_to": "now"})
 
 `where` 多个键之间是 AND;同一键内的列表值是 OR(`MatchAny`)。
 
+| 键 | 语义 |
+|----|------|
+| `room` | Phase 7 —— 编码路径分类器(`backend`、`frontend`、`tests` 等)。字符串或列表。由 `supamem index` 写入。 |
+| `path_prefix` | Phase 11 —— 对 `payload.path_prefixes` 的左锚精确路径段匹配。字符串或列表。由 `supamem index` 写入。 |
+| `valid_to` | Phase 9 —— 仅接受 `"now"` 作为常驻时序子句的别名;其他值抛 `ValueError`。 |
+| `session_id` | **仅 bench** —— 由 LongMemEval ingestion(`supamem.eval.longmemeval_ingest`)写入;为 pass-through 键。**`supamem index` 不会写入。** Phase 14 scoped bench 路径在专用 `supamem_eval_longmemeval_s` 集合上使用。详见 [ADR-0001](docs/adr/0001-scoped-only-bench-gate.md)。 |
+
 ### 迁移
 
 v0.3.0a3 之前索引的遗留 chunk 没有 `path_prefixes`。升级后第一次运行 `supamem index`
@@ -587,6 +594,38 @@ v0.3.0a3 之前索引的遗留 chunk 没有 `path_prefixes`。升级后第一次
 
 `supamem doctor` 新增 "Filtered-dense backend" 面板,显示 `preview_chars` 解析值
 及其 `[source: ...]` 来源。仅读,绝不会改变 doctor 退出码。
+
+---
+
+## 📊 Benchmarks(v0.3.0a4+)
+
+**方法学变更。** `supamem eval --suite longmemeval_s` 每题同时跑 **unscoped**
+与 **scoped** 两条检索路径。scoped 路径根据 LongMemEval haystack 的 session id
+构造每题 `where` 过滤(`{"session_id": [...]}`),从端到端串通 Phases 7 / 9 /
+11 / 14 引入的索引侧 filter payload(`room`、`path_prefix`、`valid_to`、
+`session_id`)。发布 gate(`tokens_per_correct_answer` 相对 v0.1.5 baseline
+的 delta)只读 **scoped** 路径;unscoped 仅用于透明披露,不参与 gate。完整
+依据见 [ADR-0001](docs/adr/0001-scoped-only-bench-gate.md)。
+
+**可复现性提示。** 默认 unscoped 调用 `dual_memory_search` / `qdrant_find`
+不一定能复现 scoped 数字。希望复现的用户必须显式传 `where={...}` 过滤,且
+collection 中的 chunk 必须携带匹配的 payload —— 这是方法学披露,不是缺陷。
+
+**Baseline 语料。** v0.1.5 baseline 已在专用 bench collection
+(`supamem_eval_longmemeval_s`)上重新采集。Phase 14 之前的绝对数字与之后
+的不可直接对比 —— 语料变了。原 devdocs collection 的旧值以
+`legacy_devdocs_unscoped_tpca` 字段保留在 `eval/baselines/v0.1.5.json` 供
+历史参考,但**不**参与 gate。
+
+**FUTURE-24(rerank composition rework)** 是同辈解锁项,单独追踪。Phase 14
+的 scoped 路径以 rerank-OFF 运行,使得 scoped vs unscoped 的差值干净归因于
+scoping。关于 scoping 收益的公开说辞**不**外推到「等到 rerank composition
+也修好就能再缩小 X% gap」。
+
+**Smoke fixture。** 内置静态 fixture 位于
+`src/supamem/eval/datasets/longmemeval_scoped_smoke.json`(≤5 题、≤200 KB、
+自包含),通过新套件名 `longmemeval_scoped_smoke` 暴露 —— 在 CI 中运行而
+不触发 ~3 GB 懒加载。
 
 ---
 
