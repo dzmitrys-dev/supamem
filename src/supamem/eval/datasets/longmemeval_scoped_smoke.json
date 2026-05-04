@@ -1,0 +1,198 @@
+{
+  "meta": {
+    "source": "longmemeval_s slice",
+    "session_count": 22,
+    "expected_scoped_gain_tpca": 0.65,
+    "tolerance_relative": 0.05,
+    "placeholder_until_live_rederivation": true,
+    "notes": "Schema-faithful seed fixture committed ahead of the live manual ritual (D-SMOKE-02). Each question's haystack carries the relevant sessions (in question.sessions) plus 2-3 noise sessions whose turns contain none of the answer's >=4-char tokens. Noise sessions are ordered FIRST so the unscoped pass (which flattens all sessions and takes top 5) gets pure-noise chunks -> recall=0 -> tpca falls into the in_tokens fallback branch (large). The scoped pass filters to question.sessions only -> turn content carries answer tokens -> recall=1.0 -> tpca = small in_tokens / 1.0. The expected_*_tpca values document the magnitude order; when the live re-derivation runs (scripts/derive_scoped_smoke.py) it replaces them with measured numbers and drops placeholder_until_live_rederivation. The dual-pass CI test asserts methodology (scoped < unscoped via mock backend) UNCONDITIONALLY; tolerance bounds against expected_*_tpca only enforce when placeholder_until_live_rederivation is false."
+  },
+  "questions": [
+    {
+      "id": "smoke_ms_01",
+      "question": "What was the meeting time the user agreed to?",
+      "answer": "three pm Monday afternoon coffee",
+      "axis": "multi_session",
+      "sessions": ["s_smk_01_relevant"],
+      "haystack": [
+        {
+          "session_id": "s_smk_01_noise_a",
+          "turns": [
+            {"role": "user", "content": "I tried a new pasta recipe last night with extra garlic and olive oil."},
+            {"role": "assistant", "content": "Sounds delicious. Did you pair it with anything specific for dinner?"}
+          ]
+        },
+        {
+          "session_id": "s_smk_01_noise_b",
+          "turns": [
+            {"role": "user", "content": "Reading a new book about ancient Egyptian architecture this weekend."},
+            {"role": "assistant", "content": "Fascinating subject. Pyramids hold many engineering surprises."}
+          ]
+        },
+        {
+          "session_id": "s_smk_01_noise_c",
+          "turns": [
+            {"role": "user", "content": "Looking for restaurant recommendations near the riverside neighborhood."},
+            {"role": "assistant", "content": "Several places offer outdoor seating with scenic water views."}
+          ]
+        },
+        {
+          "session_id": "s_smk_01_relevant",
+          "turns": [
+            {"role": "user", "content": "Lets schedule the budget review for three pm Monday afternoon coffee chat."}
+          ]
+        }
+      ],
+      "expected_unscoped_tpca": 105.0,
+      "expected_scoped_tpca": 27.0
+    },
+    {
+      "id": "smoke_ssu_02",
+      "question": "What did the user mention about their morning workout routine?",
+      "answer": "wakes early runs daily five kilometers",
+      "axis": "single_session_user",
+      "sessions": ["s_smk_02_relevant"],
+      "haystack": [
+        {
+          "session_id": "s_smk_02_noise_a",
+          "turns": [
+            {"role": "user", "content": "Trying to learn watercolor painting on weekends as a hobby."},
+            {"role": "assistant", "content": "Watercolor rewards patience; thin layers build depth gradually."}
+          ]
+        },
+        {
+          "session_id": "s_smk_02_noise_b",
+          "turns": [
+            {"role": "user", "content": "Considering buying a new espresso machine for the kitchen counter."},
+            {"role": "assistant", "content": "Compact options balance counter space against pressure quality."}
+          ]
+        },
+        {
+          "session_id": "s_smk_02_noise_c",
+          "turns": [
+            {"role": "user", "content": "Just finished a documentary about deep sea exploration submarines."}
+          ]
+        },
+        {
+          "session_id": "s_smk_02_relevant",
+          "turns": [
+            {"role": "user", "content": "User wakes early then runs daily five kilometers before breakfast."}
+          ]
+        }
+      ],
+      "expected_unscoped_tpca": 90.0,
+      "expected_scoped_tpca": 24.0
+    },
+    {
+      "id": "smoke_tr_03",
+      "question": "Which laptop did the user buy after returning the previous one?",
+      "answer": "thinkpad carbon model x1",
+      "axis": "temporal_reasoning",
+      "sessions": ["s_smk_03_relevant"],
+      "haystack": [
+        {
+          "session_id": "s_smk_03_noise_a",
+          "turns": [
+            {"role": "user", "content": "Planning a trip to Iceland next spring to see northern lights."},
+            {"role": "assistant", "content": "September through March offers the best aurora viewing windows."}
+          ]
+        },
+        {
+          "session_id": "s_smk_03_noise_b",
+          "turns": [
+            {"role": "user", "content": "Renovating the basement into a home office space this autumn."},
+            {"role": "assistant", "content": "Insulation and lighting choices shape comfort during long hours."}
+          ]
+        },
+        {
+          "session_id": "s_smk_03_noise_c",
+          "turns": [
+            {"role": "user", "content": "Started a sourdough starter culture from scratch this morning."}
+          ]
+        },
+        {
+          "session_id": "s_smk_03_relevant",
+          "turns": [
+            {"role": "user", "content": "Replaced returned macbook with a thinkpad carbon model x1 yesterday."}
+          ]
+        }
+      ],
+      "expected_unscoped_tpca": 115.0,
+      "expected_scoped_tpca": 32.0
+    },
+    {
+      "id": "smoke_ku_04",
+      "question": "What is the user's current preferred programming language?",
+      "answer": "rust language replaces previous python preference",
+      "axis": "knowledge_update",
+      "sessions": ["s_smk_04_relevant"],
+      "haystack": [
+        {
+          "session_id": "s_smk_04_noise_a",
+          "turns": [
+            {"role": "user", "content": "Watching a baseball game with friends at the local sports bar tonight."},
+            {"role": "assistant", "content": "Hope your team wins; baseball nights make for memorable evenings."}
+          ]
+        },
+        {
+          "session_id": "s_smk_04_noise_b",
+          "turns": [
+            {"role": "user", "content": "Bought tickets for an outdoor jazz festival happening downtown next weekend."},
+            {"role": "assistant", "content": "Jazz festivals showcase improvisation and emerging artists alike."}
+          ]
+        },
+        {
+          "session_id": "s_smk_04_noise_c",
+          "turns": [
+            {"role": "user", "content": "Adopted a rescue cat last weekend; she is settling in nicely."}
+          ]
+        },
+        {
+          "session_id": "s_smk_04_relevant",
+          "turns": [
+            {"role": "user", "content": "Now rust language replaces previous python preference for systems work."}
+          ]
+        }
+      ],
+      "expected_unscoped_tpca": 100.0,
+      "expected_scoped_tpca": 28.0
+    },
+    {
+      "id": "smoke_ssa_05",
+      "question": "What advice did the assistant give about sleep hygiene?",
+      "answer": "darkness consistent schedule avoid evening caffeine intake",
+      "axis": "single_session_assistant",
+      "sessions": ["s_smk_05_relevant"],
+      "haystack": [
+        {
+          "session_id": "s_smk_05_noise_a",
+          "turns": [
+            {"role": "user", "content": "Looking into vintage motorcycle restoration as a long-term project."},
+            {"role": "assistant", "content": "Older bikes reward patient mechanical skill and careful sourcing."}
+          ]
+        },
+        {
+          "session_id": "s_smk_05_noise_b",
+          "turns": [
+            {"role": "user", "content": "Trying to grow tomatoes on the apartment balcony this summer."},
+            {"role": "assistant", "content": "Containers need consistent watering and at least six hours sunlight."}
+          ]
+        },
+        {
+          "session_id": "s_smk_05_noise_c",
+          "turns": [
+            {"role": "user", "content": "Considering a meditation retreat in the mountains next month."}
+          ]
+        },
+        {
+          "session_id": "s_smk_05_relevant",
+          "turns": [
+            {"role": "assistant", "content": "Try darkness consistent schedule avoid evening caffeine intake routines."}
+          ]
+        }
+      ],
+      "expected_unscoped_tpca": 95.0,
+      "expected_scoped_tpca": 26.0
+    }
+  ]
+}
