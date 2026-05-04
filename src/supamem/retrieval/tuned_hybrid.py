@@ -171,6 +171,12 @@ class TunedHybridBackend:
         self._client: Any | None = None
         self._dense: Any | None = None
         self._sparse: Any | None = None
+        # D-POOL: cache the reranker plugin instance on the backend so a
+        # process-long retrieval session reuses one model load. load_reranker
+        # constructs a fresh wrapper per call; without this cache the
+        # wrapper's _ensure() lazy-load reloads the model every query.
+        self._reranker: Any | None = None
+        self._reranker_name: str | None = None
         self._minimal_setup = minimal_setup
 
     def _ensure(self):
@@ -213,13 +219,25 @@ class TunedHybridBackend:
         from supamem.rerankers import load_reranker  # noqa: PLC0415
 
         reranker_name = getattr(self.config, "reranker_name", "off")
-        try:
-            reranker = load_reranker(reranker_name, self.config)
-        except LookupError:
-            # Fail-soft: treat unknown reranker as off; ResolvedConfig's
-            # validation gate (load_config) is the canonical fail-closed
-            # surface — at backend.query() time we never abort retrieval.
+        # D-POOL: reuse cached reranker if name unchanged. load_reranker
+        # constructs a fresh wrapper each call — caching here keeps the
+        # underlying model loaded for the lifetime of the backend.
+        if reranker_name == "off":
             reranker = None
+        elif (
+            self._reranker is not None and self._reranker_name == reranker_name
+        ):
+            reranker = self._reranker
+        else:
+            try:
+                reranker = load_reranker(reranker_name, self.config)
+            except LookupError:
+                # Fail-soft: treat unknown reranker as off; ResolvedConfig's
+                # validation gate (load_config) is the canonical fail-closed
+                # surface — at backend.query() time we never abort retrieval.
+                reranker = None
+            self._reranker = reranker
+            self._reranker_name = reranker_name
 
         # D-POOL-01: widen prefetch only when reranker is on.
         prefetch_limit = (
@@ -299,14 +317,21 @@ class TunedHybridBackend:
             t0 = _time.perf_counter()
             try:
                 reranked = reranker.rerank(text, pre_rerank)
-            except Exception:
+            except Exception as _rerank_exc:
                 # Plugin failure → fall through to off-path semantics
                 # (T-RERANK-INVAR mitigation: never silently drop hits).
+                # Surface exception class+message so plugin authors and
+                # bench runs can see WHY rerank failed, not just that it did.
+                import traceback as _tb  # noqa: PLC0415
+
                 from supamem.console import err_console  # noqa: PLC0415
 
                 err_console.print(
-                    "[supamem.warn]reranker raised — falling back to off-branch"
+                    f"[supamem.warn]reranker raised "
+                    f"({type(_rerank_exc).__name__}: {_rerank_exc}) "
+                    "— falling back to off-branch"
                 )
+                err_console.print(_tb.format_exc())
                 reranker = None
                 reranked = []
             elapsed_ms = (_time.perf_counter() - t0) * 1000.0
