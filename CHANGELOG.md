@@ -2,6 +2,63 @@
 
 All notable changes to `supamem` will be documented in this file.
 
+## [0.3.0a3] — 2026-05-03 — Filtered retrieval backend (FILT-01) + anti-identity-tier lock (FILT-02)
+
+### Added
+
+- New `filtered_dense` retrieval backend (FILT-01) — scoped+capped
+  wrapper around `tuned_hybrid` that accepts a `where` filter
+  (`room`, `path_prefix`, `valid_to`) and caps each hit's preview at
+  a configurable char limit. Registered via the existing
+  `supamem.retrieval` entry-point group; existing backends
+  (`tuned_hybrid`, `dense`, `bm25`) are unchanged.
+- New `path_prefix` magic key in the MCP `where` parameter — string
+  or list of strings; left-anchored exact path-segment match against
+  the new `payload.path_prefixes: list[str]` payload field. Indexer
+  builds the prefix list per chunk
+  (`src/supamem/retrieval/filters.py` → `["src", "src/supamem", ...]`)
+  and creates a `KeywordIndex` (`on_disk=True`) at collection init,
+  mirroring Phase 7 `room`.
+- `valid_to: "now"` accepted as a no-op alias for the always-on
+  temporal clause from Phase 9; any other value raises `ValueError`
+  referencing the always-on lock (time-travel queries are out of
+  scope).
+- New config: `[retrieval.filtered_dense] preview_chars = 240`
+  (default 240; `0` disables truncation entirely so `preview` becomes
+  the full document text). Independent of the MCP transport cap
+  `mcp.caps.max_preview_chars`, which continues to apply on top.
+- New `supamem doctor` panel "Filtered-dense backend" — surfaces
+  resolved `preview_chars` with `[source: ...]` provenance. Read-only
+  by construction; never flips the doctor exit code.
+
+### Changed
+
+- `mcp_server` retrieval-tool `query` Pydantic `Field` tightened to
+  `Field(..., min_length=1, max_length=max_q)` at both sites
+  (canonical `dual_memory_search_tool` and `qdrant_find_alias`,
+  D-NOID-01.c). The JSON Schema now requires a non-empty `query`
+  string at the schema layer — defense-in-depth alongside the
+  preserved runtime `.strip()` check.
+
+### Migration
+
+- Legacy chunks lack `path_prefixes`. First post-upgrade
+  `supamem index` runs a one-shot eager scroll-and-`set_payload`
+  sweep that back-fills `path_prefixes` per chunk — pure metadata
+  update, **zero re-embedding cost**, and idempotent on subsequent
+  runs. No `--force` reindex required. Mirrors the Phase 7 D-08
+  classifier-hash sweep precedent.
+
+### Anti-feature lock (FILT-02)
+
+- supamem does NOT auto-inject identity / wake-up / prelude context
+  into agent calls — retrieval is always solicited via an explicit
+  query. Locked by `tests/test_no_identity_tier.py`: a CI-enforced
+  regression test that fails if a future MCP tool name matches
+  `(?i)(wake[_-]?up|identity|prelude|inject)` OR if any retrieval
+  tool's JSON Schema drops `query` from `required` / loses
+  `minLength >= 1`.
+
 ## [0.3.0a2] — 2026-05-03 — Bench harness (LongMemEval + RAGAS)
 
 ### Added

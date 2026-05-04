@@ -18,8 +18,8 @@ installed, AI coding assistants gain persistent semantic memory across projects.
 
 ## Distribution
 
-- [PyPI](https://pypi.org/project/supamem/): Released via Trusted Publisher OIDC; `pip install supamem` or `uv tool install supamem`. Current version: v0.3.0a2 (alpha pre-release; v0.2.0 / v0.2.1 already shipped).
-- [CHANGELOG](CHANGELOG.md): Per-version release notes (v0.1.0 initial, v0.1.1 update-check + AGENTS.md, v0.1.2 project-tunable regress baselines, v0.1.3 dual_memory_write + qdrant aliases, v0.1.4 SessionStart banner + supamem live dashboard, v0.1.5 SessionStart wired by installer, v0.2.0 mcp.caps + multi-project install + agent-discipline hooks, v0.2.1 user-visible banner + drift signal, v0.2.2a1 transcript chunker plugin, v0.2.3a1 coding-path classifier + where filter, v0.2.4a1 code-aware reranker + eager ML fetch + doctor-driven repair self-heal, v0.2.5a1 subagent reachability auto-patcher + unpatch-agents + doctor reachability panel, v0.3.0a1 per-source temporal validity + transcript-only recency decay + temporal doctor panel, v0.3.0a2 bench harness (LongMemEval_S + RAGAS triad) + [eval] extra + two-tier judge + doctor Eval-bench panel)
+- [PyPI](https://pypi.org/project/supamem/): Released via Trusted Publisher OIDC; `pip install supamem` or `uv tool install supamem`. Current version: v0.3.0a3 (alpha pre-release; v0.2.0 / v0.2.1 already shipped).
+- [CHANGELOG](CHANGELOG.md): Per-version release notes (v0.1.0 initial, v0.1.1 update-check + AGENTS.md, v0.1.2 project-tunable regress baselines, v0.1.3 dual_memory_write + qdrant aliases, v0.1.4 SessionStart banner + supamem live dashboard, v0.1.5 SessionStart wired by installer, v0.2.0 mcp.caps + multi-project install + agent-discipline hooks, v0.2.1 user-visible banner + drift signal, v0.2.2a1 transcript chunker plugin, v0.2.3a1 coding-path classifier + where filter, v0.2.4a1 code-aware reranker + eager ML fetch + doctor-driven repair self-heal, v0.2.5a1 subagent reachability auto-patcher + unpatch-agents + doctor reachability panel, v0.3.0a1 per-source temporal validity + transcript-only recency decay + temporal doctor panel, v0.3.0a2 bench harness (LongMemEval_S + RAGAS triad) + [eval] extra + two-tier judge + doctor Eval-bench panel, v0.3.0a3 filtered_dense retrieval backend + path_prefix where magic key + valid_to: "now" no-op alias + [retrieval.filtered_dense] preview_chars config + anti-identity-tier lock + Filtered-dense doctor panel + mcp_server query Field min_length=1)
 
 ## Translations
 
@@ -222,6 +222,47 @@ Bundled offline benchmark harness gating Phase 13's public claims. Two suites, o
 - `supamem doctor` "Eval bench" panel surfaces dataset SHA drift vs the pinned revision, cache size, last-run timestamp, RAGAS extra availability, and the active baseline file. Read-only; never flips the doctor exit code.
 - Baseline storage: `src/supamem/eval/baselines/v0.1.5.json` (checked-in JSON; ships with `_baseline_pending: true` until Phase 13 measures). Selected via `--baseline vX.Y.Z` (defaults to previous milestone tag).
 - Report shape (D-REPORT-01): MTEB-style envelope keyed by `supamem_version`, `config_sha`, `collection`, `suite`, `dataset.{name,revision,n,subset_ids}`, `judge.{kind,model}`, `main_score`, `scores.{recall_at_5,context_precision,context_recall,answer_relevance,tokens_per_correct_answer,context_compression_ratio,input_tokens_p50,input_tokens_p95,write_cost}`, `by_axis`, `baseline.{version,delta}`, and `per_question` (verbose only).
+
+## Filtered retrieval backend (v0.3.0a3+)
+
+Scoped+capped retrieval backend that wraps `tuned_hybrid` with a `where` filter and a per-hit preview cap. Selected by `[supamem.retrieval] backend = "filtered_dense"` (config-only switch, mirrors how `tuned_hybrid` / `dense` / `bm25` are selected). Registered via the existing `supamem.retrieval` plugin entry-point group.
+
+### Retrieval backends (registered)
+
+- `tuned_hybrid` — locked BM25 + MiniLM fusion (default; D-25)
+- `dense` — MiniLM-only
+- `bm25` — sparse-only
+- `filtered_dense` (v0.3.0a3+) — hybrid wrapper around `tuned_hybrid` with backend-level `where` enforcement and per-hit preview cap; populates `RetrievedChunk.preview` from `[retrieval.filtered_dense] preview_chars`. Other backends leave `preview` unset (None) — MCP server populates it as today for those paths
+
+### Config
+
+- `[retrieval.filtered_dense] preview_chars` (int, default `240`) — backend-level per-hit preview cap. `0` disables truncation entirely (preview becomes the full document text). Independent of the MCP transport cap `mcp.caps.max_preview_chars` (Phase 5), which continues to apply on top — the MCP server takes `min(transport_cap, len(chunk.preview))`. Both default-on; both individually disable-able by setting to `0`.
+
+### MCP `where` parameter — magic keys (v0.3.0a3+)
+
+`dual_memory_search` and `qdrant_find` accept a `where: dict[str, str | list[str]] | None` filter (Phase 7 D-04 contract — type unchanged). Beyond the Phase 7 `room` key, two magic keys are recognized in v0.3.0a3+:
+
+- `path_prefix` (string or list of strings) — left-anchored exact path-segment match against the new `payload.path_prefixes: list[str]` payload field. Indexer builds the prefix list per chunk at index time (`Path(file_path).parts` accumulated as `["src", "src/supamem", "src/supamem/retrieval", "src/supamem/retrieval/filters.py"]`). Translates to `FieldCondition(key="path_prefixes", match=MatchValue(...))` for a string, `MatchAny(...)` for a list. `KeywordIndex` (`on_disk=True`) created at collection init, mirroring Phase 7 `room`. `path_prefix="src/supa"` does NOT match `src/supamem/...` because `"src/supa"` is not a stored prefix segment — only complete `/`-segment boundaries match (rejected: `MatchText` + Qdrant `prefix` tokenizer, which is token-anywhere, not left-anchored).
+- `valid_to: "now"` — accepted as a no-op alias for the always-on temporal clause from Phase 9 (`build_qdrant_filter` already enforces it). Any other value raises `ValueError` with the message `"supamem rejects valid_to=<value>: temporal validity is always-on (Phase 9 D-FILTER-01); time-travel queries are out of scope. See CHANGELOG v0.2.x for context."` — surfaces via `err_console`.
+
+Multiple `where` keys are AND'd; list values within a key are OR'd (`MatchAny`). All other `where` keys continue to use the existing key-name = payload-key-name pass-through path.
+
+### Migration (D-PFX-06)
+
+Legacy chunks (indexed before v0.3.0a3) lack `payload.path_prefixes`. First post-upgrade `supamem index` runs a one-shot eager scroll-and-`set_payload` sweep that back-fills `path_prefixes` per chunk — pure metadata update, **zero re-embedding cost**, idempotent on subsequent runs. No `--force` reindex required. Mirrors the Phase 7 D-08 classifier-hash sweep precedent.
+
+### Doctor surface
+
+`supamem doctor` adds a "Filtered-dense backend" panel surfacing the resolved `preview_chars` value with `[source: ...]` provenance. Read-only by construction; never flips the doctor exit code.
+
+## Anti-feature lock — no identity / wake-up / prelude tier (v0.3.0a3+)
+
+supamem does NOT auto-inject identity / wake-up / prelude context into agent calls — retrieval is always solicited via an explicit query. There is no hidden "agent identity" tier, no SessionStart-time wake-up payload that pushes ambient context into the model, no MCP tool that fires retrieval when the `query` is empty.
+
+Locked from two sides:
+
+- **Schema-level (D-NOID-01.c, v0.3.0a3+)** — every retrieval tool's `query` Pydantic `Field` is `Field(..., min_length=1, max_length=max_q)` at both registration sites: canonical `dual_memory_search_tool` and `qdrant_find_alias` (D-17 anti-drift parity). Empty `query` rejected with a structured MCP validation error at the schema layer; whitespace-only `"   "` continues to be caught by the runtime `.strip()` defense-in-depth check (since `min_length=1` accepts a single-character whitespace string).
+- **Test-level (FILT-02)** — `tests/test_no_identity_tier.py` is a CI-enforced regression test with three pinned assertions: (1) no registered MCP tool name matches `(?i)(wake[_-]?up|identity|prelude|inject)`; (2) every retrieval tool's JSON Schema has `query` in `required` with `properties.query.minLength >= 1`; (3) empty + whitespace-only queries are rejected at runtime. Name-based import lints (e.g. banning `*identity*` substrings) were rejected as theatre — defeated trivially by aliased imports; the regression test catches the only failure mode that matters.
 
 ## Architecture
 

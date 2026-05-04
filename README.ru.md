@@ -1,6 +1,6 @@
 **Языки:** [English](README.md) · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [日本語](README.ja.md) · [Русский](README.ru.md)
 
-<!-- synced-with: README.md @ 3a24042 -->
+<!-- synced-with: README.md @ b5a3522 -->
 
 > Перевод выполнен с помощью ИИ. Корректировки от носителей языка приветствуются — открывайте PR.
 
@@ -556,6 +556,108 @@ doctor.
 > ⚠ **Дефолтный retention — деструктивный** для пользователей, переходящих с v0.2.x
 > с аудит-коллекциями старше 90 дней. Установите
 > `[supamem.retrieval.temporal] retention_days = 0`, чтобы полностью отключить авто-GC.
+
+---
+
+## 🔭 Бэкенд retrieval с фильтром (v0.3.0a3+)
+
+`filtered_dense` — это scoped+capped бэкенд retrieval, оборачивающий `tuned_hybrid`
+фильтром `where` и кэпом превью на каждое попадание. Используйте его, когда нужно на
+уровне бэкенда форсировать «дай ранжированные результаты, ограниченные *этим*
+путём/room, с превью, обрезанными до *N* символов ещё до выхода из Qdrant».
+
+```toml
+[supamem.retrieval]
+backend = "filtered_dense"
+
+[supamem.retrieval.filtered_dense]
+preview_chars = 240   # дефолт 240; 0 полностью отключает обрезку
+```
+
+Выбор повторяет любой другой бэкенд (`tuned_hybrid`, `dense`, `bm25`) — регистрация
+через группу плагинов `supamem.retrieval`; переключение — это правка одной строки в
+конфиге без изменений кода. Транспортный кэп MCP (`mcp.caps.max_preview_chars`)
+продолжает применяться поверх кэпа бэкенда; оба независимо отключаются установкой в
+`0`.
+
+### Фильтр `where` — magic key
+
+`dual_memory_search` (и алиас `qdrant_find`) принимают параметр
+`where: dict[str, str | list[str]]`, который транслируется в payload-фильтр Qdrant.
+Помимо ключа `room` из Phase 7, распознаются два новых magic key:
+
+```python
+# 1. path_prefix — точное совпадение сегментов пути с якорем слева
+dual_memory_search(query="auth flow", where={"path_prefix": "src/supamem/retrieval"})
+
+# OR по нескольким префиксам (Qdrant MatchAny)
+dual_memory_search(
+    query="rate limit",
+    where={"path_prefix": ["src/supamem", "tests/test_filtered_dense.py"]},
+)
+
+# 2. valid_to: "now" — no-op-алиас для всегда-включённого временного условия (Phase 9)
+dual_memory_search(query="session", where={"valid_to": "now"})
+```
+
+Семантика:
+
+- **`path_prefix`** заякорен слева на границах сегмента `/`. Индексер хранит
+  `payload.path_prefixes: list[str]` на каждый chunk (например,
+  `src/supamem/retrieval/filters.py` →
+  `["src", "src/supamem", "src/supamem/retrieval", "src/supamem/retrieval/filters.py"]`).
+  `path_prefix="src/supa"` **не** совпадает с `src/supamem/...`, потому что `"src/supa"`
+  не является сохранённым префиксным сегментом — совпадают только полные границы
+  сегментов `/` (повторяет семантику путей файловой системы).
+- **`valid_to: "now"`** принимается как no-op-алиас, документирующий всегда-включённое
+  временное условие из Phase 9. Любое другое значение бросает `ValueError` —
+  time-travel-запросы вне области видимости. Чтобы управлять историческими chunk-ами в
+  коллекции, используйте `retention_days`.
+
+Несколько ключей в `where` объединяются через AND; список значений внутри ключа — OR
+(`MatchAny`).
+
+### Миграция
+
+Легаси-chunk-и (проиндексированные до v0.3.0a3) не имеют `path_prefixes`. Первый
+`supamem index` после апгрейда выполнит однократный проход scroll-and-`set_payload`,
+который заполнит `path_prefixes` на каждом chunk-е — чистое обновление метаданных,
+**нулевая стоимость пере-эмбеддинга**, идемпотентен на последующих запусках.
+`--force` reindex **не требуется**.
+
+### Панель doctor
+
+`supamem doctor` добавляет панель «Filtered-dense backend», показывающую разрешённое
+значение `preview_chars` со строкой провенанса `[source: ...]`. Read-only по
+построению; никогда не меняет exit code doctor.
+
+---
+
+## 🚫 Чего supamem **не делает**
+
+`supamem` **НЕ** автоматически инжектит контекст identity / wake-up / prelude в
+вызовы агента — retrieval всегда запрашивается явным запросом. Нет скрытого яруса
+«идентичности агента», нет wake-up-payload, который при SessionStart протаскивает
+неявный контекст в модель, нет MCP-tool, который запускает retrieval при пустом
+`query`.
+
+Это зафиксировано с двух сторон:
+
+1. **Schema-уровень (v0.3.0a3+):** параметр `query` каждого retrieval-tool — это
+   `Field(..., min_length=1, max_length=...)` — обязательный, непустой, форсированный
+   на уровне schema в момент регистрации tool. Пустой `query` отвергается
+   структурированной MCP-ошибкой валидации, а не подменяется молча дефолтным
+   контекстом.
+2. **Тест-уровень (FILT-02):** `tests/test_no_identity_tier.py` — регрессионный тест,
+   форсируемый CI: сборка падает, если имя зарегистрированного MCP-tool совпадает с
+   `(?i)(wake[_-]?up|identity|prelude|inject)` ИЛИ если JSON Schema какого-либо
+   retrieval-tool теряет `query` из `required` / теряет `minLength >= 1`.
+
+Если вы хотите, чтобы контекст supamem подгружался при открытии сессии, существующий
+hook баннера SessionStart — это поддерживаемая поверхность: он инжектит одну строку
+статуса (коллекция, число chunk-ов, путь к audit-логу), и никогда не протаскивает
+результаты retrieval в модель тайно. Чтобы прочитать корпус, модель всё равно должна
+вызвать `dual_memory_search`.
 
 ---
 

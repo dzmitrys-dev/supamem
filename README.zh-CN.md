@@ -1,6 +1,6 @@
 **语言:** [English](README.md) · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [日本語](README.ja.md) · [Русский](README.ru.md)
 
-<!-- synced-with: README.md @ 3a24042 -->
+<!-- synced-with: README.md @ b5a3522 -->
 
 > 本翻译由 AI 协助生成。欢迎母语开发者通过 PR 修正用词。
 
@@ -524,6 +524,91 @@ alpha          = 0.7             # 下限:最旧的 transcript 仍保留 0.7 倍
 
 > ⚠ **默认 retention 是破坏性的**:从 v0.2.x 升级且持有超过 90 天的审计型集合的用户
 > 受影响。设置 `[supamem.retrieval.temporal] retention_days = 0` 即可完全禁用自动 GC。
+
+---
+
+## 🔭 带过滤的检索后端(v0.3.0a3+)
+
+`filtered_dense` 是一个"作用域+截断"的检索后端,在 `tuned_hybrid` 之上叠加 `where`
+过滤与每条命中的预览长度上限。当你希望在后端层面强制"按指定路径/room 返回排序结果,
+并且预览在离开 Qdrant 之前就被截断到 N 字"时使用它。
+
+```toml
+[supamem.retrieval]
+backend = "filtered_dense"
+
+[supamem.retrieval.filtered_dense]
+preview_chars = 240   # 默认 240;0 完全禁用截断
+```
+
+选择方式与其他后端(`tuned_hybrid`、`dense`、`bm25`)完全一致——通过
+`supamem.retrieval` 插件 entry-point 注册;切换只需改配置,无需改代码。MCP 传输层上限
+(`mcp.caps.max_preview_chars`)继续叠加在后端上限之上;两者均可独立设为 `0` 关闭。
+
+### `where` 过滤器 —— 魔法键
+
+`dual_memory_search`(及别名 `qdrant_find`)接受 `where: dict[str, str | list[str]]`
+参数,会被翻译为 Qdrant 的 payload 过滤器。除 Phase 7 的 `room` 之外,新增两个魔法键:
+
+```python
+# 1. path_prefix —— 左锚定的精确路径段匹配
+dual_memory_search(query="auth flow", where={"path_prefix": "src/supamem/retrieval"})
+
+# 多个前缀(Qdrant MatchAny)
+dual_memory_search(
+    query="rate limit",
+    where={"path_prefix": ["src/supamem", "tests/test_filtered_dense.py"]},
+)
+
+# 2. valid_to: "now" —— Phase 9 始终在线时序条件的空操作别名
+dual_memory_search(query="session", where={"valid_to": "now"})
+```
+
+语义:
+
+- **`path_prefix`** 在 `/` 段边界上左锚定。索引器为每个 chunk 存储
+  `payload.path_prefixes: list[str]`(例如 `src/supamem/retrieval/filters.py`
+  → `["src", "src/supamem", "src/supamem/retrieval", "src/supamem/retrieval/filters.py"]`)。
+  `path_prefix="src/supa"` **不会**匹配 `src/supamem/...`,因为 `"src/supa"` 不是被存储
+  的前缀段——只有完整的 `/` 段边界会命中(贴近文件系统语义)。
+- **`valid_to: "now"`** 作为空操作别名,显式表达 Phase 9 的始终在线时序条件。其他取值
+  会抛出 `ValueError`——时间穿越查询不在范围内。要控制集合中保留哪些历史 chunk,请使用
+  `retention_days`。
+
+`where` 多个键之间是 AND;同一键内的列表值是 OR(`MatchAny`)。
+
+### 迁移
+
+v0.3.0a3 之前索引的遗留 chunk 没有 `path_prefixes`。升级后第一次运行 `supamem index`
+会执行一次性的 scroll-and-`set_payload` 扫描,为每个 chunk 回填 `path_prefixes`——
+纯元数据更新,**零再嵌入开销**,后续运行幂等。**无需** `--force` 重新索引。
+
+### Doctor 面板
+
+`supamem doctor` 新增 "Filtered-dense backend" 面板,显示 `preview_chars` 解析值
+及其 `[source: ...]` 来源。仅读,绝不会改变 doctor 退出码。
+
+---
+
+## 🚫 supamem **不做**的事情
+
+`supamem` **不会**自动向 agent 调用注入 identity / wake-up / prelude 上下文
+—— 检索始终通过显式查询发起。不存在隐藏的"agent 身份"层、不存在 SessionStart
+时机塞入隐式上下文的 wake-up 负载、也不存在 `query` 为空时仍会触发检索的 MCP 工具。
+
+这一点从两层加锁:
+
+1. **Schema 层(v0.3.0a3+):** 每个检索工具的 `query` 参数都是
+   `Field(..., min_length=1, max_length=...)`——必填、非空,在工具注册时即由
+   schema 强制。空 `query` 会被 MCP 验证错误显式拒绝,不会被悄悄替换为默认上下文。
+2. **测试层(FILT-02):** `tests/test_no_identity_tier.py` 是 CI 强制的回归测试,
+   一旦未来注册的 MCP 工具名命中
+   `(?i)(wake[_-]?up|identity|prelude|inject)`,或任一检索工具的 JSON Schema 把
+   `query` 移出 `required` / 丢失 `minLength >= 1`,构建立即失败。
+
+如果你希望在会话开启时加载 supamem 上下文,现有的 SessionStart 横幅 hook 是受支持的入口
+——它注入一行状态(集合、chunk 计数、audit 日志路径),绝不会暗中把检索结果塞给模型。
+模型仍需调用 `dual_memory_search` 才能读取语料。
 
 ---
 

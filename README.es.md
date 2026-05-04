@@ -1,6 +1,6 @@
 **Idiomas:** [English](README.md) · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [日本語](README.ja.md) · [Русский](README.ru.md)
 
-<!-- synced-with: README.md @ 3a24042 -->
+<!-- synced-with: README.md @ b5a3522 -->
 
 > Esta traducción fue generada con asistencia de IA. Las correcciones de hablantes nativos son bienvenidas vía PR.
 
@@ -557,6 +557,107 @@ Defensa en profundidad junto al filtro `IsEmpty` de runtime.
 > ⚠ **El retention por defecto es destructivo** para usuarios que vienen de v0.2.x
 > con colecciones modo auditoría de más de 90 días. Setea
 > `[supamem.retrieval.temporal] retention_days = 0` para deshabilitar el auto-GC.
+
+---
+
+## 🔭 Backend de retrieval con filtro (v0.3.0a3+)
+
+`filtered_dense` es un backend de retrieval *scoped+capped* que envuelve a
+`tuned_hybrid` con un filtro `where` y un tope de preview por hit. Úsalo cuando quieras
+forzar a nivel de backend "dame resultados rankeados acotados a *este* path/room, con
+los previews recortados a *N* caracteres antes incluso de salir de Qdrant".
+
+```toml
+[supamem.retrieval]
+backend = "filtered_dense"
+
+[supamem.retrieval.filtered_dense]
+preview_chars = 240   # default 240; 0 deshabilita la truncación por completo
+```
+
+La selección espeja a la de cualquier otro backend (`tuned_hybrid`, `dense`, `bm25`) —
+registrado vía el grupo de plugins `supamem.retrieval`; cambiar es un edit puramente de
+config, sin tocar código. El cap de transporte MCP (`mcp.caps.max_preview_chars`) sigue
+aplicándose por encima del cap de backend; ambos se desactivan independientemente
+seteándolos a `0`.
+
+### Filtro `where` — magic keys
+
+`dual_memory_search` (y el alias `qdrant_find`) aceptan un parámetro
+`where: dict[str, str | list[str]]` que se traduce a un filtro de payload de Qdrant.
+Más allá de la key `room` de Phase 7, se reconocen dos magic keys nuevas:
+
+```python
+# 1. path_prefix — match exacto de segmentos de path, anclado a la izquierda
+dual_memory_search(query="auth flow", where={"path_prefix": "src/supamem/retrieval"})
+
+# OR sobre múltiples prefijos (Qdrant MatchAny)
+dual_memory_search(
+    query="rate limit",
+    where={"path_prefix": ["src/supamem", "tests/test_filtered_dense.py"]},
+)
+
+# 2. valid_to: "now" — alias no-op de la cláusula temporal always-on (Phase 9)
+dual_memory_search(query="session", where={"valid_to": "now"})
+```
+
+Semántica:
+
+- **`path_prefix`** está anclado a la izquierda en bordes de segmento `/`. El indexer
+  guarda `payload.path_prefixes: list[str]` por chunk (p. ej.
+  `src/supamem/retrieval/filters.py` →
+  `["src", "src/supamem", "src/supamem/retrieval", "src/supamem/retrieval/filters.py"]`).
+  `path_prefix="src/supa"` **no** matchea `src/supamem/...` porque `"src/supa"` no es un
+  segmento prefijo almacenado — solo bordes completos de segmento `/` matchean (espeja
+  la semántica de paths del filesystem).
+- **`valid_to: "now"`** se acepta como alias no-op documentando la cláusula temporal
+  always-on de Phase 9. Cualquier otro valor lanza `ValueError` — las consultas con
+  time-travel quedan fuera de scope. Usá `retention_days` para controlar qué chunks
+  históricos permanecen en la colección.
+
+Múltiples keys de `where` se AND-ean; los valores en lista dentro de una key se OR-ean
+(`MatchAny`).
+
+### Migración
+
+Los chunks legados (indexados antes de v0.3.0a3) no tienen `path_prefixes`. El primer
+`supamem index` post-upgrade corre una pasada one-shot de scroll y `set_payload` que
+back-fillea `path_prefixes` por chunk — pure metadata update, **cero costo de
+re-embedding**, idempotente en runs subsiguientes. **No** se requiere `--force` reindex.
+
+### Panel doctor
+
+`supamem doctor` agrega un panel "Filtered-dense backend" que muestra el `preview_chars`
+resuelto con la línea de procedencia `[source: ...]`. Read-only por construcción; nunca
+voltea el exit code del doctor.
+
+---
+
+## 🚫 Lo que supamem **NO** hace
+
+`supamem` **NO** auto-inyecta contexto de identity / wake-up / prelude en las llamadas
+del agente — el retrieval siempre se solicita vía una query explícita. No hay un tier
+oculto de "identidad del agente", ni un payload de wake-up que empuje contexto ambient
+al modelo en SessionStart, ni un MCP tool que dispare retrieval cuando la `query` está
+vacía.
+
+Esto está bloqueado por dos lados:
+
+1. **Nivel schema (v0.3.0a3+):** el parámetro `query` de cada tool de retrieval es
+   `Field(..., min_length=1, max_length=...)` — requerido, no vacío, enforzado por
+   schema en el momento del tool registration. Una `query` vacía se rechaza con un
+   error de validación MCP estructurado, jamás se sustituye silenciosamente con
+   contexto por default.
+2. **Nivel test (FILT-02):** `tests/test_no_identity_tier.py` es un test de regresión
+   enforzado por CI que falla la build si algún MCP tool registrado matchea
+   `(?i)(wake[_-]?up|identity|prelude|inject)` O si algún tool de retrieval pierde
+   `query` de su `required` / pierde `minLength >= 1` en su JSON Schema.
+
+Si querés contexto de supamem cargado en session-open, el hook de banner de SessionStart
+existente es la superficie soportada — inyecta una sola línea de estado (collection,
+conteo de chunks, path del audit-log), nunca tira resultados de retrieval al modelo de
+forma silenciosa. El modelo todavía tiene que llamar a `dual_memory_search` para leer
+el corpus.
 
 ---
 
