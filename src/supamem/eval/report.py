@@ -79,34 +79,71 @@ def _compute_main_score(suite: str, scores: dict[str, Any]) -> float:
     return float(scores.get(metric, 0.0))
 
 
+def _compute_delta(
+    scores: dict[str, Any], baseline_scores: dict[str, Any]
+) -> dict[str, float]:
+    """Per-metric signed-float delta, dropping metrics whose values are
+    non-numeric in either side. Keeps the contract simple: delta carries
+    floats only.
+    """
+    delta: dict[str, float] = {}
+    for name, current in scores.items():
+        if name not in baseline_scores:
+            continue
+        try:
+            delta[name] = float(current) - float(baseline_scores[name])
+        except (TypeError, ValueError):
+            continue
+    return delta
+
+
 def _baseline_envelope(
     scores: dict[str, Any],
     baseline_data: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Build the ``baseline`` envelope sub-tree.
 
-    Always returns a dict with ``version`` + ``delta``. ``delta`` carries
-    signed floats only for metrics present in BOTH the current run and
-    the baseline; missing metrics are silently dropped (per D-REPORT-01:
-    "no KeyError when the baseline pre-dates a metric introduction").
+    Two shapes are accepted (D-GATE-03 backwards-compat + Phase 14 Plan A):
+
+    - **Legacy:** baseline JSON carries top-level ``scores`` + ``by_axis``.
+      The envelope returns ``{version, delta}`` where ``delta`` is the
+      per-metric signed float against ``scores``.
+    - **Migrated (Phase 14):** baseline JSON carries sibling
+      ``unscoped: {scores, by_axis}`` and ``scoped: {scores, by_axis}``
+      keys (and a legacy mirror at top level for migration safety). The
+      envelope returns ``{version, delta, delta_unscoped, delta_scoped}``.
+      Plan B's gate logic reads ``delta_scoped[<metric>]``; ``delta`` is
+      a mirror of ``delta_unscoped`` for tooling that pre-dates the
+      migration.
+
+    Missing metrics are silently dropped — D-REPORT-01: "no KeyError when
+    the baseline pre-dates a metric introduction".
     """
     if not baseline_data:
         return {"version": None, "delta": {}}
 
     version = baseline_data.get("version")
-    bscores = baseline_data.get("scores") or {}
-    delta: dict[str, float] = {}
-    for name, current in scores.items():
-        if name not in bscores:
-            continue
-        try:
-            delta[name] = float(current) - float(bscores[name])
-        except (TypeError, ValueError):
-            # Non-numeric current or baseline value — omit rather than
-            # invent a signed float. Keeps the contract simple: delta
-            # carries floats only.
-            continue
-    return {"version": version, "delta": delta}
+
+    # Migrated shape detection: presence of either sibling key triggers
+    # the per-pass envelope. The legacy mirror at top-level is still
+    # honored so old readers keep working.
+    has_migrated = (
+        isinstance(baseline_data.get("unscoped"), dict)
+        or isinstance(baseline_data.get("scoped"), dict)
+    )
+
+    legacy_bscores = baseline_data.get("scores") or {}
+    legacy_delta = _compute_delta(scores, legacy_bscores)
+
+    out: dict[str, Any] = {"version": version, "delta": legacy_delta}
+
+    if has_migrated:
+        unscoped = baseline_data.get("unscoped") or {}
+        scoped = baseline_data.get("scoped") or {}
+        out["delta_unscoped"] = _compute_delta(scores, unscoped.get("scores") or {})
+        out["delta_scoped"] = _compute_delta(scores, scoped.get("scores") or {})
+
+    return out
 
 
 def build_report(

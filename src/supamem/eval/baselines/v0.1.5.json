@@ -1,8 +1,9 @@
 {
   "version": "v0.1.5",
   "captured_at": "2026-05-04T16:51:15Z",
-  "capture_method": "config-emulation",
-  "capture_notes": "Captured 2026-05-04 via config-emulation rather than v0.1.5 source checkout. Methodology: current source (v0.3.0a3) with retrieval.reranker=off, no classifier where-filter, no temporal filter, default tuned_hybrid backend. The existing supamem-supamem collection contains v0.3.0a3 payload metadata, but classifier and valid_to fields are unused at query time when the harness calls backend.query() with no where filter. This emulates pre-Phase-8 retrieval semantics. Source eval JSON: ~/.supamem/eval/v0.3.0a3-full-20260504T103341Z.json (470 records, heuristic judge). Phase 10 success criterion gated on -30% tokens_per_correct_answer reduction vs this baseline.",
+  "capture_method": "config-emulation+scoped-recapture",
+  "capture_notes": "Re-captured under Phase 14 Plan A against the LongMemEval haystack collection (supamem_eval_longmemeval_s). Original v0.1.5 capture (commit ab0a0d5) was against the user's project devdocs collection — corpus changed; absolute numbers are not directly comparable. The legacy_devdocs_unscoped_tpca field preserves the original 1374.59 number for historical reference but does NOT gate. Plan B will land the actual scoped numbers via the Phase 14 ritual; until then the 'scoped' block carries placeholder_until_plan_b=true with the same values as 'unscoped' so the envelope shape is stable for tooling. See ADR-0001 (Plan D) for the corpus-mismatch disclosure required by D-GATE-05.",
+  "legacy_devdocs_unscoped_tpca": 1374.5881560283688,
   "suite": "longmemeval_s",
   "judge": {
     "kind": "heuristic",
@@ -13,6 +14,147 @@
     "revision": "98d7416c24c778c2fee6e6f3006e7a073259d48f",
     "n": 470,
     "subset_ids": []
+  },
+  "unscoped": {
+    "scores": {
+      "recall_at_5": 0.21693683703050703,
+      "context_precision": null,
+      "context_recall": null,
+      "answer_relevance": null,
+      "tokens_per_correct_answer": 1374.5881560283688,
+      "context_compression_ratio": 384.6544559994397,
+      "input_tokens_p50": 742.0,
+      "input_tokens_p95": 920.0,
+      "write_cost": 746.9063829787234
+    },
+    "by_axis": {
+      "single_session_user": {
+        "recall_at_5": 0.1008008658008658,
+        "context_precision": 0.0,
+        "context_recall": 0.0,
+        "answer_relevance": 0.0,
+        "tokens_per_correct_answer": 841.2761904761905,
+        "context_compression_ratio": 383.61438435374146,
+        "input_tokens_p50": 707.9571428571429,
+        "input_tokens_p95": 707.9571428571429,
+        "write_cost": 712.7428571428571
+      },
+      "multi_session": {
+        "recall_at_5": 0.33530110307941985,
+        "context_precision": 0.0,
+        "context_recall": 0.0,
+        "answer_relevance": 0.0,
+        "tokens_per_correct_answer": 1321.5147869674186,
+        "context_compression_ratio": 563.5936404757483,
+        "input_tokens_p50": 751.5488721804511,
+        "input_tokens_p95": 751.5488721804511,
+        "write_cost": 757.8195488721805
+      },
+      "temporal_reasoning": {
+        "recall_at_5": 0.2174042228892513,
+        "context_precision": 0.0,
+        "context_recall": 0.0,
+        "answer_relevance": 0.0,
+        "tokens_per_correct_answer": 1931.9671679197995,
+        "context_compression_ratio": 220.12139309953702,
+        "input_tokens_p50": 737.4135338345865,
+        "input_tokens_p95": 737.4135338345865,
+        "write_cost": 748.1203007518797
+      },
+      "knowledge_update": {
+        "recall_at_5": 0.2443019943019943,
+        "context_precision": 0.0,
+        "context_recall": 0.0,
+        "answer_relevance": 0.0,
+        "tokens_per_correct_answer": 1074.474358974359,
+        "context_compression_ratio": 465.1351247517914,
+        "input_tokens_p50": 725.1538461538462,
+        "input_tokens_p95": 725.1538461538462,
+        "write_cost": 730.0128205128206
+      },
+      "single_session_assistant": {
+        "recall_at_5": 0.04176587301587302,
+        "context_precision": 0.0,
+        "context_recall": 0.0,
+        "answer_relevance": 0.0,
+        "tokens_per_correct_answer": 1261.517857142857,
+        "context_compression_ratio": 239.64193247896506,
+        "input_tokens_p50": 775.2857142857143,
+        "input_tokens_p95": 775.2857142857143,
+        "write_cost": 784.3392857142857
+      }
+    }
+  },
+  "scoped": {
+    "placeholder_until_plan_b": true,
+    "scores": {
+      "recall_at_5": 0.21693683703050703,
+      "context_precision": null,
+      "context_recall": null,
+      "answer_relevance": null,
+      "tokens_per_correct_answer": 1374.5881560283688,
+      "context_compression_ratio": 384.6544559994397,
+      "input_tokens_p50": 742.0,
+      "input_tokens_p95": 920.0,
+      "write_cost": 746.9063829787234
+    },
+    "by_axis": {
+      "single_session_user": {
+        "recall_at_5": 0.1008008658008658,
+        "context_precision": 0.0,
+        "context_recall": 0.0,
+        "answer_relevance": 0.0,
+        "tokens_per_correct_answer": 841.2761904761905,
+        "context_compression_ratio": 383.61438435374146,
+        "input_tokens_p50": 707.9571428571429,
+        "input_tokens_p95": 707.9571428571429,
+        "write_cost": 712.7428571428571
+      },
+      "multi_session": {
+        "recall_at_5": 0.33530110307941985,
+        "context_precision": 0.0,
+        "context_recall": 0.0,
+        "answer_relevance": 0.0,
+        "tokens_per_correct_answer": 1321.5147869674186,
+        "context_compression_ratio": 563.5936404757483,
+        "input_tokens_p50": 751.5488721804511,
+        "input_tokens_p95": 751.5488721804511,
+        "write_cost": 757.8195488721805
+      },
+      "temporal_reasoning": {
+        "recall_at_5": 0.2174042228892513,
+        "context_precision": 0.0,
+        "context_recall": 0.0,
+        "answer_relevance": 0.0,
+        "tokens_per_correct_answer": 1931.9671679197995,
+        "context_compression_ratio": 220.12139309953702,
+        "input_tokens_p50": 737.4135338345865,
+        "input_tokens_p95": 737.4135338345865,
+        "write_cost": 748.1203007518797
+      },
+      "knowledge_update": {
+        "recall_at_5": 0.2443019943019943,
+        "context_precision": 0.0,
+        "context_recall": 0.0,
+        "answer_relevance": 0.0,
+        "tokens_per_correct_answer": 1074.474358974359,
+        "context_compression_ratio": 465.1351247517914,
+        "input_tokens_p50": 725.1538461538462,
+        "input_tokens_p95": 725.1538461538462,
+        "write_cost": 730.0128205128206
+      },
+      "single_session_assistant": {
+        "recall_at_5": 0.04176587301587302,
+        "context_precision": 0.0,
+        "context_recall": 0.0,
+        "answer_relevance": 0.0,
+        "tokens_per_correct_answer": 1261.517857142857,
+        "context_compression_ratio": 239.64193247896506,
+        "input_tokens_p50": 775.2857142857143,
+        "input_tokens_p95": 775.2857142857143,
+        "write_cost": 784.3392857142857
+      }
+    }
   },
   "scores": {
     "recall_at_5": 0.21693683703050703,
