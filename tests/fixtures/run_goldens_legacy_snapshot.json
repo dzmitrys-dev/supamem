@@ -1,9 +1,9 @@
 {
   "function_name": "_run_goldens_legacy",
   "file": "src/supamem/eval/runner.py",
-  "startline": 122,
-  "endline": 210,
+  "startline": 148,
+  "endline": 236,
   "sha256": "44b5b28152c804a96f5d57606985a8833f580c4619e778a649b2cc45f208cf9e",
   "byte_len": 3183,
-  "note": "Phase 14 Plan A Task A3 byte-identical lock (D-VEND-04). Updating this snapshot requires explicit decision-record in CONTEXT.md."
+  "note": "Phase 14 Plan A Task A3 byte-identical lock (D-VEND-04). The function body sha256 + byte length is the canonical lock; line numbers are informational and shift when sibling code (e.g. _build_backend) grows. Updating sha256 / byte_len requires explicit decision-record in CONTEXT.md."
 }

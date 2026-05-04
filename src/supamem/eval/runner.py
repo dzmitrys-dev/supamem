@@ -115,7 +115,33 @@ def _percentile(values: list[float], pct: float) -> float:
     return float(s[k])
 
 
-def _build_backend(config: ResolvedConfig) -> TunedHybridBackend:
+def _build_backend(
+    config: ResolvedConfig, *, suite: str | None = None
+) -> TunedHybridBackend:
+    """Build the retrieval backend, optionally swapping ``cfg.collection``
+    to the isolated bench prefix for the longmemeval_s suite.
+
+    Phase 14 Plan A Task A3 (D-SCOPE-05): when ``suite='longmemeval_s'``,
+    we shallow-copy ``config`` with ``collection`` overridden to
+    :func:`supamem.eval.longmemeval_ingest.eval_collection_name(cfg, suite)`
+    so retrieval queries hit the eval collection, NOT the user's
+    production collection. The caller's ``config`` is NEVER mutated.
+
+    For ``suite=None`` (default — preserves the byte-identical
+    ``_run_goldens_legacy`` call site that reads ``_build_backend(cfg)``)
+    and ``suite='goldens'``, behavior is unchanged: the backend is
+    constructed against the caller's original cfg.
+    """
+    if suite == "longmemeval_s":
+        # Lazy import — avoids loading the ingest module on the goldens path.
+        from dataclasses import replace as _replace  # noqa: PLC0415
+
+        from supamem.eval.longmemeval_ingest import (  # noqa: PLC0415
+            eval_collection_name,
+        )
+
+        bench_cfg = _replace(config, collection=eval_collection_name(config, suite))
+        return TunedHybridBackend(config=bench_cfg)
     return TunedHybridBackend(config=config)
 
 
@@ -397,7 +423,10 @@ def _run_longmemeval(
 
     backend: TunedHybridBackend | None = None
     try:
-        backend = _build_backend(cfg)
+        # Phase 14 Plan A Task A3: pass suite='longmemeval_s' so
+        # _build_backend swaps cfg.collection to the isolated bench
+        # prefix (D-SCOPE-05). Caller's cfg is unchanged.
+        backend = _build_backend(cfg, suite="longmemeval_s")
     except Exception as exc:  # noqa: BLE001
         err_console.print(
             f"[supamem.warn]supamem: backend init failed "
