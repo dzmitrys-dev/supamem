@@ -212,6 +212,90 @@ def _yield_records(root: Path) -> Iterator[dict[str, Any]]:
             yield rec
 
 
+def iter_raw_longmemeval(
+    *,
+    cache_dir: Path | None = None,
+    dataset_path: Path | str | None = None,
+) -> Iterator[dict[str, Any]]:
+    """Yield RAW upstream LongMemEval_S records (Phase 14, Plan A).
+
+    Unlike :func:`load_longmemeval` which normalizes records to
+    ``{id, question, sessions, answer, axis}``, this generator yields the
+    upstream raw dicts so the bench-only ingest path can pair
+    ``haystack_session_ids[i]`` with ``haystack_sessions[i]`` (D-SCOPE-02).
+
+    Records whose normalized axis falls outside :data:`AXES` are still
+    filtered out for consistency with the canonical loader.
+
+    Production indexer paths do NOT consume this — it is reachable only
+    from :mod:`supamem.eval.longmemeval_ingest`.
+    """
+    if dataset_path is not None:
+        root = Path(dataset_path)
+    else:
+        cache_root = resolve_cache_dir(cache_dir=cache_dir)
+        snap = huggingface_hub.snapshot_download(
+            repo_id=REPO_ID,
+            revision=PINNED_REVISION,
+            repo_type="dataset",
+            cache_dir=str(cache_root),
+            allow_patterns=[_LONGMEMEVAL_S_FILE],
+        )
+        root = Path(snap)
+
+    for raw in _iter_dataset_dir(root):
+        if not isinstance(raw, dict):
+            continue
+        upstream_axis = raw.get("question_type", "")
+        axis = _AXIS_ALIAS.get(upstream_axis)
+        if axis is None or axis not in AXES:
+            continue
+        yield raw
+
+
+def iter_haystack_chunks(
+    records: Iterable[dict[str, Any]],
+) -> Iterator[tuple[str, str, str]]:
+    """Yield ``(session_id, text, axis)`` per haystack turn (Plan 14-A).
+
+    Per D-SCOPE-02: one ``session_id`` per chunk, sourced verbatim from
+    ``raw["haystack_session_ids"][i]`` paired with the i-th list in
+    ``raw["haystack_sessions"]``. Each turn within a session emits exactly
+    one tuple; empty turn lists yield nothing for that session.
+
+    Text format: ``f"{role}: {content}"`` (RESEARCH §Q2 sample). Production
+    indexer paths (markdown, transcript) are unaffected — this generator
+    feeds the bench-only ingest module.
+
+    Records may carry either the canonical ``axis`` field (already
+    normalized) or the upstream ``question_type`` field; canonical wins
+    when both are present. Records whose axis cannot be resolved to one of
+    :data:`AXES` are skipped silently.
+    """
+    for raw in records:
+        if not isinstance(raw, dict):
+            continue
+        axis = raw.get("axis")
+        if not axis:
+            upstream = raw.get("question_type", "")
+            axis = _AXIS_ALIAS.get(upstream)
+        if axis is None or axis not in AXES:
+            continue
+        sids = raw.get("haystack_session_ids") or []
+        sessions = raw.get("haystack_sessions") or []
+        for sid, turns in zip(sids, sessions):
+            if not isinstance(sid, str) or not turns:
+                continue
+            for turn in turns:
+                if not isinstance(turn, dict):
+                    continue
+                role = str(turn.get("role", ""))
+                content = str(turn.get("content", ""))
+                if not content:
+                    continue
+                yield sid, f"{role}: {content}", axis
+
+
 def build_smoke_subset(
     records: Iterable[dict[str, Any]],
     *,
@@ -259,6 +343,8 @@ __all__ = [
     "PINNED_REVISION",
     "REPO_ID",
     "build_smoke_subset",
+    "iter_haystack_chunks",
+    "iter_raw_longmemeval",
     "load_longmemeval",
     "resolve_cache_dir",
 ]
