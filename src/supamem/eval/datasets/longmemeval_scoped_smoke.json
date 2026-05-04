@@ -1,0 +1,134 @@
+{
+  "meta": {
+    "source": "longmemeval_s slice",
+    "session_count": 12,
+    "expected_scoped_gain_tpca": 0.62,
+    "tolerance_relative": 0.05,
+    "placeholder_until_live_rederivation": true,
+    "notes": "Schema-faithful seed fixture committed ahead of the live manual ritual (D-SMOKE-02). The expected_*_tpca values are documentation of the magnitude order an unscoped pass (recall=0 fallback over a noisy 5-chunk haystack) vs a scoped pass (recall=1.0 over a single relevant session) produces under the runner's tpca formula (in_tokens/recall, recall=0 -> in_tokens). When the live re-derivation runs (scripts/derive_scoped_smoke.py), it replaces these values with measured tpca and drops placeholder_until_live_rederivation. The dual-pass CI test asserts methodology (scoped < unscoped via mock backend) UNCONDITIONALLY; it asserts tolerance bounds against expected_*_tpca only when placeholder_until_live_rederivation is false."
+  },
+  "questions": [
+    {
+      "id": "smoke_ms_01",
+      "question": "What was the meeting time the user agreed to?",
+      "answer": "three pm Monday afternoon",
+      "axis": "multi_session",
+      "sessions": ["s_smk_01a", "s_smk_01b"],
+      "haystack": [
+        {
+          "session_id": "s_smk_01a",
+          "turns": [
+            {"role": "user", "content": "Can we sync about the budget review next week?"},
+            {"role": "assistant", "content": "Sure, what time works for you?"},
+            {"role": "user", "content": "Let us aim for three pm Monday afternoon at the cafe."}
+          ]
+        },
+        {
+          "session_id": "s_smk_01b",
+          "turns": [
+            {"role": "user", "content": "Confirming the meeting time we set last week."},
+            {"role": "assistant", "content": "Yes, the schedule shows three pm Monday afternoon."}
+          ]
+        }
+      ],
+      "expected_unscoped_tpca": 110.0,
+      "expected_scoped_tpca": 28.0
+    },
+    {
+      "id": "smoke_ssu_02",
+      "question": "What did the user mention about their morning workout routine?",
+      "answer": "wakes early runs five kilometers",
+      "axis": "single_session_user",
+      "sessions": ["s_smk_02a"],
+      "haystack": [
+        {
+          "session_id": "s_smk_02a",
+          "turns": [
+            {"role": "user", "content": "I wakes early and runs five kilometers every weekday before breakfast."},
+            {"role": "assistant", "content": "That is a strong routine; consistency builds endurance."}
+          ]
+        }
+      ],
+      "expected_unscoped_tpca": 95.0,
+      "expected_scoped_tpca": 26.0
+    },
+    {
+      "id": "smoke_tr_03",
+      "question": "Which laptop did the user buy after returning the previous one?",
+      "answer": "thinkpad carbon model x1",
+      "axis": "temporal_reasoning",
+      "sessions": ["s_smk_03a", "s_smk_03b", "s_smk_03c"],
+      "haystack": [
+        {
+          "session_id": "s_smk_03a",
+          "turns": [
+            {"role": "user", "content": "The macbook had thermal issues so I returned it last week."}
+          ]
+        },
+        {
+          "session_id": "s_smk_03b",
+          "turns": [
+            {"role": "user", "content": "Replaced it with a thinkpad carbon model x1 yesterday."},
+            {"role": "assistant", "content": "Good choice; the thinkpad carbon model x1 is well reviewed."}
+          ]
+        },
+        {
+          "session_id": "s_smk_03c",
+          "turns": [
+            {"role": "user", "content": "The new thinkpad carbon model x1 is performing well so far."}
+          ]
+        }
+      ],
+      "expected_unscoped_tpca": 130.0,
+      "expected_scoped_tpca": 38.0
+    },
+    {
+      "id": "smoke_ku_04",
+      "question": "What is the user's current preferred programming language?",
+      "answer": "rust language replaces previous python preference",
+      "axis": "knowledge_update",
+      "sessions": ["s_smk_04a", "s_smk_04b"],
+      "haystack": [
+        {
+          "session_id": "s_smk_04a",
+          "turns": [
+            {"role": "user", "content": "I used to prefer python for backend services."}
+          ]
+        },
+        {
+          "session_id": "s_smk_04b",
+          "turns": [
+            {"role": "user", "content": "Lately rust language replaces previous python preference for systems work."},
+            {"role": "assistant", "content": "Memory safety and performance both win there."}
+          ]
+        }
+      ],
+      "expected_unscoped_tpca": 102.0,
+      "expected_scoped_tpca": 30.0
+    },
+    {
+      "id": "smoke_ssa_05",
+      "question": "What advice did the assistant give about sleep hygiene?",
+      "answer": "darkness consistent schedule avoid evening caffeine",
+      "axis": "single_session_assistant",
+      "sessions": ["s_smk_05a", "s_smk_05b"],
+      "haystack": [
+        {
+          "session_id": "s_smk_05a",
+          "turns": [
+            {"role": "user", "content": "Any tips for better sleep quality?"},
+            {"role": "assistant", "content": "Maintain darkness consistent schedule avoid evening caffeine intake."}
+          ]
+        },
+        {
+          "session_id": "s_smk_05b",
+          "turns": [
+            {"role": "user", "content": "Following the darkness consistent schedule avoid evening caffeine plan helped."}
+          ]
+        }
+      ],
+      "expected_unscoped_tpca": 100.0,
+      "expected_scoped_tpca": 27.0
+    }
+  ]
+}
