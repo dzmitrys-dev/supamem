@@ -2,6 +2,78 @@
 
 All notable changes to `supamem` will be documented in this file.
 
+## [0.3.0a4] — 2026-05-04 — Bench harness where-filter pass (Phase 14)
+
+### Added
+
+- **Scoped/unscoped bench passes.** `supamem eval --suite longmemeval_s`
+  now emits BOTH an unscoped and a scoped retrieval pass per question at
+  the single `runner.py:428` call site (`_run_longmemeval` per-record
+  loop). The scoped pass derives a per-question `where` filter from
+  LongMemEval haystack session ids (`{"session_id": [list]}`),
+  exercising Phase 7 / 9 / 11 / 14 indexer-side filter payloads end-to-end.
+  Smoke vs full continues to be gated by the existing `smoke_ids` filter
+  inside the same loop — no second physical call site.
+- **Bench-only LongMemEval ingestion.** New module
+  `supamem.eval.longmemeval_ingest` builds an isolated
+  `supamem_eval_longmemeval_s` collection, attaches `payload.session_id`
+  to each haystack chunk, and creates a `session_id` keyword payload
+  index at first ingestion (idempotent). Production indexer paths
+  (markdown, transcript) are unchanged. The `session_id` payload field
+  is **bench-only** — `supamem index` does NOT set it.
+- **Bundled smoke fixture.** New static fixture at
+  `src/supamem/eval/datasets/longmemeval_scoped_smoke.json` (≤5 questions,
+  ≤200 KB, self-contained — does not trigger the ~3 GB lazy fetch). New
+  suite name `longmemeval_scoped_smoke` for the CI fast-path; `suite_loader`
+  dispatches to the bundled fixture for that suite.
+- **ADR-0001** — `docs/adr/0001-scoped-only-bench-gate.md` records the
+  methodology, the v0.1.5 corpus mismatch disclosure (D-GATE-05), and
+  the strict isolation from FUTURE-24 (rerank composition rework) per
+  D-FUT24-01..03. New `docs/adr/` directory established with a
+  convention note (`docs/adr/README.md`).
+
+### Changed
+
+- **Result JSON shape.** `scores` and `by_axis` now carry `unscoped` +
+  `scoped` sibling sub-dicts. `_compute_main_score` for the
+  `longmemeval_s` suite reads `scores.scoped.tokens_per_correct_answer`
+  for the Phase 13 gate decision. Unscoped is reported in the same
+  envelope for transparency only — it never gates. Legacy callers
+  (goldens etc.) continue to see the flat shape (sibling-key envelope
+  contract pinned by `tests/test_build_report.py`).
+- **Gate decision is scoped-only.** The Phase 13 publication gate
+  (`baseline_delta.tokens_per_correct_answer ≤ -0.30`) now reads
+  `scores.scoped.tokens_per_correct_answer` against v0.1.5. Unscoped
+  numbers ship in the same envelope but never gate. See ADR-0001.
+
+### Migration
+
+- **v0.1.5 baseline re-captured.** `eval/baselines/v0.1.5.json` carries
+  both `unscoped` and `scoped` sibling keys plus a legacy mirror at
+  top-level for migration safety. The original devdocs-collection
+  number (`1374.59`) is preserved as `legacy_devdocs_unscoped_tpca` but
+  does NOT gate; v0.1.5 was re-captured against the new haystack
+  collection. **Absolute pre-Phase-14 numbers are not directly
+  comparable to post-Phase-14 numbers — the corpus changed.** See
+  ADR-0001 for the disclosure.
+
+### Cross-references
+
+- **FUTURE-24** (rerank composition rework) — Phase 14's scoped pass
+  runs with rerank-OFF so the measured scoped-vs-unscoped delta
+  attributes cleanly to scoping. FUTURE-24 is a SIBLING unblocker
+  tracked separately. Public claims about scoping gains do NOT
+  extrapolate to assume FUTURE-24 will further close the gap (D-FUT24-03).
+
+### Locks preserved
+
+- `runner.py:157` (`_run_goldens_legacy`, v0.1.x regression infra) is
+  **byte-identical** (D-VEND-04 lock). Plan B touched only
+  `runner.py:428`.
+- `retrieval/filters.py` is **byte-identical**. `session_id` flows
+  through Phase 11's existing pass-through path (key-name =
+  payload-key-name); not a magic key. Zero new branches.
+
 ## [0.3.0a3] — 2026-05-03 — Filtered retrieval backend (FILT-01) + anti-identity-tier lock (FILT-02)
 
 ### Added

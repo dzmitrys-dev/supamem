@@ -18,8 +18,8 @@ installed, AI coding assistants gain persistent semantic memory across projects.
 
 ## Distribution
 
-- [PyPI](https://pypi.org/project/supamem/): Released via Trusted Publisher OIDC; `pip install supamem` or `uv tool install supamem`. Current version: v0.3.0a3 (alpha pre-release; v0.2.0 / v0.2.1 already shipped).
-- [CHANGELOG](CHANGELOG.md): Per-version release notes (v0.1.0 initial, v0.1.1 update-check + AGENTS.md, v0.1.2 project-tunable regress baselines, v0.1.3 dual_memory_write + qdrant aliases, v0.1.4 SessionStart banner + supamem live dashboard, v0.1.5 SessionStart wired by installer, v0.2.0 mcp.caps + multi-project install + agent-discipline hooks, v0.2.1 user-visible banner + drift signal, v0.2.2a1 transcript chunker plugin, v0.2.3a1 coding-path classifier + where filter, v0.2.4a1 code-aware reranker + eager ML fetch + doctor-driven repair self-heal, v0.2.5a1 subagent reachability auto-patcher + unpatch-agents + doctor reachability panel, v0.3.0a1 per-source temporal validity + transcript-only recency decay + temporal doctor panel, v0.3.0a2 bench harness (LongMemEval_S + RAGAS triad) + [eval] extra + two-tier judge + doctor Eval-bench panel, v0.3.0a3 filtered_dense retrieval backend + path_prefix where magic key + valid_to: "now" no-op alias + [retrieval.filtered_dense] preview_chars config + anti-identity-tier lock + Filtered-dense doctor panel + mcp_server query Field min_length=1)
+- [PyPI](https://pypi.org/project/supamem/): Released via Trusted Publisher OIDC; `pip install supamem` or `uv tool install supamem`. Current version: v0.3.0a4 (alpha pre-release; v0.2.0 / v0.2.1 already shipped).
+- [CHANGELOG](CHANGELOG.md): Per-version release notes (v0.1.0 initial, v0.1.1 update-check + AGENTS.md, v0.1.2 project-tunable regress baselines, v0.1.3 dual_memory_write + qdrant aliases, v0.1.4 SessionStart banner + supamem live dashboard, v0.1.5 SessionStart wired by installer, v0.2.0 mcp.caps + multi-project install + agent-discipline hooks, v0.2.1 user-visible banner + drift signal, v0.2.2a1 transcript chunker plugin, v0.2.3a1 coding-path classifier + where filter, v0.2.4a1 code-aware reranker + eager ML fetch + doctor-driven repair self-heal, v0.2.5a1 subagent reachability auto-patcher + unpatch-agents + doctor reachability panel, v0.3.0a1 per-source temporal validity + transcript-only recency decay + temporal doctor panel, v0.3.0a2 bench harness (LongMemEval_S + RAGAS triad) + [eval] extra + two-tier judge + doctor Eval-bench panel, v0.3.0a3 filtered_dense retrieval backend + path_prefix where magic key + valid_to: "now" no-op alias + [retrieval.filtered_dense] preview_chars config + anti-identity-tier lock + Filtered-dense doctor panel + mcp_server query Field min_length=1, v0.3.0a4 bench harness where-filter pass — scoped + unscoped passes at runner.py:428, scoped-only gate methodology, sibling-key result envelope, bench-only payload.session_id, ADR-0001)
 
 ## Translations
 
@@ -41,7 +41,7 @@ installed, AI coding assistants gain persistent semantic memory across projects.
 - [supamem stats](README.md#cli-surface): Welford schema-v2 usage counters
 - [supamem live](README.md#-see-it-work--supamem-live): Real-time terminal dashboard tailing the audit JSONL — visibility into PreToolUse hook injections (v0.1.4+)
 - [supamem migrate](README.md#cli-surface): Brownfield migration from an existing `dev_memory` collection
-- [supamem eval](README.md#cli-surface): Run the bench harness — `--suite goldens` (bundled regression baseline, v0.1.2+) or `--suite longmemeval_s` (lazy-fetched LongMemEval_S, v0.3.0a2+); MTEB-style JSON envelope to `~/.supamem/eval/<utc-iso>.json`; project-tunable goldens baselines via `[supamem.eval]` config; legacy `--regress` mode preserved
+- [supamem eval](README.md#cli-surface): Run the bench harness — `--suite goldens` (bundled regression baseline, v0.1.2+) or `--suite longmemeval_s` (lazy-fetched LongMemEval_S, v0.3.0a2+, scoped + unscoped passes since v0.3.0a4 — gate decision is scoped-only, see [docs/adr/0001-scoped-only-bench-gate.md](docs/adr/0001-scoped-only-bench-gate.md)) or `--suite longmemeval_scoped_smoke` (bundled fixture, v0.3.0a4+, ≤5 questions, no lazy-fetch); MTEB-style JSON envelope to `~/.supamem/eval/<utc-iso>.json`; project-tunable goldens baselines via `[supamem.eval]` config; legacy `--regress` mode preserved
 - [supamem uninstall](README.md#cli-surface): Reverse `supamem install` cleanly
 - [supamem unpatch-agents](README.md#cli-surface): Reverse subagent reachability patches recorded in `agent_patches.json`. Skips files the user has edited since (frontmatter SHA-256 match) with a per-file warning. Run BEFORE `pip uninstall supamem` — there is no portable pip/uv/pipx uninstall hook (v0.2.5a1+).
 
@@ -254,6 +254,27 @@ Legacy chunks (indexed before v0.3.0a3) lack `payload.path_prefixes`. First post
 ### Doctor surface
 
 `supamem doctor` adds a "Filtered-dense backend" panel surfacing the resolved `preview_chars` value with `[source: ...]` provenance. Read-only by construction; never flips the doctor exit code.
+
+## Bench harness where-filter pass (v0.3.0a4+)
+
+Phase 14 fixes the LongMemEval_S bench methodology so the indexer-side `where`-filter levers shipped in Phases 7 (`room`), 9 (`valid_to`, always-on), 11 (`path_prefix`), and 14 (`session_id`) actually exercise on `tokens_per_correct_answer`. Single call site at `runner.py:428` now emits BOTH passes per question; smoke vs full continues to be gated by the existing `smoke_ids` filter inside the same loop.
+
+- **Scoped pass.** Per question, the runner builds `where = {"session_id": question.haystack_sessions}` and queries the dedicated bench collection (`supamem_eval_longmemeval_s`). Result lands at `result.scores.scoped` and `result.by_axis.<axis>.scoped`.
+- **Unscoped pass.** Same iteration, no `where` filter. Result lands at `result.scores.unscoped` and `result.by_axis.<axis>.unscoped`. Reported for transparency only — never gates.
+- **Gate decision (scoped-only).** `_compute_main_score` for `longmemeval_s` reads `scores.scoped.tokens_per_correct_answer` against the v0.1.5 baseline. Phase 13's −30% gate is decided strictly against this number. See [docs/adr/0001-scoped-only-bench-gate.md](docs/adr/0001-scoped-only-bench-gate.md).
+- **v0.1.5 baseline re-captured.** `eval/baselines/v0.1.5.json` carries both `unscoped` and `scoped` sibling keys. The original devdocs-collection number (`1374.59`) is preserved as `legacy_devdocs_unscoped_tpca` for historical reference but does NOT gate. Pre-Phase-14 absolute numbers are not directly comparable to post-Phase-14 numbers — the corpus changed.
+- **Reproducibility caveat.** Scoped numbers may not reproduce in default unscoped invocations of `dual_memory_search` / `qdrant_find` — users who want comparable numbers must pass `where={...}` against a collection whose chunks carry the matching payload. This is a methodology disclosure, not a defect.
+- **FUTURE-24 (rerank composition rework)** — sibling unblocker tracked separately. Phase 14's scoped pass runs with rerank-OFF so the measured scoped-vs-unscoped delta attributes cleanly to scoping. Public claims about scoping gains do NOT extrapolate to assume FUTURE-24 will further close the gap (D-FUT24-03).
+
+### `payload.session_id` (bench-only, v0.3.0a4+)
+
+The `session_id` payload field is set ONLY by the LongMemEval bench ingestion path (`supamem.eval.longmemeval_ingest`). User invocations of `supamem index` do NOT set this field — it is methodology infra, not a user-facing retrieval lever. `session_id` is NOT a magic key in `retrieval/filters.py`: it flows through the existing pass-through path (key-name = payload-key-name), with list values translated to `MatchAny` and single strings to `MatchValue`. Zero new branches in the filter dispatcher. The Phase 14 scoped pass uses `where={"session_id": [list]}` against the dedicated `supamem_eval_longmemeval_s` collection. See ADR-0001.
+
+### Bundled smoke fixture
+
+- `src/supamem/eval/datasets/longmemeval_scoped_smoke.json` — ≤5 questions, ≤200 KB, self-contained. Does NOT trigger the ~3 GB lazy fetch.
+- New suite name: `longmemeval_scoped_smoke`. `suite_loader.py` dispatches to the bundled fixture for that suite.
+- CI fast-path runs both unscoped + scoped against the smoke and asserts each within tolerance bounds. Zero impact on the existing `smoke_ids.json` 10-Q axis-stratified fast-path for `longmemeval_s`.
 
 ## Anti-feature lock — no identity / wake-up / prelude tier (v0.3.0a3+)
 
