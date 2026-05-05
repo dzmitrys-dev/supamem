@@ -209,8 +209,13 @@ def ingest(
                 _SPARSE_VECTOR_NAME: sparse_vec,
             },
             payload={
+                # Production retrieval (`tuned_hybrid.py`) reads chunk text
+                # from `payload["document"]`. Using "text" here makes
+                # retrieved chunks have an empty `.text` attribute — the
+                # bench scoped/unscoped passes then measure nothing
+                # meaningful. Match the production contract.
                 "session_id": sid,
-                "text": text,
+                "document": text,
                 "axis": axis,
             },
         )

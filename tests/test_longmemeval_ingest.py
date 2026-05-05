@@ -196,7 +196,7 @@ def test_ingest_payload_index_idempotent(patch_embedders: None) -> None:
 
 
 def test_ingest_upserts_one_point_per_haystack_turn(patch_embedders: None) -> None:
-    """2 sessions × 3 turns → exactly 6 upserted points; payloads carry session_id + text."""
+    """2 sessions × 3 turns → exactly 6 upserted points; payloads carry session_id + document."""
     client = MagicMock()
     client.get_collections.return_value = MagicMock(collections=[])
 
@@ -231,7 +231,16 @@ def test_ingest_upserts_one_point_per_haystack_turn(patch_embedders: None) -> No
         payload = getattr(pt, "payload", None)
         assert payload is not None
         assert "session_id" in payload
-        assert "text" in payload
+        # Production retrieval contract: chunk text MUST live under
+        # `payload["document"]` so `tuned_hybrid.py` reads it via
+        # `payload.get("document")`. Writing to `payload["text"]` would
+        # make retrieved chunks have empty `.text` attributes and the
+        # bench would silently measure question-only token counts.
+        assert "document" in payload
+        assert "text" not in payload, (
+            "ingest must write chunk text under payload['document'], not 'text', "
+            "to match the production retrieval contract (tuned_hybrid)."
+        )
         assert payload["session_id"] in {"sess-A", "sess-B"}
 
 
