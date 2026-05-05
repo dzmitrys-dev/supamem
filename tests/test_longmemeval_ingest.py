@@ -309,3 +309,66 @@ def test_ingest_does_not_mutate_caller_cfg(patch_embedders: None) -> None:
     original_collection = cfg.collection
     ingest_mod.ingest(cfg, [rec], client=client, suite="longmemeval_s")
     assert cfg.collection == original_collection
+
+
+# Test 9 — regression for numpy-array sparse-vector handling -----------------
+
+
+def test_ingest_handles_numpy_sparse_vector_attrs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Real fastembed sparse embedders return numpy arrays for indices/values.
+
+    Regression: the previous ``getattr(svec, "indices", []) or []`` short-circuit
+    raised ``ValueError: The truth value of an array with more than one element
+    is ambiguous`` because numpy arrays don't support multi-element ``__bool__``.
+    The fix uses explicit ``is None`` checks. This test fakes numpy-shaped
+    sparse outputs to lock in that behavior without loading fastembed.
+    """
+    np = pytest.importorskip("numpy")
+
+    class _NumpySparse:
+        # Mimics fastembed.SparseEmbedding's array-typed attributes.
+        def __init__(self) -> None:
+            self.indices = np.array([0, 1, 2], dtype=np.int64)
+            self.values = np.array([0.5, 0.3, 0.2], dtype=np.float32)
+
+    def _yield_numpy(batch):
+        for _ in batch:
+            yield _NumpySparse()
+
+    fake_dense = MagicMock()
+    fake_dense.embed.side_effect = lambda batch: ([0.1] * 384 for _ in batch)
+    fake_sparse = MagicMock()
+    fake_sparse.embed.side_effect = _yield_numpy
+    monkeypatch.setattr(ingest_mod, "build_dense_embedder", lambda *a, **k: fake_dense)
+    monkeypatch.setattr(ingest_mod, "build_sparse_embedder", lambda *a, **k: fake_sparse)
+
+    client = MagicMock()
+    client.get_collections.return_value = MagicMock(collections=[])
+
+    rec = _make_raw_record(
+        "q",
+        "single_session_user",
+        sessions=[[{"role": "user", "content": "hello"}]],
+    )
+    cfg = _cfg()
+    # Must not raise — fix converts numpy → list explicitly via `is None` check.
+    count = ingest_mod.ingest(cfg, [rec], client=client, suite="longmemeval_s")
+    assert count == 1
+
+    # Confirm the upsert payload carried plain-Python int/float lists,
+    # not numpy arrays (Qdrant SparseVector wants native lists).
+    upsert_calls = client.upsert.call_args_list
+    assert upsert_calls, "expected at least one upsert call"
+    points = upsert_calls[0].kwargs.get("points") or upsert_calls[0].args[1]
+    sparse = points[0].vector["__sparse__"] if "__sparse__" in points[0].vector else None
+    # The sparse-vector key may differ; resolve generically.
+    if sparse is None:
+        for v in points[0].vector.values():
+            if hasattr(v, "indices") and hasattr(v, "values"):
+                sparse = v
+                break
+    assert sparse is not None
+    assert all(isinstance(i, int) for i in sparse.indices)
+    assert all(isinstance(v, float) for v in sparse.values)

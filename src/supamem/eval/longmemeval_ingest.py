@@ -192,9 +192,15 @@ def ingest(
 
     for (sid, text, axis), dvec, svec in zip(chunks, dense_iter, sparse_iter):
         dense_vec = [float(x) for x in dvec]
+        # NOTE: fastembed returns numpy arrays for `indices`/`values`. The
+        # `array or default` truthiness pattern raises "truth value of an
+        # array with more than one element is ambiguous" — use explicit
+        # None checks instead.
+        _idx = getattr(svec, "indices", None)
+        _val = getattr(svec, "values", None)
         sparse_vec = qmodels.SparseVector(
-            indices=list(getattr(svec, "indices", []) or []),
-            values=[float(v) for v in getattr(svec, "values", []) or []],
+            indices=[int(i) for i in (_idx if _idx is not None else [])],
+            values=[float(v) for v in (_val if _val is not None else [])],
         )
         point = qmodels.PointStruct(
             id=point_id,
