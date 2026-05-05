@@ -258,24 +258,36 @@ def test_cmd_repair_help_shows_skip_models() -> None:
 
 
 def test_install_help_lists_skip_patch_agents_flag() -> None:
-    """Phase 08.1 D-LOCK-06: install --help advertises --skip-patch-agents."""
+    """Phase 08.1 D-LOCK-06: install --help advertises --skip-patch-agents.
+
+    Asserts on a stable short prefix + the description's unique tag rather than
+    the full flag name: Rich/Typer truncates long flag tokens with U+2026 at
+    width-dependent boundaries (COLUMNS=200 in _run is honored locally but not
+    reliably on GitHub Actions runners under pytest stdout capture).
+    """
     r = _run("install", "--help")
     assert r.returncode == 0, (r.stdout, r.stderr)
-    assert "--skip-patch-agents" in (r.stdout + r.stderr)
+    out = r.stdout + r.stderr
+    assert "skip-patch-ag" in out, out
+    assert "D-LOCK-06" in out, out
 
 
 def test_repair_help_lists_skip_patch_agents_flag() -> None:
     """Phase 08.1 D-LOCK-06: repair --help advertises --skip-patch-agents."""
     r = _run("repair", "--help")
     assert r.returncode == 0, (r.stdout, r.stderr)
-    assert "--skip-patch-agents" in (r.stdout + r.stderr)
+    out = r.stdout + r.stderr
+    assert "skip-patch-ag" in out, out
+    assert "D-LOCK-06" in out, out
 
 
 def test_init_help_lists_skip_patch_agents_flag() -> None:
     """Phase 08.1 D-LOCK-06: init --help advertises --skip-patch-agents."""
     r = _run("init", "--help")
     assert r.returncode == 0, (r.stdout, r.stderr)
-    assert "--skip-patch-agents" in (r.stdout + r.stderr)
+    out = r.stdout + r.stderr
+    assert "skip-patch-ag" in out, out
+    assert "D-LOCK-06" in out, out
 
 
 def test_install_with_skip_patch_agents_emits_skip_message(tmp_path) -> None:
