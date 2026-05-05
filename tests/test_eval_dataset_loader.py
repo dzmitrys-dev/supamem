@@ -18,6 +18,7 @@ Per D-07: this file imports NO SaaS LLM SDK (no openai/anthropic/cohere).
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -100,3 +101,119 @@ def test_load_longmemeval_record_shape(tmp_path) -> None:
     for rec in records:
         for key in ("id", "question", "sessions", "answer", "axis"):
             assert key in rec, f"record missing {key!r}: {rec!r}"
+
+
+# Plan 14-A — iter_haystack_chunks tests (Task A1)
+# Per D-SCOPE-02: one session_id per chunk, sourced verbatim from
+# raw["haystack_session_ids"][i] paired with raw["haystack_sessions"][i].
+
+from supamem.eval.datasets import longmemeval_loader as _ll_mod  # noqa: E402
+
+
+def _make_raw_record(
+    question_id: str,
+    axis: str,
+    sessions: list,
+    session_ids: list | None = None,
+) -> dict:
+    if session_ids is None:
+        session_ids = [f"s_{i:03d}" for i in range(len(sessions))]
+    return {
+        "question_id": question_id,
+        "question_type": axis.replace("_", "-"),
+        "axis": axis,
+        "question": "irrelevant for ingest",
+        "answer": "irrelevant for ingest",
+        "haystack_session_ids": session_ids,
+        "haystack_sessions": sessions,
+    }
+
+
+def test_iter_haystack_chunks_yields_one_per_turn() -> None:
+    rec = _make_raw_record(
+        "q0",
+        "single_session_user",
+        sessions=[
+            [
+                {"role": "user", "content": "u1"},
+                {"role": "assistant", "content": "a1"},
+                {"role": "user", "content": "u2"},
+            ],
+            [
+                {"role": "user", "content": "u3"},
+                {"role": "assistant", "content": "a3"},
+                {"role": "user", "content": "u4"},
+            ],
+        ],
+    )
+    out = list(_ll_mod.iter_haystack_chunks([rec]))
+    assert len(out) == 6
+
+
+def test_iter_haystack_chunks_session_id_from_haystack_session_ids() -> None:
+    rec = _make_raw_record(
+        "q1",
+        "multi_session",
+        sessions=[
+            [{"role": "user", "content": "x"}],
+            [{"role": "user", "content": "y"}, {"role": "assistant", "content": "z"}],
+        ],
+        session_ids=["sess-A", "sess-B"],
+    )
+    out = list(_ll_mod.iter_haystack_chunks([rec]))
+    sids = [t[0] for t in out]
+    assert sids == ["sess-A", "sess-B", "sess-B"]
+
+
+def test_iter_haystack_chunks_text_is_role_content_join() -> None:
+    rec = _make_raw_record(
+        "q2",
+        "knowledge_update",
+        sessions=[[{"role": "user", "content": "morning routine"}]],
+    )
+    out = list(_ll_mod.iter_haystack_chunks([rec]))
+    assert len(out) == 1
+    _sid, text, _axis = out[0]
+    assert "user" in text
+    assert "morning routine" in text
+
+
+def test_iter_haystack_chunks_carries_axis() -> None:
+    rec = _make_raw_record(
+        "q3",
+        "temporal_reasoning",
+        sessions=[
+            [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}],
+        ],
+    )
+    out = list(_ll_mod.iter_haystack_chunks([rec]))
+    assert len(out) == 2
+    assert all(axis == "temporal_reasoning" for (_sid, _text, axis) in out)
+
+
+def test_iter_haystack_chunks_skips_empty_sessions() -> None:
+    rec = _make_raw_record(
+        "q4",
+        "single_session_assistant",
+        sessions=[
+            [],
+            [{"role": "assistant", "content": "hi"}],
+        ],
+        session_ids=["empty", "real"],
+    )
+    out = list(_ll_mod.iter_haystack_chunks([rec]))
+    assert len(out) == 1
+    assert out[0][0] == "real"
+
+
+def test_iter_haystack_chunks_handles_bundled_fixture() -> None:
+    fixture = Path(_ll_mod.__file__).parent / "longmemeval_fixture.json"
+    assert fixture.exists()
+    raw_records = list(_ll_mod.iter_raw_longmemeval(dataset_path=str(fixture.parent)))
+    assert raw_records, "bundled fixture should yield at least one raw record"
+    out = list(_ll_mod.iter_haystack_chunks(raw_records))
+    assert out, "expected at least one (session_id, text, axis) tuple"
+    for sid, text, axis in out:
+        assert isinstance(sid, str) and sid
+        assert isinstance(text, str) and text
+        assert isinstance(axis, str) and axis

@@ -81,3 +81,85 @@ def test_run_bench_unknown_suite_raises_value_error() -> None:
 
     with pytest.raises(ValueError, match="unknown suite"):
         run_bench(suite="unknown")
+
+
+# --------------------------------------------------------------------------- #
+# Phase 14 Plan C, Task C2 — suite_loader.load_suite() dispatch.              #
+# --------------------------------------------------------------------------- #
+
+
+def test_longmemeval_scoped_smoke_suite_resolves() -> None:
+    """``suite_loader.load_suite('longmemeval_scoped_smoke')`` returns the
+    bundled fixture as a list of normalized question records.
+
+    Each record carries ``id, question, answer, axis, sessions`` (matching
+    the canonical ``load_longmemeval`` shape) plus ``haystack`` and the
+    two ``expected_*_tpca`` fields so the CI smoke test can drive the
+    where-aware mock backend without the lazy 3 GB fetch.
+    """
+    from supamem.eval.suite_loader import load_suite
+
+    records = load_suite("longmemeval_scoped_smoke")
+    assert isinstance(records, list)
+    assert 1 <= len(records) <= 5
+    for rec in records:
+        assert {"id", "question", "answer", "axis", "sessions", "haystack"} <= set(rec)
+        assert "expected_unscoped_tpca" in rec
+        assert "expected_scoped_tpca" in rec
+
+
+def test_longmemeval_scoped_smoke_does_not_trigger_lazy_fetch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D-SMOKE-04 lock: the scoped-smoke suite is fully self-contained.
+
+    Loading it must NOT call ``huggingface_hub.snapshot_download``.
+    """
+    import huggingface_hub
+
+    from supamem.eval.suite_loader import load_suite
+
+    def _raise(*_a, **_kw):
+        raise AssertionError(
+            "snapshot_download must not be called for the bundled scoped-smoke suite"
+        )
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", _raise)
+    records = load_suite("longmemeval_scoped_smoke")
+    assert records  # must succeed without HF round-trip.
+
+
+def test_load_suite_unknown_name_raises() -> None:
+    """Defensive guard: typos / stale CI configs surface as ValueError."""
+    from supamem.eval.suite_loader import load_suite
+
+    with pytest.raises(ValueError, match="unknown suite"):
+        load_suite("does-not-exist")
+
+
+def test_smoke_ids_json_unchanged_d_smoke_03_lock() -> None:
+    """D-SMOKE-03 zero-impact lock: extending ``suite_loader`` for the
+    scoped-smoke suite must NOT modify the existing 10-Q axis-stratified
+    ``smoke_ids.json`` byte-for-byte.
+
+    This re-asserts the ``test_smoke_ids_subset_shape`` invariants against
+    the BUNDLED package-data copy at ``src/supamem/eval/datasets/smoke_ids.json``
+    (the canonical wheel-shipped path) — drift there is the failure mode
+    Plan C must protect against.
+    """
+    here = (
+        Path(__file__).resolve().parent.parent
+        / "src"
+        / "supamem"
+        / "eval"
+        / "datasets"
+        / "smoke_ids.json"
+    )
+    data = json.loads(here.read_text(encoding="utf-8"))
+    assert data["seed"] == 0
+    assert len(data["axes"]) == 5
+    assert len(data["ids"]) == 10
+    counts: dict[str, int] = {}
+    for entry in data["ids"]:
+        counts[entry["axis"]] = counts.get(entry["axis"], 0) + 1
+    assert all(v == 2 for v in counts.values()), counts

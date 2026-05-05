@@ -68,15 +68,73 @@ def _resolve_supamem_version() -> str:
         return "0.0.0+unknown"
 
 
+def _is_per_pass_scores(scores: dict[str, Any]) -> bool:
+    """Detect Phase 14 Plan B sibling-key shape.
+
+    Returns True when ``scores`` is ``{"unscoped": {...}, "scoped": {...}}``
+    (each sub-dict carrying the 9 REPORT_METRIC_NAMES). False for the
+    legacy flat shape carrying the 9 metric names directly.
+    """
+    if not isinstance(scores, dict):
+        return False
+    keys = set(scores.keys())
+    if not (keys & {"unscoped", "scoped"}):
+        return False
+    # Disambiguate from a hypothetical flat shape that happens to carry
+    # 'unscoped' as a metric — flat shape would carry every name.
+    if set(REPORT_METRIC_NAMES) <= keys:
+        return False
+    sub = scores.get("unscoped")
+    if not isinstance(sub, dict):
+        sub = scores.get("scoped")
+    return isinstance(sub, dict)
+
+
 def _compute_main_score(suite: str, scores: dict[str, Any]) -> float:
-    """Pick the suite's headline metric per D-REPORT-02."""
+    """Pick the suite's headline metric per D-REPORT-02 / D-GATE-01.
+
+    Phase 14 Plan B Task B2: when ``scores`` carries the sibling-key
+    shape and ``suite == "longmemeval_s"``, the gate decision reads
+    ``scores["scoped"]["tokens_per_correct_answer"]`` (D-GATE-01 — the
+    scoped-only gate). Unscoped is reported for transparency only and
+    never gates.
+
+    For all other suites and for the legacy flat shape, the original
+    D-REPORT-02 mapping applies.
+    """
     metric = _MAIN_SCORE_BY_SUITE.get(suite)
     if metric is None:
         raise ValueError(
             f"unknown suite {suite!r}; main_score is defined only for "
             f"{tuple(_MAIN_SCORE_BY_SUITE)}"
         )
-    return float(scores.get(metric, 0.0))
+    if _is_per_pass_scores(scores):
+        if suite == "longmemeval_s":
+            scoped = scores.get("scoped") or {}
+            return float(scoped.get(metric, 0.0) or 0.0)
+        # Goldens: per-pass shape is unexpected, but fall back to the
+        # unscoped pass to preserve legacy reader semantics.
+        unscoped = scores.get("unscoped") or {}
+        return float(unscoped.get(metric, 0.0) or 0.0)
+    return float(scores.get(metric, 0.0) or 0.0)
+
+
+def _compute_delta(
+    scores: dict[str, Any], baseline_scores: dict[str, Any]
+) -> dict[str, float]:
+    """Per-metric signed-float delta, dropping metrics whose values are
+    non-numeric in either side. Keeps the contract simple: delta carries
+    floats only.
+    """
+    delta: dict[str, float] = {}
+    for name, current in scores.items():
+        if name not in baseline_scores:
+            continue
+        try:
+            delta[name] = float(current) - float(baseline_scores[name])
+        except (TypeError, ValueError):
+            continue
+    return delta
 
 
 def _baseline_envelope(
@@ -85,28 +143,62 @@ def _baseline_envelope(
 ) -> dict[str, Any]:
     """Build the ``baseline`` envelope sub-tree.
 
-    Always returns a dict with ``version`` + ``delta``. ``delta`` carries
-    signed floats only for metrics present in BOTH the current run and
-    the baseline; missing metrics are silently dropped (per D-REPORT-01:
-    "no KeyError when the baseline pre-dates a metric introduction").
+    Two shapes are accepted (D-GATE-03 backwards-compat + Phase 14 Plan A):
+
+    - **Legacy:** baseline JSON carries top-level ``scores`` + ``by_axis``.
+      The envelope returns ``{version, delta}`` where ``delta`` is the
+      per-metric signed float against ``scores``.
+    - **Migrated (Phase 14):** baseline JSON carries sibling
+      ``unscoped: {scores, by_axis}`` and ``scoped: {scores, by_axis}``
+      keys (and a legacy mirror at top level for migration safety). The
+      envelope returns ``{version, delta, delta_unscoped, delta_scoped}``.
+      Plan B's gate logic reads ``delta_scoped[<metric>]``; ``delta`` is
+      a mirror of ``delta_unscoped`` for tooling that pre-dates the
+      migration.
+
+    Missing metrics are silently dropped — D-REPORT-01: "no KeyError when
+    the baseline pre-dates a metric introduction".
     """
     if not baseline_data:
         return {"version": None, "delta": {}}
 
     version = baseline_data.get("version")
-    bscores = baseline_data.get("scores") or {}
-    delta: dict[str, float] = {}
-    for name, current in scores.items():
-        if name not in bscores:
-            continue
-        try:
-            delta[name] = float(current) - float(bscores[name])
-        except (TypeError, ValueError):
-            # Non-numeric current or baseline value — omit rather than
-            # invent a signed float. Keeps the contract simple: delta
-            # carries floats only.
-            continue
-    return {"version": version, "delta": delta}
+
+    # Phase 14 Plan B Task B2: when the runner emits per-pass scores
+    # ({"unscoped": {...}, "scoped": {...}}), extract the flat unscoped
+    # form for the legacy delta computation. The per-pass deltas below
+    # use each respective sub-dict separately.
+    if _is_per_pass_scores(scores):
+        scores_unscoped = scores.get("unscoped") or {}
+        scores_scoped = scores.get("scoped") or {}
+    else:
+        scores_unscoped = scores
+        scores_scoped = scores
+
+    # Migrated shape detection: presence of either sibling key triggers
+    # the per-pass envelope. The legacy mirror at top-level is still
+    # honored so old readers keep working.
+    has_migrated = (
+        isinstance(baseline_data.get("unscoped"), dict)
+        or isinstance(baseline_data.get("scoped"), dict)
+    )
+
+    legacy_bscores = baseline_data.get("scores") or {}
+    legacy_delta = _compute_delta(scores_unscoped, legacy_bscores)
+
+    out: dict[str, Any] = {"version": version, "delta": legacy_delta}
+
+    if has_migrated:
+        unscoped = baseline_data.get("unscoped") or {}
+        scoped = baseline_data.get("scoped") or {}
+        out["delta_unscoped"] = _compute_delta(
+            scores_unscoped, unscoped.get("scores") or {}
+        )
+        out["delta_scoped"] = _compute_delta(
+            scores_scoped, scoped.get("scores") or {}
+        )
+
+    return out
 
 
 def build_report(
