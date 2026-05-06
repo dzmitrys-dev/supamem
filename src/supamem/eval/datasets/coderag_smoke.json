@@ -1,0 +1,78 @@
+{
+  "meta": {
+    "schema_version": "coderag.v1",
+    "source": "hand-assembled from supamem + fastapi-style fixture for offline CI",
+    "axes": ["code_fact", "decision_rationale"],
+    "notes": "Mirrors Phase 14 D-SMOKE-01 size budget (<=200 KB). Each question carries a small inline haystack of (path, content) stubs sufficient for an offline retrieval pass; full corpus + queries are produced by 15-C against the pinned manifest."
+  },
+  "questions": [
+    {
+      "id": "smoke_cf_001",
+      "axis": "code_fact",
+      "repo": "supamem",
+      "text": "Add transcript chunker plugin entry-point\n\nRegister the new transcript chunker via the supamem.chunker plugin group so third parties can swap chunkers without forking.",
+      "gold": ["src/supamem/indexer/chunker.py", "pyproject.toml"],
+      "haystack": [
+        {"path": "src/supamem/indexer/chunker.py", "content": "T-1 markdown header chunker. chunk_markdown splits on h1/h2/h3 then caps with RecursiveCharacterTextSplitter. Forward-compat seam for transcript chunker registration via supamem.chunker entry-point group."},
+        {"path": "pyproject.toml", "content": "[project.entry-points.\"supamem.chunker\"] markdown_header = \"supamem.indexer.chunker:chunk_markdown\" transcript = \"supamem.indexer.transcript:chunk_transcript\""},
+        {"path": "README.md", "content": "supamem dual-memory CLI for Claude Code, Cursor, OpenCode."}
+      ]
+    },
+    {
+      "id": "smoke_cf_002",
+      "axis": "code_fact",
+      "repo": "supamem",
+      "text": "Pin pinned-SHA fetch via subprocess + git CLI\n\nDeterministic two-repo haystack pipeline backed by git init + git fetch --depth=1 origin SHA. Never shell=True; pinned URL list is a Python literal.",
+      "gold": ["src/supamem/eval/coderag/corpus.py"],
+      "haystack": [
+        {"path": "src/supamem/eval/coderag/corpus.py", "content": "fetch_pinned runs git init -> remote add origin -> fetch --depth=1 origin <sha> -> checkout FETCH_HEAD. HEAD verified == pinned sha; mismatch wipes cache and refetches. Cache rooted at platformdirs.user_cache_dir(\"supamem\")/coderag."},
+        {"path": "src/supamem/eval/coderag/ingest.py", "content": "Eval-isolated ingest into supamem_eval_coderag collection. Idempotent payload index DDL on repo + axis."}
+      ]
+    },
+    {
+      "id": "smoke_cf_003",
+      "axis": "code_fact",
+      "repo": "fastapi",
+      "text": "Add APIRoute include_in_schema=False support\n\nAllow individual routes to be excluded from the OpenAPI schema while remaining discoverable to the router.",
+      "gold": ["fastapi/routing.py"],
+      "haystack": [
+        {"path": "fastapi/routing.py", "content": "APIRoute and APIRouter classes; include_in_schema kwarg propagates to OpenAPI generator. add_api_route handles route registration; route matching via Starlette's compile_path."},
+        {"path": "fastapi/applications.py", "content": "FastAPI app entry-point class wraps Starlette."},
+        {"path": "README.md", "content": "FastAPI is a modern, fast (high-performance), web framework for building APIs with Python based on standard Python type hints."}
+      ]
+    },
+    {
+      "id": "smoke_cf_004",
+      "axis": "code_fact",
+      "repo": "fastapi",
+      "text": "Dependency overrides for testing\n\nAllow overriding declared Depends() callables at the app level so tests can substitute fakes without monkeypatching the route signatures.",
+      "gold": ["fastapi/dependencies/utils.py"],
+      "haystack": [
+        {"path": "fastapi/dependencies/utils.py", "content": "solve_dependencies walks the dependency tree; app.dependency_overrides dict is consulted before the original callable is invoked, enabling test-time substitution."},
+        {"path": "fastapi/testclient.py", "content": "TestClient is a thin re-export of Starlette's TestClient; pairs with dependency_overrides for endpoint-level test isolation."}
+      ]
+    },
+    {
+      "id": "smoke_dr_001",
+      "axis": "decision_rationale",
+      "repo": "supamem",
+      "text": "Why does the eval suite use isolated bench collections instead of the production collection?",
+      "gold": ["docs/adr/0001-eval-collection-isolation.md", "src/supamem/eval/longmemeval_ingest.py"],
+      "haystack": [
+        {"path": "docs/adr/0001-eval-collection-isolation.md", "content": "## Problem Eval re-ingests test fixtures into the production collection, polluting user data. ## Decision Use a reserved supamem_eval_* prefix for bench collections; see `src/supamem/eval/longmemeval_ingest.py` for the ingest pattern. Production indexer paths are never imported from eval modules."},
+        {"path": "src/supamem/eval/longmemeval_ingest.py", "content": "Bench-only LongMemEval haystack ingest. Reachable only from supamem.eval.runner when suite=longmemeval_s. Production indexer paths are not touched."}
+      ]
+    },
+    {
+      "id": "smoke_dr_002",
+      "axis": "decision_rationale",
+      "repo": "supamem",
+      "text": "Why is the coderag corpus pinned to specific commit SHAs instead of tags or main branches?",
+      "gold": ["docs/adr/0002-coderag-corpus-pinning.md", "src/supamem/eval/coderag/corpus.py"],
+      "haystack": [
+        {"path": "docs/adr/0002-coderag-corpus-pinning.md", "content": "## Problem Tags can be retroactively moved; tracking main breaks reproducibility. ## Decision Pin two-repo haystack to specific commit SHAs recorded in `src/supamem/eval/coderag/corpus.py` PINNED_REPOS literal. Bumping a pin is a manual operation logged in CHANGELOG.md."},
+        {"path": "src/supamem/eval/coderag/corpus.py", "content": "PINNED_REPOS = ((slug, repo_url), ...) tuple. fetch_pinned uses git fetch --depth=1 origin <sha> followed by checkout FETCH_HEAD. content_sha256 manifest provides second-line tamper detection."}
+      ]
+    }
+  ]
+}
