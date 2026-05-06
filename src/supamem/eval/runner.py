@@ -49,7 +49,7 @@ BASELINE = {
 BUNDLED_GOLDENS = "phase_80_1_tuned_hybrid.jsonl"
 
 SuiteName = Literal["goldens", "longmemeval_s"]
-_VALID_SUITES: frozenset[str] = frozenset({"goldens", "longmemeval_s"})
+_VALID_SUITES: frozenset[str] = frozenset({"goldens", "longmemeval_s", "coderag"})
 
 
 # v0.1.x goldens helpers ------------------------------------------------
@@ -141,6 +141,18 @@ def _build_backend(
         )
 
         bench_cfg = _replace(config, collection=eval_collection_name(config, suite))
+        return TunedHybridBackend(config=bench_cfg)
+    if suite == "coderag":
+        # Phase 15 Plan A Task A2 — parallel branch for the coderag suite.
+        # Lazy import: keeps the longmemeval / goldens paths free of pytrec_eval
+        # / mem0 import cost, and keeps coderag/ingest off the goldens hot path.
+        from dataclasses import replace as _replace  # noqa: PLC0415
+
+        from supamem.eval.coderag.ingest import (  # noqa: PLC0415
+            coderag_collection_name,
+        )
+
+        bench_cfg = _replace(config, collection=coderag_collection_name())
         return TunedHybridBackend(config=bench_cfg)
     return TunedHybridBackend(config=config)
 
@@ -926,6 +938,17 @@ def run_bench(
                 )
         return rc
 
+    if suite == "coderag":
+        # Phase 15 Plan A — entry-point-driven dispatch. Plan 15-A returns the
+        # empty envelope skeleton; 15-B/C fill the corpus + scoring path.
+        from supamem.eval.suite_loader import load_suite as _load_suite  # noqa: PLC0415
+
+        suite_cls = _load_suite("coderag")
+        cfg = config or ResolvedConfig()
+        backend = _build_backend(cfg, suite="coderag")
+        suite_cls.run([], backend)
+        return 0
+
     # suite == "longmemeval_s"
     return _run_longmemeval(
         full=full,
@@ -936,6 +959,7 @@ def run_bench(
         verbose=verbose,
         config=config,
     )
+
 
 
 __all__ = ["BASELINE", "run_bench"]

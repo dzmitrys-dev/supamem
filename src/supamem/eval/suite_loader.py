@@ -27,6 +27,7 @@ extending the existing ``smoke_ids.json`` 10-Q axis-stratified fast-path):
 from __future__ import annotations
 
 import json
+from importlib.metadata import entry_points
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,13 @@ from supamem.eval.datasets.longmemeval_loader import (
     load_longmemeval,
     resolve_cache_dir,
 )
+
+# Phase 15 Plan A Task A2 — entry-point dispatch for the new ``supamem.eval``
+# plugin group. Names registered here resolve to suite *classes* (e.g.
+# ``CodeRAGSuite``), not flat lists of records. ``load_suite`` is overloaded:
+# names that match a registered entry-point return the loaded class; names
+# matching the legacy bundled-fixture set still return ``list[dict]``.
+_EVAL_ENTRY_POINT_GROUP = "supamem.eval"
 
 # Bundled package-data path for the scoped-smoke fixture (D-SMOKE-01).
 # We resolve via ``Path(__file__).parent`` — the same precedent used by
@@ -72,30 +80,54 @@ def _load_longmemeval_scoped_smoke() -> list[dict[str, Any]]:
     return list(questions)
 
 
-def load_suite(name: str) -> list[dict[str, Any]]:
-    """Resolve a suite name to a list of normalized question records.
+def _entry_point_suite(name: str) -> Any | None:
+    """Resolve ``name`` against the ``supamem.eval`` entry-point group.
 
-    Currently supported names:
-
-    - ``"longmemeval_scoped_smoke"`` — bundled self-contained fixture
-      (Phase 14 Plan C). Each record additionally carries ``haystack``
-      and ``expected_*_tpca`` fields for the offline CI smoke test.
-
-    Other suite names (``"longmemeval_s"``, ``"goldens"``, ``"smoke_ids"``)
-    are reserved for future expansion of this dispatch surface; today
-    callers continue to use ``load_longmemeval`` directly for those paths.
-
-    Raises ``ValueError`` for unknown suite names — defensive guard
-    against typos and stale CI configs (mirrors the ``run_bench(suite=...)``
-    contract from Plan 10-02).
+    Returns the loaded class on hit, ``None`` on miss. Never raises on
+    discovery — entry-point loading errors propagate (consistent with the
+    other ``supamem.*`` plugin groups).
     """
+    for ep in entry_points(group=_EVAL_ENTRY_POINT_GROUP):
+        if ep.name == name:
+            return ep.load()
+    return None
+
+
+def load_suite(name: str) -> Any:
+    """Resolve a suite name.
+
+    Two dispatch surfaces are supported:
+
+    1. ``supamem.eval`` entry-point group (Phase 15 Plan A) — returns the
+       loaded suite *class* (e.g. ``CodeRAGSuite``). Third-party packages
+       can register additional suites here without forking supamem.
+    2. Legacy bundled-fixture names (Phase 14) — returns
+       ``list[dict[str, Any]]`` of normalized question records.
+
+    Raises ``ValueError`` for unknown suite names.
+    """
+    suite_cls = _entry_point_suite(name)
+    if suite_cls is not None:
+        return suite_cls
     if name == "longmemeval_scoped_smoke":
         return _load_longmemeval_scoped_smoke()
     raise ValueError(f"unknown suite: {name!r}")
 
 
+def list_suites() -> list[str]:
+    """Enumerate every registered suite — entry-point + legacy fixture names.
+
+    The order is deterministic: entry-point names sorted alphabetically,
+    then legacy bundled-fixture names appended.
+    """
+    ep_names = sorted({ep.name for ep in entry_points(group=_EVAL_ENTRY_POINT_GROUP)})
+    legacy = ["longmemeval_scoped_smoke"]
+    return ep_names + [n for n in legacy if n not in ep_names]
+
+
 __all__ = [
     "build_smoke_subset",
+    "list_suites",
     "load_longmemeval",
     "load_suite",
     "resolve_cache_dir",

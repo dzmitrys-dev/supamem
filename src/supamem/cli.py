@@ -372,7 +372,7 @@ def cmd_stats(
 def cmd_evalbench(
     suite: str = typer.Option(
         "goldens", "--suite",
-        help="Bench suite: goldens | longmemeval_s.",
+        help="Bench suite: goldens | longmemeval_s | coderag.",
     ),
     full: bool = typer.Option(
         False, "--full",
@@ -439,6 +439,10 @@ def cmd_evalbench(
         console.print(
             "  longmemeval_s   (default judge: heuristic) — "
             "LongMemEval_S, lazy-fetched from HF"
+        )
+        console.print(
+            "  coderag         (default judge: heuristic) — "
+            "agentic-coding three-column-axis suite (Phase 15)"
         )
         raise typer.Exit(0)
 
