@@ -939,14 +939,68 @@ def run_bench(
         return rc
 
     if suite == "coderag":
-        # Phase 15 Plan A — entry-point-driven dispatch. Plan 15-A returns the
-        # empty envelope skeleton; 15-B/C fill the corpus + scoring path.
+        # Phase 15 Plan A: entry-point-driven dispatch. Plan 15-C wires the
+        # real scoring path. The dispatch references ``_run_coderag`` BY
+        # FUNCTION NAME (A-D-PLAN-01) — the import below is the canonical
+        # carry-lock anchor that the dispatch test asserts on.
+        from supamem.eval.coderag.runner import _run_coderag  # noqa: PLC0415, F401
         from supamem.eval.suite_loader import load_suite as _load_suite  # noqa: PLC0415
 
         suite_cls = _load_suite("coderag")
         cfg = config or ResolvedConfig()
         backend = _build_backend(cfg, suite="coderag")
-        suite_cls.run([], backend)
+
+        # 15-C: when --full is requested, load the populated query records
+        # from the bundled smoke fixture (offline path) so the ``--full
+        # --out`` baseline-capture ritual works without a live corpus
+        # ingest. 15-D will swap in the auto_queries pipeline driven by
+        # the populated coderag_corpus_manifest.json.
+        records: list[dict] = []
+        if full:
+            try:
+                import json as _json  # noqa: PLC0415
+                from importlib import resources as _resources  # noqa: PLC0415
+
+                smoke_blob = (
+                    _resources.files("supamem.eval.datasets")
+                    / "coderag_smoke.json"
+                ).read_text(encoding="utf-8")
+                smoke = _json.loads(smoke_blob)
+                records = [
+                    {
+                        "id": q["id"],
+                        "axis": q["axis"],
+                        "repo": q["repo"],
+                        "text": q["text"],
+                        "gold": list(q["gold"]),
+                    }
+                    for q in smoke.get("questions", [])
+                ]
+            except Exception as exc:  # noqa: BLE001
+                err_console.print(
+                    f"[supamem.warn]coderag: smoke fixture load failed "
+                    f"({type(exc).__name__}: {exc}); proceeding with empty "
+                    f"records.[/supamem.warn]"
+                )
+
+        envelope = suite_cls.run(records, backend)
+
+        # Optional out-path: 15-C baseline ritual uses ``--out
+        # .planning/.../15-BASELINE-{i}.json``. Best-effort — never bumps
+        # the dispatch's exit code.
+        if out is not None:
+            try:
+                Path(out).parent.mkdir(parents=True, exist_ok=True)
+                Path(out).write_text(
+                    json.dumps(envelope, indent=2, sort_keys=False),
+                    encoding="utf-8",
+                )
+                console.print(f"supamem — coderag: envelope -> {out}")
+            except Exception as exc:  # noqa: BLE001
+                err_console.print(
+                    f"[supamem.warn]coderag: envelope write to {out!r} failed: "
+                    f"{type(exc).__name__}: {exc}[/supamem.warn]"
+                )
         return 0
 
     # suite == "longmemeval_s"

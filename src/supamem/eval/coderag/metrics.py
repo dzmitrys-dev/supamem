@@ -34,9 +34,15 @@ def score(
         return {m: 0.0 for m in METRIC_SET}
     evaluator = pytrec_eval.RelevanceEvaluator(qrels, set(METRIC_SET))
     results = evaluator.evaluate(run)
-    if not results:
+    # Average over ALL queries in qrels — not just those present in ``run``.
+    # Queries with no retrieved hits contribute 0 to every metric. This is
+    # required for INV-03 combined-dominance: a column where one repo's
+    # queries retrieve nothing must NOT inflate the column's metric average
+    # by silently dropping those queries from the denominator. Falls back
+    # to ``len(results)`` only when qrels is empty (degenerate caller).
+    n = len(qrels) if qrels else len(results)
+    if n == 0:
         return {m: 0.0 for m in METRIC_SET}
-    n = len(results)
     return {
         m: sum(r.get(m, 0.0) for r in results.values()) / n
         for m in METRIC_SET
