@@ -421,6 +421,16 @@ def cmd_evalbench(
         None, "--goldens",
         help="Legacy v0.1.x custom goldens JSONL path.",
     ),
+    # Phase 15 Plan D Task D2 — coderag peer-row flag.
+    peer: Optional[str] = typer.Option(
+        None, "--peer",
+        help=(
+            "Optional peer adapter for the coderag suite. Currently the "
+            "only supported value is 'mem0' (requires the peers-mem0 "
+            "extras + a running Qdrant on localhost:6333). The peer's "
+            "metrics ride alongside the supamem column without replacing it."
+        ),
+    ),
 ) -> None:
     """Run the supamem bench harness (Phase 10).
 
@@ -468,6 +478,7 @@ def cmd_evalbench(
         regress=regress,
         goldens_path=goldens,
         config=cfg,
+        peer=peer,
     ))
 
 

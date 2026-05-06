@@ -115,6 +115,61 @@ def _percentile(values: list[float], pct: float) -> float:
     return float(s[k])
 
 
+class _CoderagSmokeHit:
+    """Inline-haystack hit shape — duck-types ``runner._build_run`` access."""
+
+    __slots__ = ("payload", "score")
+
+    def __init__(self, doc_id: str, score: float) -> None:
+        self.score = score
+        self.payload = {"doc_id": doc_id}
+
+
+class _CoderagSmokeBackend:
+    """Offline backend for the bundled ``coderag_smoke.json`` fixture.
+
+    Mirrors the ``_SmokeBackend`` used by ``tests/test_coderag_invariants.py``
+    (deliberately duplicated rather than imported from the test tree —
+    src/ must never import from tests/). Each question carries an inline
+    haystack of (path, content) stubs sufficient to exercise the full
+    scoring path without Qdrant or a live corpus walk. The matching
+    repo's gold docs sort to the top of the result list so the smoke
+    invocation produces deterministic, non-trivial metrics.
+
+    Plan 15-D D2: this backend powers the default
+    ``supamem eval --suite coderag`` invocation; ``--full`` continues to
+    route through the live Qdrant-backed ``_build_backend``.
+    """
+
+    def __init__(self, smoke: dict[str, Any]) -> None:
+        self._by_text: dict[str, dict[str, Any]] = {
+            q["text"]: q for q in smoke.get("questions", [])
+        }
+
+    def query(
+        self, text: str, k: int = 20, *, where: dict[str, Any] | None = None
+    ) -> list[_CoderagSmokeHit]:
+        q = self._by_text.get(text)
+        if q is None:
+            return []
+        repo = q["repo"]
+        gold = list(q["gold"])
+        haystack_docs = [h["path"] for h in q.get("haystack", [])]
+        non_gold = [d for d in haystack_docs if d not in gold]
+        if where is None:
+            ranked = list(gold) + non_gold
+        else:
+            asked = where.get("repo")
+            if asked is None or asked == [repo]:
+                ranked = list(gold) + non_gold
+            else:
+                ranked = []
+        return [
+            _CoderagSmokeHit(doc_id, score=float(len(ranked) - i))
+            for i, doc_id in enumerate(ranked[:k])
+        ]
+
+
 def _build_backend(
     config: ResolvedConfig, *, suite: str | None = None
 ) -> TunedHybridBackend:
@@ -861,6 +916,7 @@ def run_bench(
     out: Path | None = None,
     verbose: bool = False,
     baseline_version: str = "v0.1.5",
+    peer: str | None = None,
 ) -> int:
     """Run the bench. Returns 0 on pass, 1 on regression / fatal.
 
@@ -948,42 +1004,90 @@ def run_bench(
 
         suite_cls = _load_suite("coderag")
         cfg = config or ResolvedConfig()
-        backend = _build_backend(cfg, suite="coderag")
 
-        # 15-C: when --full is requested, load the populated query records
-        # from the bundled smoke fixture (offline path) so the ``--full
-        # --out`` baseline-capture ritual works without a live corpus
-        # ingest. 15-D will swap in the auto_queries pipeline driven by
-        # the populated coderag_corpus_manifest.json.
+        # Load smoke fixture records in EVERY invocation (Plan 15-D D2):
+        # default ``supamem eval --suite coderag`` runs against the bundled
+        # ``coderag_smoke.json`` fixture so CI / dev have a green path
+        # without Qdrant. ``--full`` will additionally route through the
+        # live backend (and, in 15-E, swap in the auto_queries pipeline
+        # driven by the populated coderag_corpus_manifest.json).
+        import json as _json  # noqa: PLC0415
+        from importlib import resources as _resources  # noqa: PLC0415
+
         records: list[dict] = []
-        if full:
-            try:
-                import json as _json  # noqa: PLC0415
-                from importlib import resources as _resources  # noqa: PLC0415
+        smoke: dict = {"questions": []}
+        try:
+            smoke_blob = (
+                _resources.files("supamem.eval.datasets")
+                / "coderag_smoke.json"
+            ).read_text(encoding="utf-8")
+            smoke = _json.loads(smoke_blob)
+            records = [
+                {
+                    "id": q["id"],
+                    "axis": q["axis"],
+                    "repo": q["repo"],
+                    "text": q["text"],
+                    "gold": list(q["gold"]),
+                }
+                for q in smoke.get("questions", [])
+            ]
+        except Exception as exc:  # noqa: BLE001
+            err_console.print(
+                f"[supamem.warn]coderag: smoke fixture load failed "
+                f"({type(exc).__name__}: {exc}); proceeding with empty "
+                f"records.[/supamem.warn]"
+            )
 
-                smoke_blob = (
-                    _resources.files("supamem.eval.datasets")
-                    / "coderag_smoke.json"
-                ).read_text(encoding="utf-8")
-                smoke = _json.loads(smoke_blob)
-                records = [
-                    {
-                        "id": q["id"],
-                        "axis": q["axis"],
-                        "repo": q["repo"],
-                        "text": q["text"],
-                        "gold": list(q["gold"]),
-                    }
-                    for q in smoke.get("questions", [])
-                ]
-            except Exception as exc:  # noqa: BLE001
-                err_console.print(
-                    f"[supamem.warn]coderag: smoke fixture load failed "
-                    f"({type(exc).__name__}: {exc}); proceeding with empty "
-                    f"records.[/supamem.warn]"
+        # Backend selection (Plan 15-D D2):
+        #   --full  → live ``_build_backend`` against Qdrant + ingested
+        #             ``supamem_eval_coderag`` collection (Plan 15-E will
+        #             swap to the populated manifest's full corpus).
+        #   default → offline ``_CoderagSmokeBackend`` driven by each
+        #             question's inline haystack stubs. No Qdrant, no
+        #             network — CI determinism (Plan 15-D D2 acceptance).
+        if full:
+            backend: Any = _build_backend(cfg, suite="coderag")
+        else:
+            backend = _CoderagSmokeBackend(smoke)
+
+        # Optional ``--peer mem0`` adapter: emits a ``peers["mem0"]`` row
+        # alongside the supamem column without replacing it. Lazy import
+        # keeps the goldens / longmemeval paths free of mem0 cost. Best-
+        # effort: a missing ``mem0ai`` extras install or an unreachable
+        # peer Qdrant degrades to a warning + no peer row (never bumps
+        # the dispatch's exit code).
+        peers_kwarg: dict[str, Any] | None = None
+        if peer == "mem0":
+            try:
+                from supamem.eval.coderag.peers.mem0_adapter import (  # noqa: PLC0415
+                    Mem0PeerAdapter,
                 )
 
-        envelope = suite_cls.run(records, backend)
+                _adapter = Mem0PeerAdapter()
+                # Plan 15-D scope locks the supamem column as primary; the
+                # peer's metrics are a parallel ROW under ``envelope.peers``
+                # (see runner.envelope_from_results). 15-E ADR formalizes
+                # the peer-row scoring path; for now we forward the adapter
+                # under a sentinel key so downstream consumers can wire
+                # peer-side scoring without forcing a runner-signature shift.
+                peers_kwarg = {"mem0": {"adapter": _adapter, "status": "ready"}}
+            except Exception as exc:  # noqa: BLE001
+                err_console.print(
+                    f"[supamem.warn]coderag: --peer mem0 unavailable "
+                    f"({type(exc).__name__}: {exc}); install peers-mem0 "
+                    f"extras and start peer Qdrant to enable.[/supamem.warn]"
+                )
+        elif peer:
+            err_console.print(
+                f"[supamem.warn]coderag: --peer {peer!r} unknown; only "
+                f"'mem0' is supported in 15-D.[/supamem.warn]"
+            )
+
+        if peers_kwarg is not None:
+            envelope = suite_cls.run(records, backend, peers=peers_kwarg)
+        else:
+            envelope = suite_cls.run(records, backend)
 
         # Optional out-path: 15-C baseline ritual uses ``--out
         # .planning/.../15-BASELINE-{i}.json``. Best-effort — never bumps

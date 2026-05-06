@@ -508,6 +508,41 @@ def test_eval_list_suites() -> None:
     )
 
 
+def test_eval_coderag_smoke(tmp_path) -> None:
+    """Plan 15-D Task D2: ``supamem eval --suite coderag`` runs offline.
+
+    Default invocation (no ``--full``) loads the bundled
+    ``coderag_smoke.json`` fixture and emits a coderag.v1 envelope —
+    no network, no Qdrant, no live corpus walk.
+    """
+    import json as _json
+    out = tmp_path / "coderag_smoke_out.json"
+    result = _run(
+        "eval", "--suite", "coderag", "--out", str(out),
+        env={"SUPAMEM_NO_UPDATE_CHECK": "1"},
+    )
+    assert result.returncode == 0, (
+        f"stderr: {result.stderr}\nstdout: {result.stdout}"
+    )
+    assert out.exists(), (
+        f"expected envelope at {out}, dir contents: "
+        f"{list(tmp_path.iterdir())}"
+    )
+    envelope = _json.loads(out.read_text(encoding="utf-8"))
+    assert envelope["report_schema_version"] == "coderag.v1"
+    assert "code_fact" in envelope["scores"]
+    assert "decision_rationale" in envelope["scores"]
+
+
+def test_eval_coderag_help_lists_full_and_out_and_peer() -> None:
+    """Plan 15-D D2: --suite coderag exposes --full, --out, --peer."""
+    r = _run("eval", "--help")
+    assert r.returncode == 0, r.stderr
+    out = r.stdout + r.stderr
+    for flag in ("--full", "--out", "--peer"):
+        assert flag in out, f"expected {flag!r} in eval --help, got: {out!r}"
+
+
 def test_version_prints_current() -> None:
     """Test 6: --version prints styled banner with current __version__ + credit line."""
     from supamem import __version__

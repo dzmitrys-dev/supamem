@@ -366,6 +366,90 @@ def _render_eval_bench_panel() -> None:
         warn(f"baseline probe failed: {type(exc).__name__}: {exc}")
 
 
+def _render_coderag_panel() -> None:
+    """Render the coderag bench panel (Plan 15-D Task D2).
+
+    Read-only cache-presence check — mirrors Plan 08.1 D-DOCTOR-04 +
+    Phase 8 D-FETCH-04 invariant: NEVER raises, NEVER flips the doctor
+    exit code.
+
+    Surfaces:
+      - Bench collection name (``supamem_eval_coderag``).
+      - Manifest content_sha256 prefix (first 12 chars) when the
+        bundled ``coderag_corpus_manifest.json`` ships populated SHAs;
+        ``<placeholder>`` while 15-C / 15-E keep the build-time stub.
+      - Cache root + last-fetched UTC, or "not yet ingested" when the
+        live corpus walk has not run.
+      - mem0 peer collection name (``supamem_eval_coderag_mem0``) for
+        operator visibility (Plan 15-D Task D1 INV-A2).
+    """
+    from importlib import resources as _resources  # noqa: PLC0415
+    import json as _json  # noqa: PLC0415
+
+    from platformdirs import user_cache_dir  # noqa: PLC0415
+
+    console.print()
+    console.print("[supamem.brand]coderag bench[/supamem.brand]")
+
+    # 1. Supamem-side bench collection (constant — never config-driven).
+    try:
+        from supamem.eval.coderag.ingest import (  # noqa: PLC0415
+            CODERAG_COLLECTION,
+        )
+
+        ok(f"collection      = {CODERAG_COLLECTION}")
+    except Exception as exc:  # noqa: BLE001
+        warn(f"coderag ingest module probe failed: {type(exc).__name__}: {exc}")
+
+    # 2. mem0 peer collection (Plan 15-D D1 INV-A2: distinct collection).
+    try:
+        from supamem.eval.coderag.peers.mem0_adapter import (  # noqa: PLC0415
+            MEM0_COLLECTION,
+        )
+
+        info(f"mem0_collection = {MEM0_COLLECTION}")
+    except Exception as exc:  # noqa: BLE001
+        warn(f"coderag mem0 adapter probe failed: {type(exc).__name__}: {exc}")
+
+    # 3. Bundled corpus manifest (placeholder vs populated).
+    try:
+        manifest_path = (
+            _resources.files("supamem.eval.datasets")
+            / "coderag_corpus_manifest.json"
+        )
+        manifest = _json.loads(manifest_path.read_text(encoding="utf-8"))
+        for repo in manifest.get("repos", []):
+            slug = repo.get("slug", "(unknown)")
+            sha = repo.get("content_sha256", "")
+            commit = repo.get("commit_sha", "")
+            captured = manifest.get("captured_at", "(unset)")
+            if sha.startswith("<EXECUTOR_FILLS"):
+                info(
+                    f"  manifest[{slug}] = <placeholder>  "
+                    f"(15-E live-stack rerun fills SHAs)"
+                )
+            else:
+                ok(
+                    f"  manifest[{slug}] = {sha[:12]}  "
+                    f"commit={commit[:8] if commit else '(unset)'}  "
+                    f"captured_at={captured}"
+                )
+    except Exception as exc:  # noqa: BLE001
+        warn(
+            f"coderag manifest probe failed: {type(exc).__name__}: {exc}"
+        )
+
+    # 4. Cache root presence (Plan 15-B Task B1 — corpus.cache_root()).
+    try:
+        cache_root = Path(user_cache_dir("supamem")) / "coderag"
+        if cache_root.exists() and any(cache_root.iterdir()):
+            ok(f"cache_root      = {cache_root}  (populated)")
+        else:
+            info(f"cache_root      = {cache_root}  (not yet ingested)")
+    except Exception as exc:  # noqa: BLE001
+        warn(f"coderag cache probe failed: {type(exc).__name__}: {exc}")
+
+
 def _human_bytes(n: int) -> str:
     """Render a byte count as a human-readable string (KiB/MiB/GiB)."""
     units = ("B", "KiB", "MiB", "GiB", "TiB")
@@ -838,6 +922,13 @@ def run_doctor(*, redact_secrets: bool = True) -> int:
 
     # ── Section 2i: Subagent reachability (Phase 08.1 D-DOCTOR-01..05) ───
     _render_subagent_reachability_panel()
+
+    # ── Section 2i-bis: coderag bench panel (Phase 15 Plan D Task D2) ────
+    # Read-only panel — NEVER flips exit code (mirrors Plan 08.1
+    # D-DOCTOR-04 + Phase 8 D-FETCH-04 invariants). Inserted between
+    # Subagent reachability and the Filtered-dense / Installed clients
+    # sections per 15-D-PLAN insertion-order spec.
+    _render_coderag_panel()
 
     # ── Section 2j: Filtered-dense backend (Phase 11 D-CS-02) ────────────
     # Read-only one-line panel — NEVER flips exit code (mirrors Plan 08.1
