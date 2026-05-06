@@ -1,0 +1,24 @@
+{
+  "captured_at": "2026-05-06T00:00:00+00:00",
+  "repos": [
+    {
+      "commit_sha": "<EXECUTOR_FILLS_AT_BUILD_TIME>",
+      "content_sha256": "<EXECUTOR_FILLS_AT_BUILD_TIME>",
+      "file_count": 0,
+      "query_origin": "unknown",
+      "repo_url": "https://github.com/dzmitrys-dev/supamem.git",
+      "slug": "supamem",
+      "training_leakage_suspected": true
+    },
+    {
+      "commit_sha": "<EXECUTOR_FILLS_AT_BUILD_TIME>",
+      "content_sha256": "<EXECUTOR_FILLS_AT_BUILD_TIME>",
+      "file_count": 0,
+      "query_origin": "unknown",
+      "repo_url": "https://github.com/tiangolo/fastapi.git",
+      "slug": "fastapi",
+      "training_leakage_suspected": true
+    }
+  ],
+  "version": 1
+}

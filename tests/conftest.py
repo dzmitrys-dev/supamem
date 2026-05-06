@@ -230,3 +230,18 @@ def make_temporal_qdrant_mock() -> MagicMock:
     client.delete.return_value = None
     client.create_payload_index.return_value = None
     return client
+
+
+# ---- Phase 15 fixtures (added by 15-B-PLAN) -----------------------------
+
+
+@pytest.fixture
+def tiny_repo(tmp_path):
+    """Build a deterministic tiny git repo with 10 commits + 2 ADRs.
+
+    Used by coderag corpus / auto-query tests for offline reproducibility.
+    Implementation lives at ``tests/fixtures/coderag_tiny_repo/build_tiny_repo.py``.
+    """
+    from tests.fixtures.coderag_tiny_repo.build_tiny_repo import build
+
+    return build(tmp_path / "tiny")
