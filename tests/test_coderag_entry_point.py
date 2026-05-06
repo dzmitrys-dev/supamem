@@ -76,14 +76,24 @@ def test_coderag_runner_has_run_function() -> None:
 
 
 def test_coderag_ingest_no_indexer_imports() -> None:
-    """ingest.py MUST NOT import any symbol from supamem.indexer.*."""
+    """ingest.py MUST NOT import from supamem.indexer.* — with ONE
+    sanctioned exception per 15-B-PLAN line 102: ``chunk_markdown`` from
+    ``supamem.indexer.chunker`` is allowed as a read-only library function
+    call. Any other indexer import (whole-module, other-symbol, or
+    wildcard) is a D-SCOPE-05 regression.
+    """
     tree = ast.parse(INGEST_PY.read_text(encoding="utf-8"))
     offending: list[str] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
             mod = node.module or ""
             if mod == "supamem.indexer" or mod.startswith("supamem.indexer."):
-                offending.append(f"from {mod} import ...")
+                # Single exception: from supamem.indexer.chunker import chunk_markdown
+                if mod == "supamem.indexer.chunker" and any(
+                    a.name == "chunk_markdown" for a in node.names
+                ):
+                    continue
+                offending.append(f"from {mod} import {[a.name for a in node.names]}")
         elif isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.name == "supamem.indexer" or alias.name.startswith(
@@ -92,7 +102,9 @@ def test_coderag_ingest_no_indexer_imports() -> None:
                     offending.append(f"import {alias.name}")
     assert not offending, (
         "supamem.eval.coderag.ingest MUST NOT import supamem.indexer.* "
-        f"(D-SCOPE-05 carry-lock); offending: {offending!r}"
+        "(D-SCOPE-05 carry-lock; sole exception is "
+        "`from supamem.indexer.chunker import chunk_markdown`); "
+        f"offending: {offending!r}"
     )
 
 
