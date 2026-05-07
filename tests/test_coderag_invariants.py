@@ -234,6 +234,32 @@ def test_inv_a2_collection_distinct_from_mem0() -> None:
     )
 
 
-@pytest.mark.skip(reason="INV-A3: REQUIREMENTS.md PUB-05/EVAL-05 edits land in Plan 15-E")
-def test_inv_a3_requirements_md_edits_skip_until_15e() -> None:  # pragma: no cover
-    raise AssertionError("INV-A3: deferred to Plan 15-E")
+def test_inv_a3_requirements_edited_post_15e() -> None:
+    """INV-A3: REQUIREMENTS.md PUB-05/EVAL-05 edits per A-D-DOCS-01.
+
+    Wired in 15-E Task E1; replaces the 15-C skip-marked stub.
+    """
+    req_path = Path(__file__).resolve().parent.parent / ".planning" / "REQUIREMENTS.md"
+    if not req_path.is_file():
+        pytest.skip(
+            "INV-A3 requires .planning/REQUIREMENTS.md — gitignored planning artifact "
+            "absent in this checkout (e.g. parallel-execution worktree). Skipping is "
+            "safe; the orchestrator's main-repo run enforces it."
+        )
+    req = req_path.read_text(encoding="utf-8")
+    # PUB-05 references --suite coderag (not --suite longmemeval_s).
+    assert "supamem eval --suite coderag" in req, (
+        "INV-A3 VIOLATED: PUB-05 must reference `supamem eval --suite coderag` (A-D-DOCS-01)"
+    )
+    # EVAL-05 marked DEMOTED (deferred-marker `[~]` per REQUIREMENTS.md convention).
+    eval05_line = next(
+        (line for line in req.splitlines() if "**EVAL-05**" in line),
+        "",
+    )
+    assert "[~]" in eval05_line or "DEMOTED" in eval05_line, (
+        f"INV-A3 VIOLATED: EVAL-05 must be marked DEMOTED. Got: {eval05_line!r}"
+    )
+    # ADR-0002 referenced in REQUIREMENTS.md.
+    assert "ADR-0002" in req, (
+        "INV-A3 VIOLATED: REQUIREMENTS.md must cite ADR-0002 (A-D-DOCS-01)"
+    )
