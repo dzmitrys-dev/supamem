@@ -137,39 +137,46 @@ def test_translations_carry_supamem_eval_coderag_cli_literal(translation: Path) 
 
 
 @pytest.mark.parametrize("translation", TRANSLATIONS, ids=lambda p: p.name)
-def test_translations_synced_with_sha_matches_post_readme_commit(translation: Path) -> None:
-    """The `synced-with` SHA on each translation must match `git rev-parse --short HEAD`.
+def test_translations_synced_with_sha_matches_last_readme_commit(translation: Path) -> None:
+    """The `synced-with` SHA on each translation must match the SHA of the
+    most recent commit that touched README.md.
 
-    Soft skip when (a) git is unavailable, or (b) README.md has
-    uncommitted changes (pre-sync-bump state — expected to FAIL).
+    Per AGENTS.md README Translations sync flow: the README.md content
+    commit lands first; the sync-bump runs the sed one-liner in a
+    SEPARATE follow-up commit using `git rev-parse --short HEAD` — at
+    that moment HEAD is the README content commit, so the marker
+    references the content commit (NOT the sync-bump commit itself).
+
+    Soft skip when (a) git is unavailable, (b) README.md has
+    uncommitted changes (pre-sync-bump state).
     """
     try:
-        head_sha = subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"],
-            cwd=REPO_ROOT,
-            stderr=subprocess.DEVNULL,
-        ).decode().strip()
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        pytest.skip("git not available — cannot resolve HEAD short SHA")
-
-    # Skip if README.md has uncommitted modifications (pre-sync-bump state).
-    try:
+        # Skip if README.md has uncommitted modifications (pre-sync-bump state).
         diff_status = subprocess.check_output(
             ["git", "status", "--porcelain", "README.md"],
             cwd=REPO_ROOT,
             stderr=subprocess.DEVNULL,
         ).decode().strip()
-    except subprocess.CalledProcessError:
-        diff_status = ""
-    if diff_status:
-        pytest.skip(
-            f"README.md has uncommitted changes ({diff_status!r}); sync-bump runs "
-            "in a separate post-commit step per AGENTS.md."
-        )
+        if diff_status:
+            pytest.skip(
+                f"README.md has uncommitted changes ({diff_status!r}); "
+                "sync-bump runs in a separate post-commit step per AGENTS.md."
+            )
+        readme_sha = subprocess.check_output(
+            ["git", "log", "-1", "--format=%h", "--abbrev=7", "--", "README.md"],
+            cwd=REPO_ROOT,
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pytest.skip("git not available — cannot resolve last README.md commit SHA")
+
+    if not readme_sha:
+        pytest.skip("README.md has no commit history in this checkout")
 
     body = translation.read_text(encoding="utf-8")
-    expected = f"synced-with: README.md @ {head_sha}"
+    expected = f"synced-with: README.md @ {readme_sha}"
     assert expected in body, (
-        f"{translation.name} synced-with SHA must match HEAD ({head_sha}). "
-        "Run the AGENTS.md sed one-liner to sync."
+        f"{translation.name} synced-with SHA must match the last commit "
+        f"that touched README.md ({readme_sha}). "
+        "Run the AGENTS.md sed one-liner AFTER the README content commit."
     )
