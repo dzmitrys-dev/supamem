@@ -283,6 +283,93 @@ def verify_manifest_matches_cache(manifest_path: Path) -> bool:
     return True
 
 
+# ----------------------------- orchestrator --------------------------------
+
+# Sentinel literal used in the bundled package manifest. Per Req-02, the
+# bundled JSON ships with these placeholders; ``ensure_populated_manifest``
+# realizes them into a per-user populated manifest in user-cache. The bundled
+# file is NEVER mutated.
+_PLACEHOLDER_TOKEN: str = "<EXECUTOR_FILLS_AT_BUILD_TIME>"
+
+
+def ensure_populated_manifest(manifest_path: Path) -> dict:
+    """Realize the bundled placeholder manifest into a populated user-cache manifest.
+
+    Plan 16-A / D-DISP-01.
+
+    Behavior:
+
+    1. Read the bundled manifest at ``manifest_path``.
+    2. Compute ``user_cache_path = cache_root() / "manifest.json"``.
+    3. Fast-path (idempotent): if ``user_cache_path`` exists, contains no
+       placeholder tokens, and ``verify_manifest_matches_cache`` confirms the
+       cached corpus still matches the recorded ``content_sha256``, return the
+       parsed user-cache manifest WITHOUT re-invoking ``fetch_pinned``.
+    4. Otherwise, for each repo entry in the bundled manifest:
+       - If ``commit_sha`` is the placeholder token → raise ``RuntimeError``.
+         A populated ``commit_sha`` is the integrity anchor (T-15-01); we
+         refuse to invent one. The packager must fill it before publish.
+       - Else: ``fetch_pinned`` materializes the cache; ``walk_corpus`` +
+         ``compute_content_sha256`` compute the realized ``content_sha256``
+         (placeholder fields are filled; non-placeholder fields are honored
+         verbatim — Req-02 carry-pin honoring).
+    5. Write the realized manifest via ``write_manifest`` to ``user_cache_path``.
+    6. Return the realized manifest as a dict.
+
+    Returns the populated manifest dict (planner's chosen shape — callers
+    avoid a second ``read_manifest`` round-trip).
+
+    Raises:
+        RuntimeError: if any repo entry's ``commit_sha`` is the placeholder
+            token. Realization requires a pinned SHA; the packager must
+            fill it before publish.
+    """
+    bundled = read_manifest(manifest_path)
+    user_cache_path = cache_root() / "manifest.json"
+
+    # ------------------------ idempotent fast-path ------------------------
+    if user_cache_path.exists():
+        try:
+            existing = read_manifest(user_cache_path)
+        except (OSError, json.JSONDecodeError):
+            existing = None
+        if existing is not None:
+            existing_text = user_cache_path.read_text(encoding="utf-8")
+            has_placeholder = _PLACEHOLDER_TOKEN in existing_text
+            if not has_placeholder and verify_manifest_matches_cache(user_cache_path):
+                return existing
+
+    # ------------------------ realize each entry --------------------------
+    realized_entries: list[dict] = []
+    for entry in bundled["repos"]:
+        slug = entry["slug"]
+        repo_url = entry["repo_url"]
+        commit_sha = entry.get("commit_sha")
+        if commit_sha == _PLACEHOLDER_TOKEN or not commit_sha:
+            raise RuntimeError(
+                "manifest commit_sha placeholder found; cannot realize without "
+                "a pinned SHA — populate the bundled manifest's commit_sha first"
+            )
+
+        repo_root = fetch_pinned(repo_url, commit_sha, repo_cache_path(slug, commit_sha))
+
+        existing_content_sha = entry.get("content_sha256")
+        if existing_content_sha == _PLACEHOLDER_TOKEN or not existing_content_sha:
+            paths = list(walk_corpus(repo_root))
+            content_sha = compute_content_sha256(repo_root, paths)
+        else:
+            # Carry-pinned content_sha256 honored verbatim (Req-02).
+            content_sha = existing_content_sha
+
+        realized = dict(entry)
+        realized["commit_sha"] = commit_sha
+        realized["content_sha256"] = content_sha
+        realized_entries.append(realized)
+
+    write_manifest(user_cache_path, realized_entries)
+    return read_manifest(user_cache_path)
+
+
 __all__ = [
     "ALLOWLIST_EXTENSIONS",
     "EXCLUDE_GLOBS",
@@ -290,6 +377,7 @@ __all__ = [
     "TOP_LEVEL_DOC_NAMES",
     "cache_root",
     "compute_content_sha256",
+    "ensure_populated_manifest",
     "fetch_pinned",
     "is_allowlisted_extension",
     "is_excluded",
