@@ -1,2 +1,2 @@
 """supamem — project-agnostic dual-memory tooling."""
-__version__ = "0.3.0a4"
+__version__ = "0.3.0a5"

@@ -2,6 +2,73 @@
 
 All notable changes to `supamem` will be documented in this file.
 
+## [0.3.0a5] — 2026-05-07 — coderag eval suite (Phase 15)
+
+### Added
+
+- **coderag eval suite.** New `supamem.eval` plugin entry-point group
+  with the first registered suite, `coderag`. Deterministic two-repo
+  haystack (`supamem` self + `fastapi` external; both pinned to
+  commit-SHAs via `src/supamem/eval/datasets/coderag_corpus_manifest.json`
+  — never tag, never track-main). Two query axes: `code_fact`
+  (PR-derived queries with file-modification gold) and
+  `decision_rationale` (ADR Problem/Why-derived queries; supamem-only
+  per A-D-HAY-04 — fastapi has no `docs/adr/` at the v1 corpus pin).
+  **Three-column metric reporting** (`supamem_only` / `fastapi_only` /
+  `combined`) per axis makes self-reference circularity audit-visible.
+  See [ADR-0002](docs/adr/0002-coderag-eval-philosophy.md).
+- **`supamem eval --suite coderag [--full] [--out PATH] [--peer mem0]`**
+  CLI surface. `--full` runs against the full pinned corpus; `--peer
+  mem0` adds a parallel mem0 row in the metric envelope.
+- **mem0 peer adapter** (`peers-mem0` extras: `mem0ai>=2.0,<3.0`).
+  Single canonical default config; ingests source documents into its
+  OWN Qdrant collection (`supamem_eval_coderag_mem0` — separate from
+  `supamem_eval_coderag` per A-D-DEF-02 / Pitfall 7: mem0 owns its
+  schema). Reported as a parallel row, never a gate.
+- **`pytrec_eval>=0.5`** added to the `eval` extras for canonical IR
+  metric scoring (Recall@k, MRR, nDCG@10).
+- **`supamem doctor`** coderag panel (read-only) surfaces
+  cache/manifest presence and the resolved bench-collection name.
+- **Bundled `coderag_smoke.json`** (≤200 KB; 6 questions across both
+  axes) for offline PR-CI — no live Qdrant or network required.
+- **Validation invariants INV-01..10 + INV-A1..A3** enforced in
+  `tests/test_coderag_invariants.py`. INV-A1 collapses
+  `decision_rationale.combined` to `supamem_only` when
+  `fastapi_only is null` (single locus at the envelope-builder
+  boundary). INV-A3 (this release) verifies the REQUIREMENTS.md edits.
+- **Three-run baseline + ε derivation rule** (Plan 15-C):
+  `ε_ranking = max(stddev, 0.005)`; `ε_latency = max(0.05 × mean, 5ms)`;
+  hard latency p95 ceiling 500 ms. Locked numerical floors live in
+  ADR-0002 §7.
+
+### Changed
+
+- **LongMemEval demoted** to on-demand-only for full runs. The
+  5-question `longmemeval_scoped_smoke` fixture (Phase 14) stays on
+  PR-CI; full LongMemEval_S no longer gates releases. The Phase 13
+  ship gate moves to `supamem eval --suite coderag --full`
+  no-regression vs measured baseline. See
+  [ADR-0002](docs/adr/0002-coderag-eval-philosophy.md). The diagnosis:
+  LongMemEval measures conversational long-term memory while supamem
+  indexes code chunks for AI coding agents — the gate was workload-
+  misaligned, not the tool.
+- **REQUIREMENTS.md edits per A-D-DOCS-01.** PUB-05 rewritten to gate
+  on `supamem eval --suite coderag --full` no-regression vs measured
+  baseline (Recall@k, MRR, nDCG@10 ≥ baseline − ε; latency p95 ≤
+  baseline + ε AND ≤ 500ms). EVAL-05 marked DEMOTED with reference to
+  ADR-0002. Original wording preserved for traceability.
+
+### Internal
+
+- **Byte-identical regression locks preserved.** Phase 14
+  `_run_goldens_legacy` (D-VEND-04) and `src/supamem/retrieval/filters.py`
+  (D-QGEN-06 — `repo` and `axis` are pass-through keys; ZERO new
+  branches in the filter dispatcher) — both still byte-identical
+  after Phase 15 edits.
+- New plugin entry-point group `supamem.eval` mirrors the four
+  existing groups (retrieval / embedder / chunker / reranker); third
+  parties can register additional suites without forking.
+
 ## [0.3.0a4] — 2026-05-04 — Bench harness where-filter pass (Phase 14)
 
 ### Added
