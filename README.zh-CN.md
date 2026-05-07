@@ -583,6 +583,39 @@ dual_memory_search(query="session", where={"valid_to": "now"})
 | `path_prefix` | Phase 11 —— 对 `payload.path_prefixes` 的左锚精确路径段匹配。字符串或列表。由 `supamem index` 写入。 |
 | `valid_to` | Phase 9 —— 仅接受 `"now"` 作为常驻时序子句的别名;其他值抛 `ValueError`。 |
 | `session_id` | **仅 bench** —— 由 LongMemEval ingestion(`supamem.eval.longmemeval_ingest`)写入;为 pass-through 键。**`supamem index` 不会写入。** Phase 14 scoped bench 路径在专用 `supamem_eval_longmemeval_s` 集合上使用。详见 [ADR-0001](docs/adr/0001-scoped-only-bench-gate.md)。 |
+| `repo` | **仅 bench**(v0.3.0a5+)—— 由 `coderag` ingestion(`supamem.eval.coderag.ingest`)写入;为 pass-through 键。取值:`"supamem"`、`"fastapi"`。**`supamem index` 不会写入。** Phase 15 三列报告(`supamem_only` / `fastapi_only` / `combined`)在 `supamem_eval_coderag` 集合上使用。详见 [ADR-0002](docs/adr/0002-coderag-eval-philosophy.md)。 |
+| `axis` | **仅 bench**(v0.3.0a5+)—— 由 `coderag` ingestion 写入;为 pass-through 键。取值:`"code_fact"`、`"decision_rationale"`。**`supamem index` 不会写入。** 用于按轴聚合度量。详见 [ADR-0002](docs/adr/0002-coderag-eval-philosophy.md)。 |
+
+### coderag(代码检索;Phase 15 —— 新的 Phase 13 发布 gate,v0.3.0a5+)
+
+`supamem eval --suite coderag [--full] [--out PATH] [--peer mem0]` 运行
+一个确定性的双仓库代码检索 haystack(supamem 自身 + 外部
+[fastapi](https://github.com/fastapi/fastapi),均按 commit-SHA 锁定),
+查询自动生成自 PR 历史(`code_fact` 轴)与 ADR Problem/Why 段落
+(`decision_rationale` 轴;在 v1 语料锁定点为 **supamem-only** ——
+fastapi 在该 SHA 没有 `docs/adr/`,因此在该轴三列退化:
+`fastapi_only=null`、`combined=supamem_only`)。
+
+每条度量(`Recall@k`、`MRR`、`nDCG@10`、p50/p95 延迟)按轴以
+**三列形式**(`supamem_only` / `fastapi_only` / `combined`)输出 ——
+让自我引用造成的循环性显而易见。
+
+**发布 gate。** 当 `supamem eval --suite coderag --full` 相对实测基线
+未回退(排序指标 ≥ 基线 − ε;延迟 p95 ≤ 基线 + ε **且** ≤ 500 ms 硬上限)
+时,Phase 13 才能发布。锁定的数值阈值见
+[ADR-0002](docs/adr/0002-coderag-eval-philosophy.md) §7。
+
+**mem0 peer baseline。** [mem0](https://github.com/mem0ai/mem0) 以单一
+默认配置作为 peer 行运行(无调优矩阵),写入它**自己**的 Qdrant 集合
+`supamem_eval_coderag_mem0`(与 `supamem_eval_coderag` 隔离 —— mem0
+拥有自己的 schema)。仅作为参考行,不参与 gate 决策。
+通过 `pip install supamem[peers-mem0]` 安装。
+
+**LongMemEval 降级。** 自 v0.3.0a5 起,完整 LongMemEval_S 仅按需运行;
+原有 5 题 `longmemeval_scoped_smoke` 仍留在 PR-CI。诊断:LongMemEval
+衡量的是对话型长期记忆,而 supamem 索引的是 AI 编码 agent 用到的代码块
+—— gate **与工作负载错配**,而不是工具的问题。完整论述见
+[ADR-0002](docs/adr/0002-coderag-eval-philosophy.md)。
 
 ### 迁移
 

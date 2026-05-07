@@ -609,6 +609,44 @@ dual_memory_search(query="session", where={"valid_to": "now"})
 | `path_prefix` | Phase 11 — `payload.path_prefixes` に対する left-anchored の path-segment 完全一致。文字列またはリスト。`supamem index` が chunk 単位で書き込みます。 |
 | `valid_to` | Phase 9 — 常時オンの temporal 句のエイリアスとして `"now"` のみ受理。それ以外の値は `ValueError`。 |
 | `session_id` | **bench 専用** — LongMemEval ingestion(`supamem.eval.longmemeval_ingest`)が書き込む pass-through キー。**`supamem index` は書き込みません。** Phase 14 の scoped bench パスが専用コレクション `supamem_eval_longmemeval_s` に対して使用します。詳細は [ADR-0001](docs/adr/0001-scoped-only-bench-gate.md) を参照。 |
+| `repo` | **bench 専用**(v0.3.0a5+)— `coderag` ingestion(`supamem.eval.coderag.ingest`)が書き込む pass-through キー。値:`"supamem"`、`"fastapi"`。**`supamem index` は書き込みません。** Phase 15 の三列レポート(`supamem_only` / `fastapi_only` / `combined`)が `supamem_eval_coderag` コレクションに対して使用します。詳細は [ADR-0002](docs/adr/0002-coderag-eval-philosophy.md) を参照。 |
+| `axis` | **bench 専用**(v0.3.0a5+)— `coderag` ingestion が書き込む pass-through キー。値:`"code_fact"`、`"decision_rationale"`。**`supamem index` は書き込みません。** 軸ごとのメトリクス集計に使用。詳細は [ADR-0002](docs/adr/0002-coderag-eval-philosophy.md) を参照。 |
+
+### coderag(コード検索;Phase 15 — 新しい Phase 13 リリースゲート、v0.3.0a5+)
+
+`supamem eval --suite coderag [--full] [--out PATH] [--peer mem0]` は、
+2 リポジトリの決定論的コード検索 haystack(supamem 自身 +
+[fastapi](https://github.com/fastapi/fastapi) 外部、両方とも commit-SHA
+にピン留め)を、PR 履歴由来のクエリ(`code_fact` 軸)と ADR の
+Problem/Why 節由来のクエリ(`decision_rationale` 軸;v1 コーパスピンでは
+**supamem 専用** — fastapi にはその SHA で `docs/adr/` が無いため、
+この軸では三列レポートが縮退し `fastapi_only=null`、
+`combined=supamem_only` となります)で実行します。
+
+`Recall@k`、`MRR`、`nDCG@10`、p50/p95 レイテンシを軸ごとに
+**三列**(`supamem_only` / `fastapi_only` / `combined`)で出力し、
+自己参照による循環性を一目で監査可能にします。
+
+**リリースゲート。** `supamem eval --suite coderag --full` が実測
+ベースラインに対してリグレッションなし(ランキング指標 ≥ baseline − ε;
+レイテンシ p95 ≤ baseline + ε **かつ** ≤ 500 ms ハード上限)を
+報告したとき、Phase 13 はリリースされます。固定された数値しきい値は
+[ADR-0002](docs/adr/0002-coderag-eval-philosophy.md) §7 に記載。
+
+**mem0 peer ベースライン。** [mem0](https://github.com/mem0ai/mem0) は
+単一の標準デフォルト設定で並行行として実行(チューニング行列なし)、
+ソース文書を **自分自身の** Qdrant コレクション
+`supamem_eval_coderag_mem0` に取り込みます(`supamem_eval_coderag` とは
+分離 — mem0 が自前のスキーマを持つため)。参照点として報告するだけで、
+ゲートには関与しません。`pip install supamem[peers-mem0]` でインストール。
+
+**LongMemEval の降格。** v0.3.0a5 以降、完全な LongMemEval_S は
+オンデマンドのみとなり、5 問の `longmemeval_scoped_smoke` フィクスチャは
+PR-CI に残ります。診断:LongMemEval は会話的長期記憶を測りますが、
+supamem は AI コーディングエージェントが利用するコードチャンクを
+インデックスしているため、ゲートは **ワークロードと不整合** でした
+(ツール側の問題ではない)。詳細は
+[ADR-0002](docs/adr/0002-coderag-eval-philosophy.md) を参照。
 
 ### マイグレーション
 

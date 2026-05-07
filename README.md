@@ -333,7 +333,7 @@ discover this flow naturally.
 | `supamem stats` | Welford schema-v2 usage counters from `.supamem/state/` |
 | `supamem live` | 👀 Live dashboard tailing the audit JSONL — pipe-safe (plain JSONL when not a TTY); handles rotation, resize, Ctrl-C |
 | `supamem migrate` | Brownfield migration from a pre-existing `dev_memory` collection |
-| `supamem eval` | Run the bench harness. `--suite goldens` (default, bundled 33-query regression corpus) or `--suite longmemeval_s` (lazy-fetched LongMemEval_S, ~3 GB on first run; CI fast-path is a 10-Q axis-stratified subset, full ~500-Q gated by `--full`). v0.3.0a4+: emits a scoped + unscoped retrieval pass per question; the publication gate is **scoped-only** ([ADR-0001](docs/adr/0001-scoped-only-bench-gate.md)). New bundled `--suite longmemeval_scoped_smoke` (≤5 questions, no lazy-fetch) for CI. Outputs an MTEB-style JSON envelope to `~/.supamem/eval/<utc-iso>.json`. Default judge is heuristic (offline); pass `--judge ollama:<model>` for a localhost Ollama judge — SaaS endpoints are refused (D-07). Optional extra: `pip install supamem[eval]` for the RAGAS triad (v0.3.0a2+). Legacy `--regress` mode preserved. |
+| `supamem eval` | Run the bench harness. `--suite goldens` (default, bundled 33-query regression corpus), `--suite longmemeval_s` (lazy-fetched LongMemEval_S, ~3 GB on first run; **DEMOTED to on-demand-only in v0.3.0a5** per [ADR-0002](docs/adr/0002-coderag-eval-philosophy.md) — no longer the Phase 13 ship gate), `--suite longmemeval_scoped_smoke` (bundled, ≤5 questions, no lazy-fetch — stays on PR-CI), or **`supamem eval --suite coderag [--full] [--out PATH] [--peer mem0]`** (v0.3.0a5+, code-shaped retrieval suite — new Phase 13 ship gate). Outputs an MTEB-style JSON envelope to `~/.supamem/eval/<utc-iso>.json`. Default judge is heuristic (offline); pass `--judge ollama:<model>` for a localhost Ollama judge — SaaS endpoints are refused (D-07). Optional extras: `pip install supamem[eval]` for the RAGAS triad + `pytrec_eval`; `pip install supamem[peers-mem0]` for the mem0 peer adapter (v0.3.0a5+). Legacy `--regress` mode preserved. |
 | `supamem uninstall --client <name>` | Reverse `supamem install` cleanly. Strips supamem from BOTH project and user scopes. |
 | `supamem unpatch-agents` | 🔄 Reverse subagent reachability patches (v0.2.5+). Restores agent files to their pre-patch form per the manifest at `~/.cache/supamem/agent_patches.json`. Skips files you've edited since with a per-file warning. Run BEFORE `pip uninstall supamem` for a clean uninstall. |
 
@@ -635,6 +635,8 @@ Multiple `where` keys are AND'd; list values within a key are OR'd (`MatchAny`).
 | `path_prefix` | Phase 11 — left-anchored exact path-segment match against `payload.path_prefixes`. String or list. Set by `supamem index` per-chunk. |
 | `valid_to` | Phase 9 — accepts only `"now"` as a no-op alias for the always-on temporal clause. Any other value raises `ValueError`. |
 | `session_id` | **Bench-only** — set by LongMemEval ingestion (`supamem.eval.longmemeval_ingest`); pass-through key. **NOT settable by `supamem index`.** Used by the Phase 14 scoped bench pass against the dedicated `supamem_eval_longmemeval_s` collection. See [ADR-0001](docs/adr/0001-scoped-only-bench-gate.md). |
+| `repo` | **Bench-only** (v0.3.0a5+) — set by `coderag` ingestion (`supamem.eval.coderag.ingest`); pass-through key. Values: `"supamem"`, `"fastapi"`. **NOT settable by `supamem index`.** Used by the Phase 15 three-column reporting (`supamem_only` / `fastapi_only` / `combined`) against `supamem_eval_coderag`. See [ADR-0002](docs/adr/0002-coderag-eval-philosophy.md). |
+| `axis` | **Bench-only** (v0.3.0a5+) — set by `coderag` ingestion; pass-through key. Values: `"code_fact"`, `"decision_rationale"`. **NOT settable by `supamem index`.** Used by the per-axis metric aggregation. See [ADR-0002](docs/adr/0002-coderag-eval-philosophy.md). |
 
 ### Migration
 
@@ -687,6 +689,55 @@ the gap.
 ≤200 KB, self-contained) is exposed as the new suite
 `longmemeval_scoped_smoke` — runs in CI without triggering the ~3 GB lazy
 fetch.
+
+### coderag (code-retrieval; Phase 15 — new Phase 13 ship gate, v0.3.0a5+)
+
+`supamem eval --suite coderag [--full] [--out PATH] [--peer mem0]` runs
+a deterministic two-repo code-retrieval haystack (supamem self +
+[fastapi](https://github.com/fastapi/fastapi) external, both pinned to
+commit-SHAs) with pure-auto queries derived from PR history (the
+`code_fact` axis) and ADR Problem/Why sections (the
+`decision_rationale` axis; **supamem-only** at the v1 corpus pin —
+fastapi has no `docs/adr/` directory, so the three-column reporting
+collapses on this axis).
+
+Reports `Recall@k` (k ∈ {1, 5, 10, 20}), `MRR`, `nDCG@10`, and latency
+p50/p95 in **three-column form** — `supamem_only` / `fastapi_only` /
+`combined` — per axis. The three-column shape makes self-reference
+circularity audit-visible: a reader can see whether a published
+"Recall@5 = 1.000 on decision_rationale" came from supamem retrieving
+its own ADRs (high self-reference; expected) or from a generalisable
+signal that also holds on fastapi (it doesn't — fastapi has no ADRs at
+the v1 corpus pin).
+
+**Ship gate.** Phase 13 ships when `supamem eval --suite coderag --full`
+reports no-regression vs the measured baseline (Recall@k, MRR, nDCG@10
+≥ baseline − ε; latency p95 ≤ baseline + ε **AND** ≤ 500 ms hard
+ceiling). ε is derived from the three-run baseline:
+`ε_ranking = max(stddev, 0.005)`, `ε_latency = max(0.05 × mean, 5ms)`.
+Locked numerical floors are recorded in
+[ADR-0002](docs/adr/0002-coderag-eval-philosophy.md) §7.
+
+**mem0 peer baseline.** [mem0](https://github.com/mem0ai/mem0) runs as
+a parallel row with a single canonical default config (no tuning
+matrix). It ingests source documents into its OWN Qdrant collection
+(`supamem_eval_coderag_mem0`, separate from `supamem_eval_coderag` —
+mem0 owns its schema; sharing a collection would corrupt). Reported as
+a parallel row in the metric envelope; never gates. Install with
+`pip install supamem[peers-mem0]`.
+
+**LongMemEval demoted.** Full LongMemEval_S becomes on-demand-only as
+of v0.3.0a5; the existing 5-question `longmemeval_scoped_smoke`
+fixture stays on PR-CI. The diagnosis: LongMemEval measures
+conversational long-term memory ("what car did I buy?"), while supamem
+indexes code chunks consumed by AI coding agents — the gate was
+**workload-misaligned**, not the tool. See
+[ADR-0002](docs/adr/0002-coderag-eval-philosophy.md) for the full
+rationale.
+
+**Smoke fixture.** A bundled
+`src/supamem/eval/datasets/coderag_smoke.json` (6 questions across both
+axes, ≤200 KB) drives offline PR-CI without live Qdrant.
 
 ---
 

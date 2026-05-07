@@ -624,6 +624,44 @@ Múltiples keys de `where` se AND-ean; los valores en lista dentro de una key se
 | `path_prefix` | Phase 11 — match exacto left-anchored por segmentos de path contra `payload.path_prefixes`. String o lista. Lo escribe `supamem index` por chunk. |
 | `valid_to` | Phase 9 — solo acepta `"now"` como alias no-op de la cláusula temporal always-on. Cualquier otro valor lanza `ValueError`. |
 | `session_id` | **Solo bench** — lo escribe la ingestión LongMemEval (`supamem.eval.longmemeval_ingest`); es key pass-through. **`supamem index` NO lo escribe.** Lo usa la pasada scoped del bench Phase 14 contra la colección dedicada `supamem_eval_longmemeval_s`. Ver [ADR-0001](docs/adr/0001-scoped-only-bench-gate.md). |
+| `repo` | **Solo bench** (v0.3.0a5+) — lo escribe la ingestión `coderag` (`supamem.eval.coderag.ingest`); key pass-through. Valores: `"supamem"`, `"fastapi"`. **`supamem index` NO lo escribe.** Lo usa el reporte de tres columnas (`supamem_only` / `fastapi_only` / `combined`) de Phase 15 contra `supamem_eval_coderag`. Ver [ADR-0002](docs/adr/0002-coderag-eval-philosophy.md). |
+| `axis` | **Solo bench** (v0.3.0a5+) — lo escribe la ingestión `coderag`; key pass-through. Valores: `"code_fact"`, `"decision_rationale"`. **`supamem index` NO lo escribe.** Lo usa la agregación de métricas por eje. Ver [ADR-0002](docs/adr/0002-coderag-eval-philosophy.md). |
+
+### coderag (recuperación de código; Phase 15 — nuevo gate de publicación de Phase 13, v0.3.0a5+)
+
+`supamem eval --suite coderag [--full] [--out PATH] [--peer mem0]` ejecuta
+un haystack determinista de dos repositorios (supamem self +
+[fastapi](https://github.com/fastapi/fastapi) externo, ambos anclados a
+commit-SHAs) con consultas auto-generadas a partir del historial de PRs
+(eje `code_fact`) y de las secciones Problem/Why de los ADRs (eje
+`decision_rationale`; **supamem-only** en el pin v1 — fastapi no tiene
+`docs/adr/` en ese SHA, así que el reporte de tres columnas colapsa en
+ese eje: `fastapi_only=null`, `combined=supamem_only`).
+
+Reporta `Recall@k`, `MRR`, `nDCG@10` y latencia p50/p95 en **forma de
+tres columnas** — `supamem_only` / `fastapi_only` / `combined` — por
+eje, haciendo auditable la circularidad de auto-referencia.
+
+**Gate de publicación.** Phase 13 publica cuando
+`supamem eval --suite coderag --full` reporta no-regresión vs el
+baseline medido (ranking ≥ baseline − ε; latencia p95 ≤ baseline + ε
+**Y** ≤ 500 ms techo duro). Los pisos numéricos congelados están en
+[ADR-0002](docs/adr/0002-coderag-eval-philosophy.md) §7.
+
+**Baseline mem0 peer.** [mem0](https://github.com/mem0ai/mem0) corre
+como fila paralela con una única configuración por defecto (sin
+matriz de tuning), ingesta los documentos en su PROPIA colección
+Qdrant `supamem_eval_coderag_mem0` (separada de `supamem_eval_coderag`
+— mem0 posee su esquema). Punto de referencia, nunca gate. Instalar
+con `pip install supamem[peers-mem0]`.
+
+**LongMemEval degradado.** Desde v0.3.0a5 LongMemEval_S completo es
+on-demand-only; el fixture de 5 preguntas `longmemeval_scoped_smoke`
+sigue en PR-CI. Diagnóstico: LongMemEval mide memoria de largo plazo
+conversacional, mientras supamem indexa chunks de código consumidos
+por agents de coding — el gate estaba **mal alineado con la carga de
+trabajo**, no la herramienta. Ver
+[ADR-0002](docs/adr/0002-coderag-eval-philosophy.md).
 
 ### Migración
 

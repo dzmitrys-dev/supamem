@@ -623,6 +623,46 @@ dual_memory_search(query="session", where={"valid_to": "now"})
 | `path_prefix` | Phase 11 — left-anchored точное совпадение по сегментам пути относительно `payload.path_prefixes`. Строка или список. Пишется `supamem index` поchunk-но. |
 | `valid_to` | Phase 9 — принимает только `"now"` как no-op-алиас always-on temporal-клаузы. Любое другое значение бросает `ValueError`. |
 | `session_id` | **Только bench** — пишется LongMemEval-ингестом (`supamem.eval.longmemeval_ingest`); pass-through-ключ. **`supamem index` НЕ пишет это поле.** Используется scoped-проходом bench-а Phase 14 против выделенной коллекции `supamem_eval_longmemeval_s`. См. [ADR-0001](docs/adr/0001-scoped-only-bench-gate.md). |
+| `repo` | **Только bench** (v0.3.0a5+) — пишется `coderag`-ингестом (`supamem.eval.coderag.ingest`); pass-through-ключ. Значения: `"supamem"`, `"fastapi"`. **`supamem index` НЕ пишет это поле.** Используется отчётом по трём колонкам Phase 15 (`supamem_only` / `fastapi_only` / `combined`) против `supamem_eval_coderag`. См. [ADR-0002](docs/adr/0002-coderag-eval-philosophy.md). |
+| `axis` | **Только bench** (v0.3.0a5+) — пишется `coderag`-ингестом; pass-through-ключ. Значения: `"code_fact"`, `"decision_rationale"`. **`supamem index` НЕ пишет это поле.** Используется агрегацией метрик по осям. См. [ADR-0002](docs/adr/0002-coderag-eval-philosophy.md). |
+
+### coderag (поиск по коду; Phase 15 — новый publication gate Phase 13, v0.3.0a5+)
+
+`supamem eval --suite coderag [--full] [--out PATH] [--peer mem0]`
+прогоняет детерминированный двухрепозиторный haystack для поиска по
+коду (supamem self + внешний [fastapi](https://github.com/fastapi/fastapi),
+оба зафиксированы по commit-SHA) с автоматически сгенерированными
+запросами из истории PR (ось `code_fact`) и из секций Problem/Why в ADR
+(ось `decision_rationale`; **только-supamem** на пине корпуса v1 — у
+fastapi на этом SHA нет каталога `docs/adr/`, поэтому отчёт по трём
+колонкам на этой оси схлопывается: `fastapi_only=null`,
+`combined=supamem_only`).
+
+Метрики `Recall@k`, `MRR`, `nDCG@10` и p50/p95 латентность отчитываются
+в **трёхколоночной форме** (`supamem_only` / `fastapi_only` /
+`combined`) по каждой оси — циркулярность самореференции видна с
+первого взгляда.
+
+**Publication gate.** Phase 13 публикует, когда
+`supamem eval --suite coderag --full` показывает no-regression
+относительно измеренного baseline (метрики ранжирования ≥ baseline − ε;
+латентность p95 ≤ baseline + ε **И** ≤ 500 ms жёсткий потолок).
+Зафиксированные численные пороги — в
+[ADR-0002](docs/adr/0002-coderag-eval-philosophy.md) §7.
+
+**mem0 peer baseline.** [mem0](https://github.com/mem0ai/mem0) бежит
+параллельной строкой с одной канонической дефолтной конфигурацией (без
+матрицы тюнинга), индексируя те же документы в **собственную** коллекцию
+Qdrant `supamem_eval_coderag_mem0` (отделённую от `supamem_eval_coderag`
+— mem0 владеет своей схемой). Точка отсчёта, не gate. Установка:
+`pip install supamem[peers-mem0]`.
+
+**LongMemEval демотирован.** С v0.3.0a5 полный LongMemEval_S — только
+on-demand; фикстура `longmemeval_scoped_smoke` из 5 вопросов остаётся в
+PR-CI. Диагноз: LongMemEval измеряет диалоговую долговременную память,
+а supamem индексирует код-чанки для AI coding agents — gate был
+**рассогласован с рабочей нагрузкой**, не инструмент. См.
+[ADR-0002](docs/adr/0002-coderag-eval-philosophy.md).
 
 ### Миграция
 
