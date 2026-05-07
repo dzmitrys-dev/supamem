@@ -12,7 +12,6 @@ from __future__ import annotations
 import sys
 
 import numpy as np
-import pytest
 
 
 def test_identical_inputs_yield_zero_delta_and_ci_brackets_zero() -> None:
