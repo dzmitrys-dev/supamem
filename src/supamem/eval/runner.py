@@ -1039,10 +1039,40 @@ def run_bench(
                 f"records.[/supamem.warn]"
             )
 
+        # Phase 16 D-DISP-01..03 — conditional records swap for --full
+        # ONLY. The smoke loader block above stays untouched for the
+        # offline default path (D-PLAN-02 byte-identical regression
+        # lock). Lazy imports keep cold-CLI cost zero.
+        if full:
+            from importlib import resources as _resources2  # noqa: PLC0415
+
+            from supamem.eval.coderag.auto_queries import (  # noqa: PLC0415
+                downsample_stratified,
+                extract_adr_queries,
+                extract_pr_queries,
+            )
+            from supamem.eval.coderag.corpus import (  # noqa: PLC0415
+                ensure_populated_manifest,
+                repo_cache_path,
+            )
+
+            manifest_path = (
+                _resources2.files("supamem.eval.datasets")
+                / "coderag_corpus_manifest.json"
+            )
+            realized = ensure_populated_manifest(Path(str(manifest_path)))
+            full_records: list[dict] = []
+            for repo_entry in realized.get("repos", []):
+                slug = repo_entry["slug"]
+                sha = repo_entry["commit_sha"]
+                cache = repo_cache_path(slug, sha)
+                full_records.extend(extract_pr_queries(cache, slug))
+                full_records.extend(extract_adr_queries(cache, slug))
+            records = downsample_stratified(full_records, target=300, seed=42)
+
         # Backend selection (Plan 15-D D2):
         #   --full  → live ``_build_backend`` against Qdrant + ingested
-        #             ``supamem_eval_coderag`` collection (Plan 15-E will
-        #             swap to the populated manifest's full corpus).
+        #             ``supamem_eval_coderag`` collection.
         #   default → offline ``_CoderagSmokeBackend`` driven by each
         #             question's inline haystack stubs. No Qdrant, no
         #             network — CI determinism (Plan 15-D D2 acceptance).
