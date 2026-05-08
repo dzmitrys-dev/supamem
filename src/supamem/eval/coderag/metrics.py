@@ -1,9 +1,11 @@
 """Thin :mod:`pytrec_eval` wrapper. BEIR-canonical scorer; don't hand-roll IR metrics.
 
 Plan 15-A defined the surface; Plan 15-C wires the ``RelevanceEvaluator`` call.
+Plan 16-C adds :func:`paired_bootstrap_delta` for peer-vs-supamem CI (D-BOOT-01).
 """
 from __future__ import annotations
 
+import numpy as np
 import pytrec_eval
 
 METRIC_SET = frozenset(
@@ -49,4 +51,52 @@ def score(
     }
 
 
-__all__ = ["METRIC_SET", "score"]
+def paired_bootstrap_delta(
+    samples_a: np.ndarray,
+    samples_b: np.ndarray,
+    *,
+    n_resamples: int = 10000,
+    seed: int = 42,
+) -> dict[str, float | int]:
+    """Paired bootstrap delta with 95% percentile CI (D-BOOT-01).
+
+    Returns ``mean(samples_a) - mean(samples_b)`` with 2.5/97.5 percentile CI
+    from ``n_resamples`` paired index resamples. Caller is responsible for
+    pairing samples by ``query_id`` before flattening to arrays (D-BOOT-02).
+
+    Hand-rolled numpy — no scipy dependency (D-BOOT-05). Percentile CI is
+    sufficient at retrieval-eval metric scale (Recall@k, MRR, nDCG ∈ [0,1]
+    at n_queries ≥ 50, per D-BOOT-03).
+
+    Sign convention is ``mean(samples_a) - mean(samples_b)``; Plan 16-D uses
+    ``samples_a = peer_metric, samples_b = supamem_metric`` so positive delta
+    = peer is better (D-PEER-02).
+
+    Returns
+    -------
+    dict
+        ``{"delta", "ci_lower", "ci_upper", "n_resamples", "seed"}``.
+    """
+    a = np.asarray(samples_a, dtype=float)
+    b = np.asarray(samples_b, dtype=float)
+    if a.shape != b.shape or a.ndim != 1:
+        raise ValueError(
+            "paired_bootstrap_delta: samples_a and samples_b must be 1-D arrays of equal length"
+        )
+    delta = float(a.mean() - b.mean())
+    n = a.shape[0]
+    rng = np.random.default_rng(seed)
+    idx = rng.integers(0, n, size=(n_resamples, n))
+    deltas = a[idx].mean(axis=1) - b[idx].mean(axis=1)
+    ci_lower = float(np.percentile(deltas, 2.5))
+    ci_upper = float(np.percentile(deltas, 97.5))
+    return {
+        "delta": delta,
+        "ci_lower": ci_lower,
+        "ci_upper": ci_upper,
+        "n_resamples": int(n_resamples),
+        "seed": int(seed),
+    }
+
+
+__all__ = ["METRIC_SET", "paired_bootstrap_delta", "score"]
