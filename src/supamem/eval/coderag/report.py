@@ -45,7 +45,12 @@ PYTREC_TO_ENVELOPE: dict[str, str] = {
 
 
 def empty_envelope() -> dict:
-    """Empty three-column-axis envelope shape — Plan 15-A scope."""
+    """Empty three-column-axis envelope shape — Plan 15-A scope.
+
+    Plan 16-D bumps the schema to carry ``comparisons: {}`` alongside the
+    existing ``peers: {}`` — non-peer runs MUST emit both keys as empty dicts
+    (D-PEER-03 stable schema).
+    """
     empty_metrics = {m: None for m in METRIC_NAMES}
     return {
         "report_schema_version": REPORT_SCHEMA_VERSION,
@@ -54,6 +59,7 @@ def empty_envelope() -> dict:
             for axis in AXIS_NAMES
         },
         "peers": {},
+        "comparisons": {},
     }
 
 
@@ -82,6 +88,7 @@ def envelope_from_results(
     per_axis_per_column: dict[str, dict[str, dict | None]],
     *,
     peers: dict[str, dict] | None = None,
+    peer_run_data: dict[str, dict] | None = None,
 ) -> dict:
     """Build the full envelope from per-axis × per-column metric dicts.
 
@@ -92,6 +99,49 @@ def envelope_from_results(
     ``combined`` collapses to ``supamem_only`` regardless of what the caller
     passed for ``combined``. This is the canonical surface for the carry-lock
     contract (A-D-HAY-04 — fastapi has no ADR axis).
+
+    Plan 16-D peer support (D-PEER-01..03)
+    --------------------------------------
+    When ``peer_run_data`` is supplied, the envelope also carries:
+
+    - ``peers[peer]["scores"]`` — peer's per-axis × per-col × per-metric scores,
+      mirror of the supamem ``scores`` nesting (D-PEER-01).
+    - ``comparisons["{peer}_vs_supamem"][axis][col][metric]`` — paired-bootstrap
+      delta + 95% CI + ``qualitative`` win/loss/tie label (D-PEER-02).
+
+    ``peer_run_data`` shape (caller-built, 16-E live runs):
+
+    .. code-block:: python
+
+        {
+            "mem0": {
+                "scores": {<same nesting as envelope.scores for the peer>},
+                "per_query_metrics": {
+                    axis: {col: {metric: {q_id: float, ...}, ...}, ...}, ...
+                },
+                "supamem_per_query_metrics": {<same shape>},
+            },
+        }
+
+    Caller (runner.py) MUST pair by ``query_id`` upstream — :func:`envelope_from_results`
+    only intersects keys deterministically (sorted) before flattening to the
+    paired arrays consumed by
+    :func:`supamem.eval.coderag.metrics.paired_bootstrap_delta` (D-BOOT-02).
+
+    Sign convention: ``mean(peer) - mean(supamem)`` so positive ``delta`` means
+    peer is better (D-PEER-02).
+
+    Qualitative derivation (mechanical):
+
+    - ``"win"``  ⇔ ``ci_lower > 0``
+    - ``"loss"`` ⇔ ``ci_upper < 0``
+    - ``"tie"``  otherwise
+
+    Backwards-compat: when neither ``peers`` nor ``peer_run_data`` is provided,
+    both ``envelope["peers"]`` and ``envelope["comparisons"]`` are emitted as
+    empty dicts (D-PEER-03 — keys present, never absent). The legacy ``peers``
+    kwarg (15-C stub) is preserved; if both are passed, ``peer_run_data`` takes
+    precedence.
     """
     scores: dict = {}
     for axis in AXIS_NAMES:
@@ -107,10 +157,60 @@ def envelope_from_results(
             "fastapi_only": fap,
             "combined": comb,
         }
+
+    peers_out: dict = {}
+    comparisons_out: dict = {}
+    if peer_run_data:
+        # Local imports keep the non-peer code path free of numpy/metrics import
+        # cost (matches D-BOOT-05 zero-cost discipline for non-peer runs).
+        import numpy as _np  # noqa: PLC0415
+
+        from supamem.eval.coderag.metrics import (  # noqa: PLC0415
+            paired_bootstrap_delta,
+        )
+
+        for peer_name, peer_blob in peer_run_data.items():
+            peers_out[peer_name] = {"scores": peer_blob["scores"]}
+            comp_key = f"{peer_name}_vs_supamem"  # D-PEER-02 sign convention
+            comp: dict = {}
+            peer_pq = peer_blob["per_query_metrics"]
+            sup_pq = peer_blob["supamem_per_query_metrics"]
+            for axis, axis_blob in peer_pq.items():
+                comp[axis] = {}
+                for col, col_blob in axis_blob.items():
+                    comp[axis][col] = {}
+                    for metric, peer_qmap in col_blob.items():
+                        sup_qmap = sup_pq.get(axis, {}).get(col, {}).get(metric, {})
+                        # Pair by query_id deterministically (sorted intersection).
+                        common_qids = sorted(set(peer_qmap) & set(sup_qmap))
+                        if not common_qids:
+                            continue
+                        a = _np.array(
+                            [peer_qmap[q] for q in common_qids], dtype=float
+                        )
+                        b = _np.array(
+                            [sup_qmap[q] for q in common_qids], dtype=float
+                        )
+                        result = paired_bootstrap_delta(a, b)
+                        # qualitative derivation per D-PEER-02
+                        if result["ci_lower"] > 0:
+                            qualitative = "win"
+                        elif result["ci_upper"] < 0:
+                            qualitative = "loss"
+                        else:
+                            qualitative = "tie"
+                        comp[axis][col][metric] = {**result, "qualitative": qualitative}
+            comparisons_out[comp_key] = comp
+    elif peers:
+        # Legacy 15-C stub: caller supplied a pre-built peers blob with no
+        # per-query data — emit it verbatim, no comparisons derivable.
+        peers_out = peers
+
     return {
         "report_schema_version": REPORT_SCHEMA_VERSION,
         "scores": scores,
-        "peers": peers or {},
+        "peers": peers_out,
+        "comparisons": comparisons_out,
     }
 
 
