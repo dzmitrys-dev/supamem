@@ -3,6 +3,11 @@ NAME, not line number).
 
 Plan 15-A scope: empty three-column-axis envelope.
 Plan 15-C scope: real per-query 3-pass retrieval + per-pass scoring + latency.
+Plan 16-E Task 3a: peer-scoring loop — when ``peers={name: {"adapter": ...}}``
+is supplied, drive each adapter through the same axis × col passes, build
+per-query metric maps (UN-averaged), and forward as ``peer_run_data`` so the
+16-D bootstrap-delta branch in :func:`envelope_from_results` populates
+``envelope.peers[name].scores`` and ``envelope.comparisons.{name}_vs_supamem``.
 """
 from __future__ import annotations
 
@@ -11,7 +16,10 @@ from collections import defaultdict
 from typing import Any
 
 import numpy as np
+import pytrec_eval
 
+from supamem.console import err_console
+from supamem.eval.coderag.metrics import METRIC_SET
 from supamem.eval.coderag.metrics import score as score_pytrec
 from supamem.eval.coderag.report import column_metrics, envelope_from_results
 
@@ -55,6 +63,30 @@ def _percentile(values: list[float], p: float) -> float | None:
     return float(np.percentile(values, p))
 
 
+def _per_query_metric_map(
+    qrels: dict[str, dict[str, int]],
+    run: dict[str, dict[str, float]],
+) -> dict[str, dict[str, float]]:
+    """Pivot ``pytrec_eval.RelevanceEvaluator.evaluate`` → ``{metric: {qid: float}}``.
+
+    Plan 16-E Task 3a: paired_bootstrap_delta needs UN-averaged per-query
+    samples — :func:`score` averages across queries (metrics.py:45-50), so
+    we call the evaluator directly here. Empty ``run`` short-circuits to
+    empty per-metric maps; queries absent from ``run`` simply don't appear
+    in the per-query map (the bootstrap then pairs by sorted intersection).
+    """
+    metrics = set(METRIC_SET)
+    if not qrels or not run:
+        return {m: {} for m in metrics}
+    evaluator = pytrec_eval.RelevanceEvaluator(qrels, metrics)
+    per_qid = evaluator.evaluate(run)
+    pivoted: dict[str, dict[str, float]] = {m: {} for m in metrics}
+    for qid, metric_map in per_qid.items():
+        for m in metrics:
+            pivoted[m][qid] = float(metric_map.get(m, 0.0))
+    return pivoted
+
+
 def _run_coderag(records, backend, *, k: int = DEFAULT_K, **kwargs) -> dict[str, Any]:  # noqa: ANN001, ANN003
     """Per-query: 3 retrieval passes (or 2 for decision_rationale).
 
@@ -71,7 +103,45 @@ def _run_coderag(records, backend, *, k: int = DEFAULT_K, **kwargs) -> dict[str,
     A 10-query warmup pass (untimed) precedes the measured loop — Pitfall 5
     mitigation: without warmup, the first query's cold-start I/O + JIT +
     page-fault tail dominates p95.
+
+    Plan 16-E Task 3a — peer scoring
+    --------------------------------
+    When ``kwargs["peers"]`` is supplied as ``{name: {"adapter": <obj>, ...}}``
+    (the 15-C-shape that ``eval/runner.py`` builds for ``--peer mem0``), each
+    adapter is driven through the same axis × col passes. Adapter-side hits
+    populate ``peer_axis_run[name][axis][col]`` and ``peer_axis_lat[name]...``.
+    After the supamem-side scoring (Step 2), peer ``column_metrics`` and
+    per-query metric maps are computed and forwarded as ``peer_run_data`` so
+    :func:`envelope_from_results` (the 16-D bootstrap-delta branch) populates
+    ``envelope.peers[name].scores`` and ``envelope.comparisons.{name}_vs_supamem``.
+
+    Adapter faults are caught and surfaced via :data:`err_console`; the failing
+    peer is marked ``failed`` and dropped from ``peer_run_data`` so the
+    supamem-side scoring is never crashed by a peer fault. Non-peer runs (no
+    ``peers`` kwarg or no ``adapter`` slot) bypass this entire branch and pay
+    zero cost (D-BOOT-05).
     """
+    # ── Peer adapter detection ──────────────────────────────────────────
+    raw_peers = kwargs.get("peers") or {}
+    peer_adapters: dict[str, Any] = {
+        name: blob["adapter"]
+        for name, blob in raw_peers.items()
+        if isinstance(blob, dict) and "adapter" in blob
+    }
+    peer_axis_run: dict[str, dict[str, dict[str, dict[str, float]]]] = {
+        name: defaultdict(
+            lambda: {"supamem_only": {}, "fastapi_only": {}, "combined": {}}
+        )
+        for name in peer_adapters
+    }
+    peer_axis_lat: dict[str, dict[str, dict[str, list[float]]]] = {
+        name: defaultdict(
+            lambda: {"supamem_only": [], "fastapi_only": [], "combined": []}
+        )
+        for name in peer_adapters
+    }
+    peer_failed: set[str] = set()
+
     # ── Step 0: warmup (untimed) ────────────────────────────────────────
     # Fire WARMUP_QUERIES untimed combined-pass queries so the embedder,
     # reranker, and Qdrant connection are all hot before we measure
@@ -94,6 +164,28 @@ def _run_coderag(records, backend, *, k: int = DEFAULT_K, **kwargs) -> dict[str,
         lambda: {"supamem_only": [], "fastapi_only": [], "combined": []}
     )
 
+    def _peer_pass(name: str, adapter: Any, qid: str, axis: str, col: str,
+                   text: str, where: dict[str, list[str]] | None) -> None:
+        """Drive one adapter pass; on failure, mark peer failed and surface once."""
+        if name in peer_failed:
+            return
+        try:
+            t0 = time.perf_counter()
+            hits = adapter.query(text, k=k, where=where)
+            peer_axis_lat[name][axis][col].append(
+                (time.perf_counter() - t0) * 1000.0
+            )
+            run_p = _build_run(qid, hits)
+            if run_p:
+                peer_axis_run[name][axis][col].update(run_p)
+        except Exception as exc:  # noqa: BLE001 — peer fault is degraded-not-swallowed
+            err_console.print(
+                f"[supamem.warn]coderag: peer {name} query failed at "
+                f"qid={qid} axis={axis} col={col}: {exc!r}; "
+                f"degrading to empty peer envelope[/supamem.warn]"
+            )
+            peer_failed.add(name)
+
     for q in records:
         qid = str(q["id"])
         axis = q["axis"]
@@ -113,6 +205,9 @@ def _run_coderag(records, backend, *, k: int = DEFAULT_K, **kwargs) -> dict[str,
         run_sup = _build_run(qid, hits_sup)
         if run_sup:
             per_axis_run[axis]["supamem_only"].update(run_sup)
+        for name, adapter in peer_adapters.items():
+            _peer_pass(name, adapter, qid, axis, "supamem_only", text,
+                       {"repo": ["supamem"]})
 
         # ── Pass 2: fastapi_only — SKIP for decision_rationale (A-D-HAY-04) ─
         if axis != _DR_AXIS:
@@ -124,6 +219,9 @@ def _run_coderag(records, backend, *, k: int = DEFAULT_K, **kwargs) -> dict[str,
             run_fap = _build_run(qid, hits_fap)
             if run_fap:
                 per_axis_run[axis]["fastapi_only"].update(run_fap)
+            for name, adapter in peer_adapters.items():
+                _peer_pass(name, adapter, qid, axis, "fastapi_only", text,
+                           {"repo": ["fastapi"]})
 
         # ── Pass 3: combined ────────────────────────────────────────────
         t0 = time.perf_counter()
@@ -134,12 +232,16 @@ def _run_coderag(records, backend, *, k: int = DEFAULT_K, **kwargs) -> dict[str,
         run_comb = _build_run(qid, hits_comb)
         if run_comb:
             per_axis_run[axis]["combined"].update(run_comb)
+        for name, adapter in peer_adapters.items():
+            _peer_pass(name, adapter, qid, axis, "combined", text, None)
 
-    # ── Step 2: score each axis × column ────────────────────────────────
+    # ── Step 2: score each axis × column (supamem) ──────────────────────
     per_axis_per_column: dict[str, dict[str, dict | None]] = {}
+    supamem_per_query_metrics: dict[str, dict[str, dict[str, dict[str, float]]]] = {}
     for axis in ("code_fact", _DR_AXIS):
         qrels = per_axis_qrels.get(axis, {})
         cols: dict[str, dict | None] = {}
+        supamem_per_query_metrics[axis] = {}
         for col in ("supamem_only", "fastapi_only", "combined"):
             if axis == _DR_AXIS and col == "fastapi_only":
                 # INV-A1: fastapi_only column is null on the rationale axis.
@@ -156,10 +258,70 @@ def _run_coderag(records, backend, *, k: int = DEFAULT_K, **kwargs) -> dict[str,
                 _percentile(lats, 50),
                 _percentile(lats, 95),
             )
+            supamem_per_query_metrics[axis][col] = _per_query_metric_map(
+                qrels, run_dict
+            )
         per_axis_per_column[axis] = cols
 
+    # ── Step 2b: score each axis × column for every active peer ─────────
+    peer_scores: dict[str, dict[str, dict[str, dict | None]]] = {}
+    peer_per_query_metrics: dict[
+        str, dict[str, dict[str, dict[str, dict[str, float]]]]
+    ] = {}
+    for name in peer_adapters:
+        if name in peer_failed:
+            continue
+        peer_scores[name] = {}
+        peer_per_query_metrics[name] = {}
+        for axis in ("code_fact", _DR_AXIS):
+            qrels = per_axis_qrels.get(axis, {})
+            cols_p: dict[str, dict | None] = {}
+            peer_per_query_metrics[name][axis] = {}
+            for col in ("supamem_only", "fastapi_only", "combined"):
+                if axis == _DR_AXIS and col == "fastapi_only":
+                    cols_p[col] = None
+                    continue
+                if not qrels:
+                    cols_p[col] = None
+                    continue
+                run_dict_p = peer_axis_run[name][axis].get(col, {})
+                pytrec_scores_p = score_pytrec(qrels, run_dict_p)
+                lats_p = peer_axis_lat[name][axis][col]
+                cols_p[col] = column_metrics(
+                    pytrec_scores_p,
+                    _percentile(lats_p, 50),
+                    _percentile(lats_p, 95),
+                )
+                peer_per_query_metrics[name][axis][col] = _per_query_metric_map(
+                    qrels, run_dict_p
+                )
+            peer_scores[name][axis] = cols_p
+
     # ── Step 3: build envelope (envelope_from_results enforces INV-A1) ──
-    return envelope_from_results(per_axis_per_column, peers=kwargs.get("peers"))
+    peer_run_data: dict[str, dict] | None = None
+    if peer_scores:
+        peer_run_data = {
+            name: {
+                "scores": peer_scores[name],
+                "per_query_metrics": peer_per_query_metrics[name],
+                "supamem_per_query_metrics": supamem_per_query_metrics,
+            }
+            for name in peer_scores
+        }
+
+    # Forward the legacy ``peers`` kwarg ONLY when peer-scoring did NOT fire
+    # at all (no adapter slot in any peer blob). When ``peer_adapters`` is
+    # non-empty, the peer-scoring branch was taken — even if every peer
+    # failed and ``peer_run_data`` is None, the contract is degraded-not-
+    # crashed: emit empty peers/comparisons rather than re-emitting the
+    # adapter blob (which is JSON-unserializable; that was the 16-E blocker).
+    legacy_peers = raw_peers if not peer_adapters and raw_peers else None
+
+    return envelope_from_results(
+        per_axis_per_column,
+        peers=legacy_peers,
+        peer_run_data=peer_run_data,
+    )
 
 
 __all__ = ["WARMUP_QUERIES", "DEFAULT_K", "_run_coderag"]

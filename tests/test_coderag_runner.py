@@ -46,7 +46,8 @@ def test_run_coderag_returns_three_column_envelope() -> None:
     from supamem.eval.coderag import CodeRAGSuite
 
     envelope = CodeRAGSuite.run([], object())
-    assert set(envelope.keys()) == {"report_schema_version", "scores", "peers"}
+    # 16-D added ``comparisons`` to the envelope schema (D-PEER-03 stable shape).
+    assert set(envelope.keys()) == {"report_schema_version", "scores", "peers", "comparisons"}
     assert set(envelope["scores"].keys()) == {"code_fact", "decision_rationale"}
     for axis_block in envelope["scores"].values():
         assert set(axis_block.keys()) == {"supamem_only", "fastapi_only", "combined"}
