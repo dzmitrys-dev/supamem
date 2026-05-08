@@ -112,6 +112,12 @@ def extract_pr_queries(
                 "repo": repo_slug,
                 "text": text,
                 "gold": gold,
+                # Phase 16 D-DISP-03: per-record provenance tag.
+                "query_origin": "pr_first_parent",
+                # Phase 16 D-DISP-03: conservative default — the field's
+                # PRESENCE is the contract; downstream consumers can
+                # refine the value without breaking schema.
+                "training_leakage_suspected": False,
             }
         )
         if max_queries and len(queries) >= max_queries:
@@ -162,6 +168,11 @@ def extract_adr_queries(repo_root: Path, repo_slug: str) -> list[dict]:
                 "repo": repo_slug,
                 "text": first_para,
                 "gold": sorted(gold),
+                # Phase 16 D-DISP-03: per-record provenance tag.
+                "query_origin": "adr_problem_section",
+                # Phase 16 D-DISP-03: conservative default — see PR-axis
+                # comment for rationale.
+                "training_leakage_suspected": False,
             }
         )
     return queries
