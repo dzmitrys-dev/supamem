@@ -1,6 +1,6 @@
 **Idiomas:** [English](README.md) · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [日本語](README.ja.md) · [Русский](README.ru.md)
 
-<!-- synced-with: README.md @ 73f3e33 -->
+<!-- synced-with: README.md @ 7c5b4ad -->
 
 > Esta traducción fue generada con asistencia de IA. Las correcciones de hablantes nativos son bienvenidas vía PR.
 
@@ -642,18 +642,44 @@ Reporta `Recall@k`, `MRR`, `nDCG@10` y latencia p50/p95 en **forma de
 tres columnas** — `supamem_only` / `fastapi_only` / `combined` — por
 eje, haciendo auditable la circularidad de auto-referencia.
 
+**Baseline en vivo de tres corridas (v0.3.0a6+).** Los pisos de
+ADR-0002 §7 ahora se derivan del corpus en vivo de 21,235 chunks a
+través de 3 corridas variance-gated sucesivas — los `< 0.005 ms` y
+los `1.000` de Phase 15 (artefactos del fixture smoke de 6 preguntas
+trivialmente recuperable) ya no están. El techo duro de latencia p95
+se mueve **500 ms → 5000 ms** como ajuste **one-shot** prospectivo
+por **D-LAT-01** — NO una escala deslizante; las fases siguientes
+aprietan o mantienen, nunca relajan. Ver
+[ADR-0002 §7](docs/adr/0002-coderag-eval-philosophy.md#7-locked-numerical-floors-live-three-run-baseline-phase-16-e)
+para las tablas de pisos en vivo y el párrafo de razonamiento explícito.
+
+**Auto-queries desde manifest en `--full` (v0.3.0a6+).** Los registros
+en modo full vienen de `auto_queries.extract_pr_queries()` +
+`extract_adr_queries()` contra el manifest del corpus poblado
+(construcción perezosa al invocar vía
+`corpus.ensure_populated_manifest`), NO del fixture smoke de 6
+preguntas. Cada registro lleva un campo `query_origin`
+(`pr_title` / `adr_problem` / `adr_why`) y un booleano
+`training_leakage_suspected`. El fixture smoke sigue manejando la ruta
+offline por defecto sin cambios.
+
 **Gate de publicación.** Phase 13 publica cuando
 `supamem eval --suite coderag --full` reporta no-regresión vs el
-baseline medido (ranking ≥ baseline − ε; latencia p95 ≤ baseline + ε
-**Y** ≤ 500 ms techo duro). Los pisos numéricos congelados están en
-[ADR-0002](docs/adr/0002-coderag-eval-philosophy.md) §7.
+baseline en vivo (ranking ≥ baseline − ε; latencia p95 ≤ baseline + ε
+**Y** ≤ 5000 ms techo duro). ε se deriva por métrica:
+`ε_ranking = max(stddev, 0.005)`, `ε_latency = max(0.05 × mean, 5ms)`.
 
-**Baseline mem0 peer.** [mem0](https://github.com/mem0ai/mem0) corre
-como fila paralela con una única configuración por defecto (sin
-matriz de tuning), ingesta los documentos en su PROPIA colección
-Qdrant `supamem_eval_coderag_mem0` (separada de `supamem_eval_coderag`
-— mem0 posee su esquema). Punto de referencia, nunca gate. Instalar
-con `pip install supamem[peers-mem0]`.
+**Baseline mem0 peer + head-to-head (v0.3.0a6+).**
+[mem0](https://github.com/mem0ai/mem0) corre como fila paralela con
+una única configuración por defecto (sin matriz de tuning), ingesta
+los documentos en su PROPIA colección Qdrant
+`supamem_eval_coderag_mem0` (separada de `supamem_eval_coderag` —
+mem0 posee su esquema). Punto de referencia, nunca gate. v0.3.0a6
+añade un delta paired-bootstrap + IC 95% por axis × columna × métrica
+(convención de signo `mem0_vs_supamem` — delta positivo = peer gana)
+en
+[ADR-0002 §8](docs/adr/0002-coderag-eval-philosophy.md#8-mem0-peer-comparison-d-peer-04-live-phase-16-e-head-to-head).
+Instalar con `pip install supamem[peers-mem0]`.
 
 **LongMemEval degradado.** Desde v0.3.0a5 LongMemEval_S completo es
 on-demand-only; el fixture de 5 preguntas `longmemeval_scoped_smoke`

@@ -1,6 +1,6 @@
 **语言:** [English](README.md) · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [日本語](README.ja.md) · [Русский](README.ru.md)
 
-<!-- synced-with: README.md @ 73f3e33 -->
+<!-- synced-with: README.md @ 7c5b4ad -->
 
 > 本翻译由 AI 协助生成。欢迎母语开发者通过 PR 修正用词。
 
@@ -600,15 +600,36 @@ fastapi 在该 SHA 没有 `docs/adr/`,因此在该轴三列退化:
 **三列形式**(`supamem_only` / `fastapi_only` / `combined`)输出 ——
 让自我引用造成的循环性显而易见。
 
-**发布 gate。** 当 `supamem eval --suite coderag --full` 相对实测基线
-未回退(排序指标 ≥ 基线 − ε;延迟 p95 ≤ 基线 + ε **且** ≤ 500 ms 硬上限)
-时,Phase 13 才能发布。锁定的数值阈值见
-[ADR-0002](docs/adr/0002-coderag-eval-philosophy.md) §7。
+**实测三轮基线(v0.3.0a6+)。** ADR-0002 §7 的阈值现在源自实测的
+21,235-chunk 全量语料、3 次连续方差受控运行 —— Phase 15 的离线
+`< 0.005 ms` 延迟和 `1.000` recall 单元(都是 6 题 smoke 夹具几乎完美命中
+的副作用)已被移除。延迟 p95 硬上限**一次性**调整为
+**500 ms → 5000 ms**,依据 **D-LAT-01**:这是面向未来的一次性放宽,
+**不是**滑动尺度;后续阶段只能收紧或保持,绝不再放宽。完整的实测阈值表
+和说明段落见
+[ADR-0002 §7](docs/adr/0002-coderag-eval-philosophy.md#7-locked-numerical-floors-live-three-run-baseline-phase-16-e)。
 
-**mem0 peer baseline。** [mem0](https://github.com/mem0ai/mem0) 以单一
-默认配置作为 peer 行运行(无调优矩阵),写入它**自己**的 Qdrant 集合
-`supamem_eval_coderag_mem0`(与 `supamem_eval_coderag` 隔离 —— mem0
-拥有自己的 schema)。仅作为参考行,不参与 gate 决策。
+**`--full` 自动查询从 manifest 派生(v0.3.0a6+)。** 全量模式的查询记录
+来自 `auto_queries.extract_pr_queries()` + `extract_adr_queries()`
+对已实例化语料 manifest 的提取(惰性按需构建,见
+`corpus.ensure_populated_manifest`),而**不再**来自 6 题 smoke 夹具。
+每条记录带有 `query_origin` 字段(`pr_title` / `adr_problem` / `adr_why`)
+和 `training_leakage_suspected` 布尔标志。Smoke 夹具继续驱动默认的
+离线路径,行为不变。
+
+**发布 gate。** 当 `supamem eval --suite coderag --full` 相对实测基线
+未回退(排序指标 ≥ 基线 − ε;延迟 p95 ≤ 基线 + ε **且** ≤ 5000 ms 硬上限)
+时,Phase 13 才能发布。ε 按指标推导:
+`ε_ranking = max(stddev, 0.005)`,`ε_latency = max(0.05 × mean, 5ms)`。
+
+**mem0 peer 基线 + 头对头(v0.3.0a6+)。**
+[mem0](https://github.com/mem0ai/mem0) 以单一默认配置作为 peer 行运行
+(无调优矩阵),写入它**自己**的 Qdrant 集合 `supamem_eval_coderag_mem0`
+(与 `supamem_eval_coderag` 隔离 —— mem0 拥有自己的 schema)。仅作为
+参考行,不参与 gate 决策。v0.3.0a6 新增按 axis × 列 × 指标的
+paired-bootstrap delta + 95% CI(符号约定 `mem0_vs_supamem` —— 正 delta
+表示 peer 胜出),见
+[ADR-0002 §8](docs/adr/0002-coderag-eval-philosophy.md#8-mem0-peer-comparison-d-peer-04-live-phase-16-e-head-to-head)。
 通过 `pip install supamem[peers-mem0]` 安装。
 
 **LongMemEval 降级。** 自 v0.3.0a5 起,完整 LongMemEval_S 仅按需运行;

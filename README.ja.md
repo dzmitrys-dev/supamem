@@ -1,6 +1,6 @@
 **言語:** [English](README.md) · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [日本語](README.ja.md) · [Русский](README.ru.md)
 
-<!-- synced-with: README.md @ 73f3e33 -->
+<!-- synced-with: README.md @ 7c5b4ad -->
 
 > この翻訳は AI 支援によるものです。ネイティブスピーカーによる修正 PR を歓迎します。
 
@@ -627,18 +627,45 @@ Problem/Why 節由来のクエリ(`decision_rationale` 軸;v1 コーパスピン
 **三列**(`supamem_only` / `fastapi_only` / `combined`)で出力し、
 自己参照による循環性を一目で監査可能にします。
 
-**リリースゲート。** `supamem eval --suite coderag --full` が実測
-ベースラインに対してリグレッションなし(ランキング指標 ≥ baseline − ε;
-レイテンシ p95 ≤ baseline + ε **かつ** ≤ 500 ms ハード上限)を
-報告したとき、Phase 13 はリリースされます。固定された数値しきい値は
-[ADR-0002](docs/adr/0002-coderag-eval-philosophy.md) §7 に記載。
+**実測 3 ラン ベースライン(v0.3.0a6+)。** ADR-0002 §7 のしきい値は、
+21,235 チャンクのライブコーパスに対して 3 回連続で variance-gated
+で実行した結果から導出されるようになりました — Phase 15 のオフライン
+`< 0.005 ms` レイテンシと `1.000` recall セル(6 問の smoke
+フィクスチャがほぼ完璧に再現する副産物)は除去されました。レイテンシ
+p95 のハード上限は **D-LAT-01** に基づき
+**500 ms → 5000 ms** に**ワンショット**で前向きに調整されました —
+スライディング・スケールでは**ありません**。後続フェーズは厳格化または
+維持はあっても、決して再緩和しません。ライブのしきい値表と明示的な
+理由段落は
+[ADR-0002 §7](docs/adr/0002-coderag-eval-philosophy.md#7-locked-numerical-floors-live-three-run-baseline-phase-16-e)
+を参照。
 
-**mem0 peer ベースライン。** [mem0](https://github.com/mem0ai/mem0) は
-単一の標準デフォルト設定で並行行として実行(チューニング行列なし)、
-ソース文書を **自分自身の** Qdrant コレクション
-`supamem_eval_coderag_mem0` に取り込みます(`supamem_eval_coderag` とは
-分離 — mem0 が自前のスキーマを持つため)。参照点として報告するだけで、
-ゲートには関与しません。`pip install supamem[peers-mem0]` でインストール。
+**`--full` の auto-queries(v0.3.0a6+)。** フルモードのレコードは、
+`auto_queries.extract_pr_queries()` + `extract_adr_queries()` が
+populated コーパス manifest(遅延ビルドは
+`corpus.ensure_populated_manifest` 経由)に対して抽出した結果から
+構築され、6 問の smoke フィクスチャからは **生成されません**。
+各レコードは `query_origin` フィールド
+(`pr_title` / `adr_problem` / `adr_why`)と
+`training_leakage_suspected` ブール値を保持します。Smoke フィクスチャは
+従来通りデフォルトのオフラインパスを駆動し、動作は変わりません。
+
+**リリースゲート。** `supamem eval --suite coderag --full` がライブ
+ベースラインに対してリグレッションなし(ランキング指標 ≥ baseline − ε;
+レイテンシ p95 ≤ baseline + ε **かつ** ≤ 5000 ms ハード上限)を
+報告したとき、Phase 13 はリリースされます。ε はメトリクスごとに導出:
+`ε_ranking = max(stddev, 0.005)`、`ε_latency = max(0.05 × mean, 5ms)`。
+
+**mem0 peer ベースライン + ヘッドツーヘッド(v0.3.0a6+)。**
+[mem0](https://github.com/mem0ai/mem0) は単一の標準デフォルト設定で
+並行行として実行(チューニング行列なし)、ソース文書を **自分自身の**
+Qdrant コレクション `supamem_eval_coderag_mem0` に取り込みます
+(`supamem_eval_coderag` とは分離 — mem0 が自前のスキーマを持つため)。
+参照点として報告するだけで、ゲートには関与しません。v0.3.0a6 では
+axis × カラム × メトリクスごとに paired-bootstrap delta + 95% CI を
+追加(符号規約 `mem0_vs_supamem` — delta が正なら peer の勝利)、
+[ADR-0002 §8](docs/adr/0002-coderag-eval-philosophy.md#8-mem0-peer-comparison-d-peer-04-live-phase-16-e-head-to-head)
+を参照。`pip install supamem[peers-mem0]` でインストール。
 
 **LongMemEval の降格。** v0.3.0a5 以降、完全な LongMemEval_S は
 オンデマンドのみとなり、5 問の `longmemeval_scoped_smoke` フィクスチャは
