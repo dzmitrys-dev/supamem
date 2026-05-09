@@ -710,21 +710,43 @@ its own ADRs (high self-reference; expected) or from a generalisable
 signal that also holds on fastapi (it doesn't — fastapi has no ADRs at
 the v1 corpus pin).
 
-**Ship gate.** Phase 13 ships when `supamem eval --suite coderag --full`
-reports no-regression vs the measured baseline (Recall@k, MRR, nDCG@10
-≥ baseline − ε; latency p95 ≤ baseline + ε **AND** ≤ 500 ms hard
-ceiling). ε is derived from the three-run baseline:
-`ε_ranking = max(stddev, 0.005)`, `ε_latency = max(0.05 × mean, 5ms)`.
-Locked numerical floors are recorded in
-[ADR-0002](docs/adr/0002-coderag-eval-philosophy.md) §7.
+**Live three-run baseline (v0.3.0a6+).** ADR-0002 §7 floors are now
+derived from the live 21,235-chunk corpus across 3 successive
+variance-gated runs — Phase 15's offline `< 0.005 ms` latencies and
+`1.000` recall cells (artefacts of the trivially-recovered 6-question
+smoke fixture) are gone. The hard latency p95 ceiling moves
+**500 ms → 5000 ms** as a **one-shot** forward-looking adjustment per
+**D-LAT-01** — NOT a sliding scale; subsequent phases tighten or
+hold, never relax. See
+[ADR-0002 §7](docs/adr/0002-coderag-eval-philosophy.md#7-locked-numerical-floors-live-three-run-baseline-phase-16-e)
+for the live floor tables and the explicit reasoning paragraph.
 
-**mem0 peer baseline.** [mem0](https://github.com/mem0ai/mem0) runs as
-a parallel row with a single canonical default config (no tuning
-matrix). It ingests source documents into its OWN Qdrant collection
-(`supamem_eval_coderag_mem0`, separate from `supamem_eval_coderag` —
-mem0 owns its schema; sharing a collection would corrupt). Reported as
-a parallel row in the metric envelope; never gates. Install with
-`pip install supamem[peers-mem0]`.
+**Auto-queries-from-manifest in `--full` (v0.3.0a6+).** Full-mode
+records come from `auto_queries.extract_pr_queries()` +
+`extract_adr_queries()` against the populated corpus manifest (lazy
+build-on-call via `corpus.ensure_populated_manifest`), NOT from the
+6-question smoke fixture. Each record carries a `query_origin` field
+(`pr_title` / `adr_problem` / `adr_why`) and a
+`training_leakage_suspected` boolean. The smoke fixture continues to
+drive the default offline path unchanged.
+
+**Ship gate.** Phase 13 ships when `supamem eval --suite coderag --full`
+reports no-regression vs the live baseline (Recall@k, MRR, nDCG@10
+≥ baseline − ε; latency p95 ≤ baseline + ε **AND** ≤ 5000 ms hard
+ceiling). ε is derived per metric: `ε_ranking = max(stddev, 0.005)`,
+`ε_latency = max(0.05 × mean, 5ms)`.
+
+**mem0 peer baseline + head-to-head (v0.3.0a6+).**
+[mem0](https://github.com/mem0ai/mem0) runs as a parallel row with a
+single canonical default config (no tuning matrix). It ingests source
+documents into its OWN Qdrant collection (`supamem_eval_coderag_mem0`,
+separate from `supamem_eval_coderag` — mem0 owns its schema; sharing
+a collection would corrupt). Reported as a parallel row in the metric
+envelope; never gates. v0.3.0a6 adds a paired-bootstrap delta + 95% CI
+per axis × column × metric (sign convention `mem0_vs_supamem` — positive
+delta = peer wins) at
+[ADR-0002 §8](docs/adr/0002-coderag-eval-philosophy.md#8-mem0-peer-comparison-d-peer-04-live-phase-16-e-head-to-head).
+Install with `pip install supamem[peers-mem0]`.
 
 **LongMemEval demoted.** Full LongMemEval_S becomes on-demand-only as
 of v0.3.0a5; the existing 5-question `longmemeval_scoped_smoke`

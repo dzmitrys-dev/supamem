@@ -2,6 +2,95 @@
 
 All notable changes to `supamem` will be documented in this file.
 
+## [0.3.0a6] — 2026-05-09 — CodeRAG live numbers + mem0 head-to-head (Phase 16)
+
+### Added
+
+- **Auto-queries-from-manifest wiring in `--full` (Req-01).** `_run_coderag`
+  in full mode now constructs records from
+  `auto_queries.extract_pr_queries()` + `extract_adr_queries()` against
+  the populated corpus manifest, NOT from `coderag_smoke.json`. The
+  smoke fixture continues to drive the default offline path unchanged.
+  Each record carries a `query_origin` field
+  (`pr_title` / `adr_problem` / `adr_why`) and a
+  `training_leakage_suspected` boolean — the latter flips `true` for
+  any query whose source repo's pinned commit-SHA postdates the
+  retrieval model's known training cutoff. Cited Plan 16-B.
+- **`corpus.ensure_populated_manifest` lazy build-on-call (Req-02).**
+  New idempotent orchestrator that reads the bundled placeholder
+  manifest, fetches+walks repos at pinned SHAs, and writes the
+  realized manifest (with content-SHAs) to
+  `platformdirs.user_cache_dir("supamem") / "coderag" / "manifest.json"`.
+  The bundled package manifest stays placeholder; the user-cache copy
+  holds the realized version. Re-runs on an unchanged corpus are
+  byte-identical no-ops. Cited Plan 16-A.
+- **`metrics.paired_bootstrap_delta(samples_a, samples_b, n_resamples=10000, seed=42)`
+  (Req-04).** Pure-stdlib paired-bootstrap with percentile CI — no
+  scipy dependency. Sign convention `<peer>_vs_supamem`: positive
+  delta = peer wins (mem0 better than supamem on this cell). 95% CI
+  by default. Identical sample arrays produce delta=0 with CI bracketing
+  zero; divergent samples produce a delta whose sign matches the mean
+  delta and whose CI does not bracket zero at >95% confidence. Cited
+  Plan 16-C.
+- **Mem0 head-to-head row with paired-bootstrap CI delta (Req-04).**
+  `report.py` adds peer-row scoring at the envelope-builder boundary
+  — calls `mem0_adapter.query()` per record, scores against the same
+  gold IDs via `pytrec_eval`, and writes results under
+  `envelope.peers.mem0.scores` AND
+  `envelope.comparisons.mem0_vs_supamem` with the
+  paired-bootstrap delta + 95% CI per axis × column × metric. Cited
+  Plans 16-C, 16-D, 16-F.
+
+### Changed
+
+- **ADR-0002 §7 rewritten with live three-run variance-gated floors
+  (Req-03).** Phase 15's offline floors (`recall_at_5 = 1.000` on the
+  trivially-recovered 6-question smoke; latency `< 0.005 ms` from
+  deterministic dict lookup) are removed. New floors derived from
+  `mean(LIVE_1, LIVE_2, LIVE_3) − ε_ranking` and
+  `mean(...) + ε_latency` per axis × column cell against the populated
+  21,235-chunk corpus. ε per §4 (`ε_ranking = max(stddev, 0.005)`,
+  `ε_latency = max(0.05·mean, 5ms)`). The hard latency p95 ceiling
+  moves **500 ms → 5000 ms** per **D-LAT-01** as a one-shot
+  forward-looking adjustment (max measured live p95 = 4593.35 ms on
+  decision_rationale.supamem_only sat at ~92% of 500 ms × 10) — NOT a
+  sliding scale; subsequent phases tighten or hold, never relax. Cited
+  Plan 16-F.
+- **ADR-0002 §8 (NEW) — "Mem0 peer comparison" (Req-04).** Live
+  head-to-head against mem0 default-config (`mem0ai==2.0.1`,
+  HuggingFace `all-MiniLM-L6-v2`, `infer=False`) — 4 markdown tables
+  (code_fact × {supamem_only, fastapi_only, combined} +
+  decision_rationale × supamem_only) with
+  `metric / supamem / mem0 / delta / ci_lower / ci_upper / qualitative`
+  columns. Sign convention: positive delta = mem0 wins. Aggregate
+  Phase 16-E tally: 9 wins / 21 ties / 0 losses across 30 cells; mem0
+  wins concentrate on the recall@k tail (k ∈ {10, 20}) under the
+  chunker-granularity caveat (mem0 ingested 2147 finer-grained
+  records; `_build_run` dedups by doc_id, so more chunks ⇒ more shots
+  per query — surfaced explicitly in §8 prose). Reproducibility footer
+  pins `n_resamples=10000`, `seed=42`, supamem SHA, mem0 SDK version,
+  and the ROCm GPU rerank stack used to capture the numbers. Cited
+  Plans 16-C, 16-D, 16-F.
+- **Schema-compat: `peers` and `comparisons` are always-present dicts
+  (D-PEER-03).** Non-`--peer` envelopes emit `peers: {}` AND
+  `comparisons: {}` (empty dicts, NOT absent keys) so downstream
+  consumers can safely `envelope["peers"].get("mem0")` without a
+  KeyError. Backward-compatible with v0.3.0a5 envelopes that simply
+  omitted these keys.
+
+### Internal
+
+- **Phase 14 + Phase 15 byte-identical regression locks preserved
+  unchanged (Req-05).** `_run_goldens_legacy` (D-VEND-04) and
+  `src/supamem/retrieval/filters.py` (D-QGEN-06 — `repo` and `axis`
+  remain pass-through keys with ZERO new branches in the filter
+  dispatcher) — both still byte-identical after every Phase 16 commit.
+- The Phase 16 ADR rewrite ships the public artefact under the
+  filename `docs/adr/0002-coderag-eval-philosophy.md` (post-Phase-15
+  rename); §1..§7 unchanged in position, §8 is purely additive (no
+  tail renumbering required). ADR-0001 cross-link audit confirmed no
+  §N references into 0002.
+
 ## [0.3.0a5] — 2026-05-07 — coderag eval suite (Phase 15)
 
 ### Added

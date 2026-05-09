@@ -1,6 +1,6 @@
 **Языки:** [English](README.md) · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [日本語](README.ja.md) · [Русский](README.ru.md)
 
-<!-- synced-with: README.md @ 73f3e33 -->
+<!-- synced-with: README.md @ 7c5b4ad -->
 
 > Перевод выполнен с помощью ИИ. Корректировки от носителей языка приветствуются — открывайте PR.
 
@@ -643,19 +643,44 @@ fastapi на этом SHA нет каталога `docs/adr/`, поэтому о
 `combined`) по каждой оси — циркулярность самореференции видна с
 первого взгляда.
 
+**Live three-run baseline (v0.3.0a6+).** Пороги ADR-0002 §7 теперь
+выведены из живого корпуса в 21,235 чанков по 3 последовательным
+variance-gated прогонам — оффлайновые `< 0.005 ms` и `1.000`-recall
+ячейки из Phase 15 (артефакты тривиально-восстанавливаемой
+6-вопросной smoke-фикстуры) убраны. Жёсткий потолок латентности p95
+сдвигается **500 ms → 5000 ms** как **one-shot** разовая
+прогрессивная корректировка по **D-LAT-01** — НЕ скользящая шкала;
+последующие фазы только ужесточают или удерживают, никогда не
+ослабляют. Live-таблицы порогов и явный обосновывающий абзац — в
+[ADR-0002 §7](docs/adr/0002-coderag-eval-philosophy.md#7-locked-numerical-floors-live-three-run-baseline-phase-16-e).
+
+**Auto-queries из manifest в `--full` (v0.3.0a6+).** Записи в
+full-режиме приходят из `auto_queries.extract_pr_queries()` +
+`extract_adr_queries()` против реализованного manifest корпуса
+(ленивая сборка-по-вызову через `corpus.ensure_populated_manifest`),
+а НЕ из smoke-фикстуры на 6 вопросов. Каждая запись несёт поле
+`query_origin` (`pr_title` / `adr_problem` / `adr_why`) и булевый
+флаг `training_leakage_suspected`. Smoke-фикстура продолжает
+управлять дефолтным offline-путём без изменений.
+
 **Publication gate.** Phase 13 публикует, когда
 `supamem eval --suite coderag --full` показывает no-regression
-относительно измеренного baseline (метрики ранжирования ≥ baseline − ε;
-латентность p95 ≤ baseline + ε **И** ≤ 500 ms жёсткий потолок).
-Зафиксированные численные пороги — в
-[ADR-0002](docs/adr/0002-coderag-eval-philosophy.md) §7.
+относительно live baseline (метрики ранжирования ≥ baseline − ε;
+латентность p95 ≤ baseline + ε **И** ≤ 5000 ms жёсткий потолок).
+ε выводится по метрике: `ε_ranking = max(stddev, 0.005)`,
+`ε_latency = max(0.05 × mean, 5ms)`.
 
-**mem0 peer baseline.** [mem0](https://github.com/mem0ai/mem0) бежит
-параллельной строкой с одной канонической дефолтной конфигурацией (без
-матрицы тюнинга), индексируя те же документы в **собственную** коллекцию
-Qdrant `supamem_eval_coderag_mem0` (отделённую от `supamem_eval_coderag`
-— mem0 владеет своей схемой). Точка отсчёта, не gate. Установка:
-`pip install supamem[peers-mem0]`.
+**mem0 peer baseline + head-to-head (v0.3.0a6+).**
+[mem0](https://github.com/mem0ai/mem0) бежит параллельной строкой с
+одной канонической дефолтной конфигурацией (без матрицы тюнинга),
+индексируя те же документы в **собственную** коллекцию Qdrant
+`supamem_eval_coderag_mem0` (отделённую от `supamem_eval_coderag`
+— mem0 владеет своей схемой). Точка отсчёта, не gate. v0.3.0a6
+добавляет paired-bootstrap delta + 95% CI на каждую ячейку
+axis × колонка × метрика (соглашение знака `mem0_vs_supamem` —
+положительный delta = выигрывает peer) в
+[ADR-0002 §8](docs/adr/0002-coderag-eval-philosophy.md#8-mem0-peer-comparison-d-peer-04-live-phase-16-e-head-to-head).
+Установка: `pip install supamem[peers-mem0]`.
 
 **LongMemEval демотирован.** С v0.3.0a5 полный LongMemEval_S — только
 on-demand; фикстура `longmemeval_scoped_smoke` из 5 вопросов остаётся в
