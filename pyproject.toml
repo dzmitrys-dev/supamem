@@ -38,7 +38,7 @@ Issues = "https://github.com/dzmitrys-dev/supamem/issues"
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "ruff>=0.6", "pytest-asyncio>=0.24"]
 eval = ["ragas>=0.4,<0.5", "datasets>=2.18", "huggingface_hub>=0.24", "pytrec_eval>=0.5"]
-peers-mem0 = ["mem0ai>=2.0,<3.0"]
+peers-mem0 = ["mem0ai>=2.0,<3.0", "ollama>=0.4"]
 
 [project.scripts]
 supamem = "supamem.cli:main"

@@ -47,6 +47,23 @@ MEM0_COLLECTION = "supamem_eval_coderag_mem0"
 # (``all-MiniLM-L6-v2`` — the default fastembed dense model) so the peer
 # row's retrieval quality is comparable, not an apples-to-oranges embedder
 # bake-off.
+#
+# 16-E gap-closure: ``llm.provider="ollama"`` was added so mem0 v2.0.1's
+# eager LlmFactory.create(...) at Memory.__init__ does NOT instantiate an
+# OpenAI client (which would require OPENAI_API_KEY at construction even
+# though every ``add()`` call passes ``infer=False``). The OllamaLLM init
+# is purely local — Client(host=...) opens no socket — so construction
+# succeeds even when Ollama isn't running. ``infer=False`` short-circuits
+# before any LLM provider call, so the eval-only path never invokes the
+# model. Reproducibility contract: the canonical default is now Ollama +
+# ``llama3.2:3b`` (matches dev workstation); switching providers requires
+# a source-tree commit, not an env-var flip (D-DEF-02 preserved).
+# MiniLM-L6-v2 produces 384-dim vectors. mem0's qdrant adapter has its OWN
+# ``embedding_model_dims`` parameter (default 1536, OpenAI shape) that drives
+# collection creation INDEPENDENTLY of the ``embedder`` config — must match
+# the embedder's actual dim or every search returns ``UnexpectedResponse``.
+_MINILM_DIM = 384
+
 MEM0_CONFIG: dict[str, Any] = {
     "vector_store": {
         "provider": "qdrant",
@@ -54,12 +71,20 @@ MEM0_CONFIG: dict[str, Any] = {
             "host": "localhost",
             "port": 6333,
             "collection_name": MEM0_COLLECTION,
+            "embedding_model_dims": _MINILM_DIM,
         },
     },
     "embedder": {
         "provider": "huggingface",
         "config": {
             "model": "sentence-transformers/all-MiniLM-L6-v2",
+        },
+    },
+    "llm": {
+        "provider": "ollama",
+        "config": {
+            "model": "llama3.2:3b",
+            "ollama_base_url": "http://localhost:11434",
         },
     },
 }
@@ -102,9 +127,25 @@ class Mem0PeerAdapter:
     """
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
-        from mem0 import Memory  # lazy: optional dep — peers-mem0 extras
+        from copy import deepcopy  # noqa: PLC0415
 
-        cfg = config or MEM0_CONFIG
+        from mem0 import Memory  # lazy: optional dep — peers-mem0 extras
+        from qdrant_client import QdrantClient  # noqa: PLC0415
+
+        cfg = deepcopy(config or MEM0_CONFIG)
+
+        # mem0 v2.0.x's qdrant adapter does NOT expose a ``timeout`` config
+        # knob; the default httpx timeout (~5s) is too short for the bulk-
+        # ingest path where each ``add()`` lemmatizes + embeds + writes.
+        # Inject a pre-built QdrantClient via the adapter's ``client=``
+        # parameter (see qdrant.py:30-58 — ``client`` short-circuits the
+        # internal QdrantClient(**params) construction).
+        vs_cfg = cfg["vector_store"]["config"]
+        if "client" not in vs_cfg:
+            host = vs_cfg.get("host", "localhost")
+            port = vs_cfg.get("port", 6333)
+            vs_cfg["client"] = QdrantClient(host=host, port=port, timeout=60)
+
         self._memory = Memory.from_config(cfg)
         self._collection = cfg["vector_store"]["config"]["collection_name"]
         # INV-A2 runtime gate. If the caller passed a custom ``config`` with a
@@ -171,12 +212,26 @@ class Mem0PeerAdapter:
         ``where`` argument; mem0 sees the full pool and we filter
         post-hoc.
         """
-        results = self._memory.search(query=text, user_id=USER_ID, limit=k)
+        # mem0 v2.0.0 breaking changes: search() rejects ``user_id`` as a
+        # top-level kwarg (must go in ``filters``), renamed ``limit`` →
+        # ``top_k``, AND wraps the hit list in a ``{"results": [...]}`` envelope
+        # (was a bare list in v1). ``add()`` is unchanged — entity IDs stay as
+        # first-class kwargs on the write side.
+        raw = self._memory.search(
+            query=text,
+            filters={"user_id": USER_ID},
+            top_k=k,
+        )
+        # v2 envelope: {"results": [...]}; tolerate v1 bare-list for resilience.
+        if isinstance(raw, dict):
+            results = raw.get("results") or []
+        else:
+            results = raw or []
         hits: list[Mem0Hit] = []
         repo_filter: list[str] | None = None
         if where and "repo" in where:
             repo_filter = list(where["repo"])
-        for r in (results or []):
+        for r in results:
             meta = r.get("metadata") or {}
             if repo_filter is not None and meta.get("repo") not in repo_filter:
                 continue

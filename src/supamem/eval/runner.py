@@ -904,6 +904,123 @@ def _run_longmemeval(
 # Public entrypoint ----------------------------------------------------
 
 
+def _ingest_coderag_peer(peer: str, *, cfg: "ResolvedConfig") -> int:
+    """Drop + recreate the peer's Qdrant collection, then ingest the corpus.
+
+    Phase 16 Plan E Task 3a. ``supamem eval --suite coderag --ingest-peer mem0``
+    routes here. Returns 0 on success, non-zero on hard failure.
+
+    Why drop+recreate: qdrant treats ``vectors.size`` as immutable after
+    create. If the canonical mem0 config switches embedders (e.g. from
+    OpenAI 1536-dim to HuggingFace 384-dim, as 16-E does), an existing
+    collection from a prior config can't be reused — search returns
+    ``UnexpectedResponse`` on every call.
+    """
+    if peer != "mem0":
+        err_console.print(
+            f"[supamem.warn]coderag: --ingest-peer {peer!r} unknown; only "
+            f"'mem0' is supported.[/supamem.warn]"
+        )
+        return 2
+
+    # Lazy imports — keep --ingest-peer cost off the goldens / longmemeval
+    # paths and out of cold-CLI startup.
+    from importlib import resources as _resources  # noqa: PLC0415
+
+    try:
+        from supamem.eval.coderag.peers.mem0_adapter import (  # noqa: PLC0415
+            MEM0_COLLECTION,
+            Mem0PeerAdapter,
+        )
+    except ImportError as exc:
+        err_console.print(
+            f"[supamem.error]coderag: --ingest-peer mem0 needs the "
+            f"peers-mem0 extras: {exc}[/supamem.error]"
+        )
+        return 1
+
+    from supamem.eval.coderag.corpus import (  # noqa: PLC0415
+        ensure_populated_manifest,
+        repo_cache_path,
+    )
+
+    # 1. Drop + pre-create the peer collection with DENSE-ONLY vectors.
+    #    mem0 v2.0.x's qdrant adapter creates a BM25 sparse slot by default
+    #    and runs ``fastembed.SparseTextEmbedding`` on EVERY insert — a per-
+    #    record cost that pushes large ADR ingests past the qdrant client
+    #    timeout. By pre-creating the collection without a sparse slot,
+    #    mem0 detects the schema (line 130-144 of mem0/vector_stores/qdrant.py)
+    #    and emits its "BM25 disabled, semantic search works normally"
+    #    warning — exactly what we want for retrieval-quality benchmarking.
+    #    Vector dim must match ``MEM0_CONFIG["vector_store"]["config"][
+    #    "embedding_model_dims"]`` (384 for the canonical MiniLM embedder).
+    from supamem.eval.coderag.peers.mem0_adapter import (  # noqa: PLC0415
+        MEM0_CONFIG,
+    )
+    _DIM = MEM0_CONFIG["vector_store"]["config"]["embedding_model_dims"]
+    try:
+        from qdrant_client import QdrantClient  # noqa: PLC0415
+        from qdrant_client.http.models import Distance, VectorParams  # noqa: PLC0415
+
+        host = cfg.qdrant_url or "http://localhost:6333"
+        client = QdrantClient(url=host, timeout=60)
+        existing = {c.name for c in client.get_collections().collections}
+        if MEM0_COLLECTION in existing:
+            client.delete_collection(MEM0_COLLECTION)
+            err_console.print(
+                f"[supamem.info]coderag-mem0: dropped stale collection "
+                f"{MEM0_COLLECTION!r}[/supamem.info]"
+            )
+        client.create_collection(
+            collection_name=MEM0_COLLECTION,
+            vectors_config=VectorParams(size=_DIM, distance=Distance.COSINE),
+        )
+        err_console.print(
+            f"[supamem.info]coderag-mem0: pre-created {MEM0_COLLECTION!r} "
+            f"with dense-only vectors (dim={_DIM}, no BM25 slot)"
+            f"[/supamem.info]"
+        )
+    except Exception as exc:
+        err_console.print(
+            f"[supamem.error]coderag-mem0: collection setup failed "
+            f"({type(exc).__name__}: {exc})[/supamem.error]"
+        )
+        return 1
+
+    # 2. Construct the adapter — mem0 detects the pre-created collection
+    #    and uses it as-is (skipping its own BM25-enabled create path).
+    adapter = Mem0PeerAdapter()
+
+    # 3. Build the canonical (slug, repo_root) pairs from the populated
+    #    coderag manifest — same source of truth the supamem-side ingest
+    #    consumes (D-DISP-01).
+    manifest_path = (
+        _resources.files("supamem.eval.datasets") / "coderag_corpus_manifest.json"
+    )
+    realized = ensure_populated_manifest(Path(str(manifest_path)))
+    repos: list[tuple[str, Path]] = []
+    for repo_entry in realized.get("repos", []):
+        slug = repo_entry["slug"]
+        sha = repo_entry["commit_sha"]
+        repos.append((slug, repo_cache_path(slug, sha)))
+
+    if not repos:
+        err_console.print(
+            "[supamem.error]coderag-mem0: manifest has zero repos; "
+            "cannot ingest[/supamem.error]"
+        )
+        return 1
+
+    # 4. Drive the ingest. ``infer=False`` is enforced inside the adapter
+    #    (15-D research delta — score retrieval, not LLM extraction).
+    count = adapter.ingest(repos)
+    err_console.print(
+        f"[supamem.ok]coderag-mem0: ingest complete — {count} records "
+        f"in {MEM0_COLLECTION!r}[/supamem.ok]"
+    )
+    return 0
+
+
 def run_bench(
     *,
     suite: str = "goldens",
@@ -917,6 +1034,7 @@ def run_bench(
     verbose: bool = False,
     baseline_version: str = "v0.1.5",
     peer: str | None = None,
+    ingest_peer: str | None = None,
 ) -> int:
     """Run the bench. Returns 0 on pass, 1 on regression / fatal.
 
@@ -1004,6 +1122,16 @@ def run_bench(
 
         suite_cls = _load_suite("coderag")
         cfg = config or ResolvedConfig()
+
+        # Phase 16 Plan E Task 3a — ``--ingest-peer mem0`` dispatch.
+        # Drops + recreates the peer's Qdrant collection, then ingests the
+        # canonical coderag corpus through the peer adapter. Returns 0 on
+        # success without running scoring (must be invoked once before the
+        # first ``--peer mem0 --full`` scoring run on a fresh machine, or
+        # whenever the peer's embedder/vector-dim config changes — the
+        # collection's vector_size is immutable in qdrant once created).
+        if ingest_peer:
+            return _ingest_coderag_peer(ingest_peer, cfg=cfg)
 
         # Load smoke fixture records in EVERY invocation (Plan 15-D D2):
         # default ``supamem eval --suite coderag`` runs against the bundled

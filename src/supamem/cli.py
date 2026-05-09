@@ -431,6 +431,19 @@ def cmd_evalbench(
             "metrics ride alongside the supamem column without replacing it."
         ),
     ),
+    # Phase 16 Plan E Task 3a — peer ingest entry point. Drops + recreates
+    # the peer's Qdrant collection then ingests the canonical coderag
+    # corpus through the peer adapter. Must run BEFORE the first
+    # ``--peer mem0 --full`` scoring invocation.
+    ingest_peer: Optional[str] = typer.Option(
+        None, "--ingest-peer",
+        help=(
+            "Drop + recreate the peer's Qdrant collection and ingest the "
+            "canonical coderag corpus through the peer adapter. Currently "
+            "only 'mem0' is supported. Exits after ingest — does not run "
+            "scoring."
+        ),
+    ),
 ) -> None:
     """Run the supamem bench harness (Phase 10).
 
@@ -479,6 +492,7 @@ def cmd_evalbench(
         goldens_path=goldens,
         config=cfg,
         peer=peer,
+        ingest_peer=ingest_peer,
     ))
 
 

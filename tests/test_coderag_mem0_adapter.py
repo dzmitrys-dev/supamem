@@ -56,9 +56,17 @@ class _RecordingMemory:
         })
         return {"status": "ok"}
 
-    def search(self, query, *, user_id, limit=10, **kwargs):  # noqa: ANN001, ANN003
+    def search(self, query, *, filters=None, top_k=20, **kwargs):  # noqa: ANN001, ANN003
+        # mem0 v2.0.0 contract: filters={"user_id": ...} replaces top-level
+        # ``user_id``; ``limit`` renamed to ``top_k``. Mirror by exposing the
+        # extracted user_id back on the recorded call so existing assertions
+        # continue to read ``call["user_id"]``.
+        filters = filters or {}
         self.search_calls.append({
-            "query": query, "user_id": user_id, "limit": limit, "extra": kwargs,
+            "query": query,
+            "user_id": filters.get("user_id"),
+            "limit": top_k,
+            "extra": kwargs,
         })
         return list(self._search_results)
 
