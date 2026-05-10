@@ -170,8 +170,11 @@ def test_fallback_on_ollama_unreachable(
     )
     captured = capsys.readouterr()
     combined = (captured.out + captured.err).lower()
-    assert "ollama" in combined and "fallback" in combined, (
-        f"expected err_console warning mentioning 'ollama' + 'fallback'; got: {captured.err!r}"
+    # Accept either "fallback" (noun) or "falling back" (verb form) — the
+    # err_console message uses the verb form to mirror the chunker_tree_sitter
+    # warning convention from PATTERNS.md.
+    assert "ollama" in combined and "fall" in combined, (
+        f"expected err_console warning mentioning 'ollama' + 'fall(back|ing)'; got: {captured.err!r}"
     )
 
 
