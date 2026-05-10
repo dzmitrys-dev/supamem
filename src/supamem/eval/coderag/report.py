@@ -31,6 +31,13 @@ METRIC_NAMES: tuple[str, ...] = (
     "ndcg_at_10",
     "latency_ms_p50",
     "latency_ms_p95",
+    # Phase 17-A chunk-level recall siblings — additive extension only
+    # (T-17-03 mitigation: existing keys unchanged so the Phase 16 floor
+    # gate still parses by exact name).
+    "recall_at_1_chunk",
+    "recall_at_5_chunk",
+    "recall_at_10_chunk",
+    "recall_at_20_chunk",
 )
 
 # Map pytrec_eval canonical names → envelope canonical names (Plan 15-C).
@@ -67,11 +74,19 @@ def column_metrics(
     pytrec_scores: dict[str, float] | None,
     latency_p50: float | None,
     latency_p95: float | None,
+    *,
+    chunk_recalls: dict[str, float] | None = None,
 ) -> dict | None:
     """Translate one pytrec_eval result dict to envelope keys + add latencies.
 
     ``None`` in → ``None`` out (INV-A1: decision_rationale's fastapi_only
     column is null in every emitted JSON).
+
+    Phase 17-A — ``chunk_recalls`` (optional, kwarg-only): when supplied,
+    its ``recall_at_{1,5,10,20}_chunk`` keys are merged into the output.
+    ``None`` (default) passes through unchanged so existing callers, the
+    Phase 16 floor gate, and the carry-lock byte-identical tests stay
+    green (T-17-03 mitigation, additive-only schema diff).
     """
     if pytrec_scores is None:
         return None
@@ -81,6 +96,14 @@ def column_metrics(
     }
     out["latency_ms_p50"] = latency_p50
     out["latency_ms_p95"] = latency_p95
+    # Always emit the four chunk-level recall keys so envelope schema is
+    # uniform (existing test_envelope_from_results_full_shape asserts
+    # set(cell.keys()) == set(METRIC_NAMES)). None is the "not measured"
+    # sentinel, mirroring the latency null-on-not-measured precedent —
+    # populated only when `chunk_recalls` is passed by the runner.
+    for k in (1, 5, 10, 20):
+        key = f"recall_at_{k}_chunk"
+        out[key] = (chunk_recalls or {}).get(key)
     return out
 
 

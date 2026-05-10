@@ -2,8 +2,14 @@
 
 Plan 15-A defined the surface; Plan 15-C wires the ``RelevanceEvaluator`` call.
 Plan 16-C adds :func:`paired_bootstrap_delta` for peer-vs-supamem CI (D-BOOT-01).
+Plan 17-A adds :func:`recall_at_k_chunk` + :func:`derive_gold_chunks` for
+chunk-level recall (D-METRIC-01 + D-METRIC-03).
 """
 from __future__ import annotations
+
+import hashlib
+from collections.abc import Callable, Iterable
+from pathlib import Path
 
 import numpy as np
 import pytrec_eval
@@ -99,4 +105,65 @@ def paired_bootstrap_delta(
     }
 
 
-__all__ = ["METRIC_SET", "paired_bootstrap_delta", "score"]
+def recall_at_k_chunk(
+    gold_chunk_ids: set[str],
+    retrieved_chunk_ids: list[str],
+    k: int,
+) -> float:
+    """Pure set-ratio chunk-level recall@k (D-METRIC-01).
+
+    ``|gold ∩ top_k(retrieved)| / |gold|`` — the chunk-level analogue of
+    ``pytrec_eval.recall``. Empty ``gold_chunk_ids`` yields 0.0 (zero-guard,
+    no divide-by-zero) — matches the all-zero contract of :func:`score` for
+    consistency with the doc-level path.
+
+    Caller responsibility: ensure ``retrieved_chunk_ids`` is sorted by
+    descending score (the runner builds it from a backend-ranked hit list).
+    """
+    if not gold_chunk_ids:
+        return 0.0
+    top_k = set(retrieved_chunk_ids[:k])
+    return len(gold_chunk_ids & top_k) / len(gold_chunk_ids)
+
+
+def derive_gold_chunks(
+    gold_file_paths: Iterable[str],
+    repo_root: Path,
+    chunker_fn: Callable[[str], list[str]],
+) -> dict[str, set[str]]:
+    """Re-run the chunker over each gold file → ``{file_path: {chunk_id, ...}}``.
+
+    For chunk-level scoring we don't carry chunk_ids in the gold-set on disk
+    (RESEARCH Q-1 recommendation: ingest-time emission only, no manifest
+    schema change). At scoring time we rebuild the gold chunk-id sets by
+    re-running the same chunker over the gold files and applying the same
+    SHA1[:12] formula used at ingest. Same chunker + same files = same hashes.
+
+    Files that don't exist (corpus drift between run and gold-set) are
+    skipped silently — the caller is expected to validate corpus integrity
+    upstream. UTF-8 decode errors propagate; mismatched encodings between
+    ingest and scoring would corrupt the hash equivalence regardless.
+    """
+    out: dict[str, set[str]] = {}
+    for rel in gold_file_paths:
+        path = repo_root / rel
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        chunks = chunker_fn(text) or [text]
+        ids: set[str] = set()
+        for chunk in chunks:
+            if not chunk.strip():
+                continue
+            ids.add(f"{rel}#{hashlib.sha1(chunk.encode()).hexdigest()[:12]}")
+        out[rel] = ids
+    return out
+
+
+__all__ = [
+    "METRIC_SET",
+    "derive_gold_chunks",
+    "paired_bootstrap_delta",
+    "recall_at_k_chunk",
+    "score",
+]

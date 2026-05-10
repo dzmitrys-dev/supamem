@@ -19,9 +19,15 @@ import numpy as np
 import pytrec_eval
 
 from supamem.console import err_console
-from supamem.eval.coderag.metrics import METRIC_SET
+from supamem.eval.coderag.metrics import (
+    METRIC_SET,
+    derive_gold_chunks,
+    recall_at_k_chunk,
+)
 from supamem.eval.coderag.metrics import score as score_pytrec
 from supamem.eval.coderag.report import column_metrics, envelope_from_results
+
+_CHUNK_RECALL_KS: tuple[int, ...] = (1, 5, 10, 20)
 
 # 10-query warmup loop precedes the measured loop (Pitfall 5 mitigation —
 # cold-start outliers otherwise dominate p95 latency).
@@ -53,6 +59,39 @@ def _build_run(qid: str, hits: list) -> dict[str, dict[str, float]]:
             continue
         # Last-write-wins on duplicate doc_ids — runner contract.
         run[doc_id] = float(getattr(hit, "score", 0.0))
+    return {qid: run} if run else {}
+
+
+def _hit_chunk_id(hit: Any) -> str | None:
+    """Extract the chunk-level identifier set by Phase 17-A ingest.
+
+    Mirrors :func:`_hit_doc_id` shape. Reads ``payload["chunk_id"]`` with no
+    fallback — chunk_id is REQUIRED post-Phase 17 (D-METRIC-03). Returns
+    None for hits whose payload predates the migration so the runner stays
+    forward-compatible with mixed corpora during the transition.
+    """
+    payload = getattr(hit, "payload", None) or {}
+    return payload.get("chunk_id")
+
+
+def _build_run_chunk(qid: str, hits: list) -> dict[str, dict[str, float]]:
+    """Chunk-level sibling of :func:`_build_run` — does NOT dedup.
+
+    Each distinct ``chunk_id`` gets its own slot in the inner dict, so two
+    hits referencing different chunks of the same file both contribute.
+    Pitfall 4 mitigation: the doc-level path's last-write-wins on doc_id
+    collapses chunk-level signal; this function is the carry path that
+    keeps that signal alive for chunk-level recall scoring.
+    """
+    run: dict[str, float] = {}
+    for hit in hits:
+        cid = _hit_chunk_id(hit)
+        if cid is None:
+            continue
+        # NO doc-level dedup — distinct chunk_ids of the same doc_id all
+        # get separate slots. (Same chunk_id seen twice is degenerate and
+        # last-write-wins is safe per chunk.)
+        run[cid] = float(getattr(hit, "score", 0.0))
     return {qid: run} if run else {}
 
 
@@ -164,6 +203,23 @@ def _run_coderag(records, backend, *, k: int = DEFAULT_K, **kwargs) -> dict[str,
         lambda: {"supamem_only": [], "fastapi_only": [], "combined": []}
     )
 
+    # Phase 17-A: per-query chunk-level runs (NOT deduped on doc_id; see
+    # `_build_run_chunk`). Indexed by (axis, col, qid) → ordered list of
+    # chunk_ids returned by the backend (rank-preserving). Used for
+    # chunk-level recall@k scoring at Step 2 below.
+    per_axis_chunk_runs: dict[
+        str, dict[str, dict[str, list[str]]]
+    ] = defaultdict(
+        lambda: {"supamem_only": {}, "fastapi_only": {}, "combined": {}}
+    )
+    # Per-query chunk_id sets for the gold side. None when the caller did
+    # not supply (repo_root, chunker_fn) — chunk-level scoring then no-ops
+    # and column_metrics emits None chunk_recalls (T-17-03 friendliness).
+    repo_root = kwargs.get("repo_root_for_chunks")
+    chunker_fn = kwargs.get("chunker_for_chunks")
+    chunk_scoring_enabled = repo_root is not None and chunker_fn is not None
+    per_qid_gold_chunks: dict[str, set[str]] = {}
+
     def _peer_pass(name: str, adapter: Any, qid: str, axis: str, col: str,
                    text: str, where: dict[str, list[str]] | None) -> None:
         """Drive one adapter pass; on failure, mark peer failed and surface once."""
@@ -196,6 +252,16 @@ def _run_coderag(records, backend, *, k: int = DEFAULT_K, **kwargs) -> dict[str,
         # axis's accumulated qrels dict.
         per_axis_qrels[axis][qid] = {doc_id: 1 for doc_id in gold}
 
+        # Phase 17-A: derive gold-chunk set once per qid (deterministic
+        # SHA1[:12] over chunker output of each gold file). No-ops when the
+        # caller did not supply repo_root + chunker_fn.
+        if chunk_scoring_enabled:
+            gold_chunk_map = derive_gold_chunks(gold, repo_root, chunker_fn)
+            qid_gold: set[str] = set()
+            for ids in gold_chunk_map.values():
+                qid_gold.update(ids)
+            per_qid_gold_chunks[qid] = qid_gold
+
         # ── Pass 1: supamem_only ────────────────────────────────────────
         t0 = time.perf_counter()
         hits_sup = backend.query(text, k=k, where={"repo": ["supamem"]})
@@ -205,6 +271,10 @@ def _run_coderag(records, backend, *, k: int = DEFAULT_K, **kwargs) -> dict[str,
         run_sup = _build_run(qid, hits_sup)
         if run_sup:
             per_axis_run[axis]["supamem_only"].update(run_sup)
+        if chunk_scoring_enabled:
+            per_axis_chunk_runs[axis]["supamem_only"][qid] = [
+                cid for cid in (_hit_chunk_id(h) for h in hits_sup) if cid
+            ]
         for name, adapter in peer_adapters.items():
             _peer_pass(name, adapter, qid, axis, "supamem_only", text,
                        {"repo": ["supamem"]})
@@ -219,6 +289,10 @@ def _run_coderag(records, backend, *, k: int = DEFAULT_K, **kwargs) -> dict[str,
             run_fap = _build_run(qid, hits_fap)
             if run_fap:
                 per_axis_run[axis]["fastapi_only"].update(run_fap)
+            if chunk_scoring_enabled:
+                per_axis_chunk_runs[axis]["fastapi_only"][qid] = [
+                    cid for cid in (_hit_chunk_id(h) for h in hits_fap) if cid
+                ]
             for name, adapter in peer_adapters.items():
                 _peer_pass(name, adapter, qid, axis, "fastapi_only", text,
                            {"repo": ["fastapi"]})
@@ -232,6 +306,10 @@ def _run_coderag(records, backend, *, k: int = DEFAULT_K, **kwargs) -> dict[str,
         run_comb = _build_run(qid, hits_comb)
         if run_comb:
             per_axis_run[axis]["combined"].update(run_comb)
+        if chunk_scoring_enabled:
+            per_axis_chunk_runs[axis]["combined"][qid] = [
+                cid for cid in (_hit_chunk_id(h) for h in hits_comb) if cid
+            ]
         for name, adapter in peer_adapters.items():
             _peer_pass(name, adapter, qid, axis, "combined", text, None)
 
@@ -253,10 +331,26 @@ def _run_coderag(records, backend, *, k: int = DEFAULT_K, **kwargs) -> dict[str,
             run_dict = per_axis_run[axis].get(col, {})
             pytrec_scores = score_pytrec(qrels, run_dict)
             lats = per_axis_lat[axis][col]
+            chunk_recalls: dict[str, float] | None = None
+            if chunk_scoring_enabled:
+                # Per-query mean across the qrels denominator (matches the
+                # doc-level path's "average over ALL queries" contract in
+                # metrics.score — INV-03 combined-dominance preservation).
+                chunk_runs_for_col = per_axis_chunk_runs[axis].get(col, {})
+                n_q = len(qrels) or 1
+                chunk_recalls = {}
+                for kk in _CHUNK_RECALL_KS:
+                    total = 0.0
+                    for q_id_inner in qrels:
+                        gold_set = per_qid_gold_chunks.get(q_id_inner, set())
+                        retrieved = chunk_runs_for_col.get(q_id_inner, [])
+                        total += recall_at_k_chunk(gold_set, retrieved, kk)
+                    chunk_recalls[f"recall_at_{kk}_chunk"] = total / n_q
             cols[col] = column_metrics(
                 pytrec_scores,
                 _percentile(lats, 50),
                 _percentile(lats, 95),
+                chunk_recalls=chunk_recalls,
             )
             supamem_per_query_metrics[axis][col] = _per_query_metric_map(
                 qrels, run_dict
@@ -324,4 +418,12 @@ def _run_coderag(records, backend, *, k: int = DEFAULT_K, **kwargs) -> dict[str,
     )
 
 
-__all__ = ["WARMUP_QUERIES", "DEFAULT_K", "_run_coderag"]
+__all__ = [
+    "DEFAULT_K",
+    "WARMUP_QUERIES",
+    "_build_run",
+    "_build_run_chunk",
+    "_hit_chunk_id",
+    "_hit_doc_id",
+    "_run_coderag",
+]
