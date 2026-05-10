@@ -444,6 +444,20 @@ def cmd_evalbench(
             "scoring."
         ),
     ),
+    # Phase 17 Plan B2 — drop + rebuild the supamem coderag bench
+    # collection BEFORE scoring, routing chunks through the
+    # ``supamem.chunker`` entry-point keyed on cfg.chunker (e.g.
+    # ``tree_sitter_code``). Default OFF preserves the Phase 16 baseline
+    # byte-identical replay path; reviewer reproductions must pass the
+    # flag explicitly.
+    reingest_coderag: bool = typer.Option(
+        False, "--reingest-coderag",
+        help=(
+            "Drop + rebuild the supamem coderag bench collection before "
+            "scoring (uses cfg.chunker via the supamem.chunker entry-point). "
+            "Default OFF preserves Phase 16 baseline replay byte-identical."
+        ),
+    ),
 ) -> None:
     """Run the supamem bench harness (Phase 10).
 
@@ -493,6 +507,7 @@ def cmd_evalbench(
         config=cfg,
         peer=peer,
         ingest_peer=ingest_peer,
+        reingest_coderag=reingest_coderag,
     ))
 
 
