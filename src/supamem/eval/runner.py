@@ -26,8 +26,11 @@ import os
 import time
 from dataclasses import asdict
 from importlib import resources
+from importlib.metadata import entry_points
 from pathlib import Path
 from typing import Any, Literal
+
+from qdrant_client import QdrantClient
 
 from supamem.config import ResolvedConfig
 from supamem.console import console, err_console
@@ -170,11 +173,57 @@ class _CoderagSmokeBackend:
         ]
 
 
+def _resolve_chunker(name: str) -> Any:
+    """Plan 17-B2 (D-WIRE-01): load a ``supamem.chunker`` entry-point by name.
+
+    Empty / None / ``"markdown_header"`` falls back to the canonical
+    ``chunk_markdown`` callable — preserves D-SCOPE-05 byte-identical
+    behavior for every existing caller. Unknown names raise
+    ``SystemExit(2)`` with an actionable message naming the bad value
+    and the registered alternatives.
+    """
+    if not name or name == "markdown_header":
+        from supamem.indexer.chunker import chunk_markdown  # noqa: PLC0415
+
+        return chunk_markdown
+    eps = [e for e in entry_points(group="supamem.chunker") if e.name == name]
+    if not eps:
+        registered = sorted(e.name for e in entry_points(group="supamem.chunker"))
+        err_console.print(
+            f"[supamem.error]eval: unknown chunker {name!r} "
+            f"(registered: {', '.join(registered)})[/supamem.error]"
+        )
+        raise SystemExit(2)
+    return eps[0].load()
+
+
+def _resolve_retrieval_class(name: str) -> Any:
+    """Plan 17-B2 (D-WIRE-03): load a ``supamem.retrieval`` entry-point class
+    by name.
+
+    Empty / None / ``"tuned_hybrid"`` returns ``TunedHybridBackend`` —
+    preserves byte-identical behavior for the Phase 16 baseline replay
+    path. Unknown names raise ``SystemExit(2)`` with an actionable
+    message.
+    """
+    if not name or name == "tuned_hybrid":
+        return TunedHybridBackend
+    eps = [e for e in entry_points(group="supamem.retrieval") if e.name == name]
+    if not eps:
+        registered = sorted(e.name for e in entry_points(group="supamem.retrieval"))
+        err_console.print(
+            f"[supamem.error]eval: unknown retrieval backend {name!r} "
+            f"(registered: {', '.join(registered)})[/supamem.error]"
+        )
+        raise SystemExit(2)
+    return eps[0].load()
+
+
 def _build_backend(
     config: ResolvedConfig, *, suite: str | None = None
-) -> TunedHybridBackend:
+) -> Any:
     """Build the retrieval backend, optionally swapping ``cfg.collection``
-    to the isolated bench prefix for the longmemeval_s suite.
+    to the isolated bench prefix for the longmemeval_s / coderag suites.
 
     Phase 14 Plan A Task A3 (D-SCOPE-05): when ``suite='longmemeval_s'``,
     we shallow-copy ``config`` with ``collection`` overridden to
@@ -182,11 +231,19 @@ def _build_backend(
     so retrieval queries hit the eval collection, NOT the user's
     production collection. The caller's ``config`` is NEVER mutated.
 
+    Plan 17-B2 (D-WIRE-03): ``cfg.retrieval_name`` selects the backend
+    class via the ``supamem.retrieval`` entry-point group. Empty / unset
+    / ``"tuned_hybrid"`` keeps the legacy ``TunedHybridBackend`` (Phase
+    16 baseline byte-identical). The dispatch applies to coderag,
+    longmemeval_s, and the default goldens path uniformly.
+
     For ``suite=None`` (default — preserves the byte-identical
     ``_run_goldens_legacy`` call site that reads ``_build_backend(cfg)``)
     and ``suite='goldens'``, behavior is unchanged: the backend is
     constructed against the caller's original cfg.
     """
+    retrieval_name = getattr(config, "retrieval_name", "") or "tuned_hybrid"
+    cls = _resolve_retrieval_class(retrieval_name)
     if suite == "longmemeval_s":
         # Lazy import — avoids loading the ingest module on the goldens path.
         from dataclasses import replace as _replace  # noqa: PLC0415
@@ -196,7 +253,7 @@ def _build_backend(
         )
 
         bench_cfg = _replace(config, collection=eval_collection_name(config, suite))
-        return TunedHybridBackend(config=bench_cfg)
+        return cls(config=bench_cfg)
     if suite == "coderag":
         # Phase 15 Plan A Task A2 — parallel branch for the coderag suite.
         # Lazy import: keeps the longmemeval / goldens paths free of pytrec_eval
@@ -208,8 +265,8 @@ def _build_backend(
         )
 
         bench_cfg = _replace(config, collection=coderag_collection_name())
-        return TunedHybridBackend(config=bench_cfg)
-    return TunedHybridBackend(config=config)
+        return cls(config=bench_cfg)
+    return cls(config=config)
 
 
 def _run_goldens_legacy(
@@ -1035,6 +1092,7 @@ def run_bench(
     baseline_version: str = "v0.1.5",
     peer: str | None = None,
     ingest_peer: str | None = None,
+    reingest_coderag: bool = False,
 ) -> int:
     """Run the bench. Returns 0 on pass, 1 on regression / fatal.
 
@@ -1197,6 +1255,70 @@ def run_bench(
                 full_records.extend(extract_pr_queries(cache, slug))
                 full_records.extend(extract_adr_queries(cache, slug))
             records = downsample_stratified(full_records, target=300, seed=42)
+
+        # Plan 17-B2 (D-WIRE-04..06): optional re-ingest of the coderag
+        # bench collection BEFORE scoring. Default OFF preserves the
+        # Phase 16 baseline byte-identical replay path (gated by the
+        # ``test_default_off_does_not_call_ingest`` regression). When
+        # ON, drop the supamem bench collection, resolve the chunker via
+        # the ``supamem.chunker`` entry-point keyed on ``cfg.chunker``,
+        # and call ``coderag.ingest.ingest()`` to rebuild it. Mem0 peer
+        # collection is NEVER touched here (D-WIRE-04 scope guard;
+        # peer rebuild stays exclusively on ``--ingest-peer mem0``).
+        if full and reingest_coderag:
+            from dataclasses import replace as _replace_ingest  # noqa: PLC0415
+            from importlib import resources as _resources_ingest  # noqa: PLC0415
+
+            from supamem.eval.coderag.corpus import (  # noqa: PLC0415
+                ensure_populated_manifest,
+                repo_cache_path,
+            )
+            from supamem.eval.coderag.ingest import (  # noqa: PLC0415
+                coderag_collection_name,
+            )
+            from supamem.eval.coderag.ingest import ingest as coderag_ingest  # noqa: PLC0415
+
+            bench_cfg_for_ingest = _replace_ingest(
+                cfg, collection=coderag_collection_name()
+            )
+            client = QdrantClient(
+                url=getattr(cfg, "qdrant_url", "http://localhost:6333"),
+                api_key=getattr(cfg, "qdrant_api_key", None) or None,
+                check_compatibility=False,
+                timeout=30,
+            )
+            try:
+                client.delete_collection(coderag_collection_name())
+            except Exception as exc:  # noqa: BLE001 — best-effort drop
+                err_console.print(
+                    f"[supamem.warn]coderag: drop collection skipped "
+                    f"({type(exc).__name__}: {exc})[/supamem.warn]"
+                )
+            chunker_fn = _resolve_chunker(
+                getattr(cfg, "chunker", "") or "markdown_header"
+            )
+            manifest_path = (
+                _resources_ingest.files("supamem.eval.datasets")
+                / "coderag_corpus_manifest.json"
+            )
+            realized = ensure_populated_manifest(Path(str(manifest_path)))
+            ingest_records = [
+                {
+                    "repo_slug": r["slug"],
+                    "repo_root": repo_cache_path(r["slug"], r["commit_sha"]),
+                }
+                for r in realized.get("repos", [])
+            ]
+            n = coderag_ingest(
+                bench_cfg_for_ingest,
+                ingest_records,
+                client=client,
+                chunker_fn=chunker_fn,
+            )
+            console.print(
+                f"supamem — coderag: re-ingested {n} chunks "
+                f"({getattr(cfg, 'chunker', None) or 'markdown_header'})"
+            )
 
         # Backend selection (Plan 15-D D2):
         #   --full  → live ``_build_backend`` against Qdrant + ingested

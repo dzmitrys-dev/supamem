@@ -12,6 +12,16 @@ Plan 15-A: collection-name constants + idempotent payload-index DDL.
 Plan 15-B (Task B3): wire the corpus walk → chunker → embedder → upsert
 flow. Records arrive as ``[{repo_slug, repo_root}, ...]``; output is the
 count of upserted Qdrant points.
+
+Plan 17-B2 (D-WIRE-02): ``ingest()`` accepts an optional ``chunker_fn``
+kwarg. When None (default) the module-top ``chunk_markdown`` import is
+used — preserving D-SCOPE-05 byte-identical behavior for every existing
+caller. When provided, the injected callable replaces ``chunk_markdown``
+at the per-file chunking call site. The dispatch lives in
+``eval/runner.py`` (entry-point loader); this module stays a pure
+consumer — it MUST NOT add ``importlib.metadata`` or any new
+``supamem.indexer.*`` import. Carry-lock test:
+``test_ingest_body_does_not_import_supamem_indexer_except_chunker``.
 """
 from __future__ import annotations
 
@@ -140,10 +150,18 @@ def ingest(
     records: Iterable[Mapping[str, Any]],
     *,
     client: QdrantClient | None = None,
+    chunker_fn: Any = None,
 ) -> int:
     """Walk pinned-SHA caches → chunk → embed → upsert.
 
     ``records``: iterable of ``{"repo_slug": str, "repo_root": Path}``.
+
+    ``chunker_fn``: optional callable ``(text: str) -> list[str]`` that
+    overrides the module-top ``chunk_markdown`` fallback. Plan 17-B2
+    (D-WIRE-02): the dispatch lives in ``eval/runner.py``
+    (``_resolve_chunker`` looks up the ``supamem.chunker`` entry-point);
+    this module stays a pure consumer. ``None`` → default to
+    ``chunk_markdown`` — every pre-17-B2 caller is byte-identical.
 
     Returns total upserted point count.
 
@@ -188,7 +206,8 @@ def ingest(
                     f"{repo_slug}:{rel}[/supamem.warn]"
                 )
                 continue
-            chunks = chunk_markdown(text) or [text]
+            _chunker = chunker_fn if chunker_fn is not None else chunk_markdown
+            chunks = _chunker(text) or [text]
             axis = _detect_axis(rel)
             for chunk in chunks:
                 if chunk.strip():

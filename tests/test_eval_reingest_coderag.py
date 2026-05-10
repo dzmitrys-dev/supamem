@@ -10,7 +10,6 @@ Locks the wiring contract for D-WIRE-04..06:
 """
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 
