@@ -366,6 +366,93 @@ def _render_eval_bench_panel() -> None:
         warn(f"baseline probe failed: {type(exc).__name__}: {exc}")
 
 
+def _render_ollama_warmpool_panel(cfg: ResolvedConfig) -> None:
+    """Render the Ollama warm-pool panel (Phase 17 Plan D — D-HYDE-04 / D-DOCTOR-04).
+
+    Read-only diagnostic surface — mirrors Plan 08.1 D-DOCTOR-04 +
+    Phase 8 D-FETCH-04 invariant: NEVER raises, NEVER flips the doctor
+    exit code. Conditional render — fires ONLY when the user has opted
+    into ``retrieval = "tuned_hybrid_hyde"`` (skip silently otherwise so
+    default users never see the panel).
+
+    Surfaces:
+      - ``llama3.2:3b`` warm/cold state via Ollama ``/api/ps`` probe.
+      - Cold-state remediation hint: ``ollama run llama3.2:3b ''`` to
+        pre-warm before launching a 10-min eval suite (T-17-02 visibility
+        complement to Plan 17-C's per-request ``keep_alive=-1``).
+
+    All probes wrapped in ``try/except`` -> ``warn(...)`` so a
+    non-localhost ``OLLAMA_HOST`` (D-07 SystemExit), an unreachable
+    daemon, or a malformed JSON response never breaks the rest of
+    doctor.
+    """
+    # Conditional render — skip silently when not configured. The
+    # ``or``-chain keeps the panel forward-compatible: prefer the
+    # canonical flat ``retrieval_name`` field (Phase 17), fall back to a
+    # hypothetical future ``retrieval`` attribute, and finally to the
+    # shipped default so ``getattr`` never trips on a missing attr.
+    retrieval_name = (
+        getattr(cfg, "retrieval_name", None)
+        or getattr(cfg, "retrieval", "tuned_hybrid")
+    )
+    if retrieval_name != "tuned_hybrid_hyde":
+        return  # D-HYDE-04 conditional render — silent skip
+
+    import json as _json  # noqa: PLC0415
+    import urllib.request  # noqa: PLC0415
+
+    console.print()
+    console.print("[supamem.brand]ollama warm-pool[/supamem.brand]")
+
+    # 1. Resolve Ollama host via the sibling-module helper. SystemExit(2)
+    #    is the D-07 fast-fail path used by the eval judge — in this
+    #    read-only doctor context we wrap it so a non-localhost
+    #    OLLAMA_HOST does NOT crash doctor (D-DOCTOR-04 invariant).
+    try:
+        from supamem.eval.judge import _resolve_ollama_host  # noqa: PLC0415
+
+        base = _resolve_ollama_host()
+    except SystemExit:
+        warn(
+            "ollama warm-pool: non-localhost OLLAMA_HOST blocked by D-07 "
+            "invariant; skipping probe"
+        )
+        return
+    except Exception as exc:  # noqa: BLE001
+        warn(f"ollama warm-pool: host resolution failed: {type(exc).__name__}: {exc}")
+        return
+
+    # 2. Probe /api/ps with a short timeout. Cold-state is the common
+    #    case; surface the remediation hint so users can pre-warm before
+    #    a long eval run.
+    try:
+        url = f"{base}/api/ps"
+        req = urllib.request.Request(url)  # noqa: S310 — localhost-validated above
+        with urllib.request.urlopen(req, timeout=1.0) as resp:  # noqa: S310
+            body = resp.read()
+        parsed = _json.loads(body.decode("utf-8"))
+        models = parsed.get("models") or []
+        match = next(
+            (
+                m
+                for m in models
+                if isinstance(m, dict)
+                and "llama3.2:3b" in str(m.get("name") or m.get("model") or "")
+            ),
+            None,
+        )
+        if match is None:
+            warn(
+                "ollama warm-pool: llama3.2:3b NOT loaded — first HyDE call "
+                "will pay 10–30s cold-start. Pre-warm: ollama run llama3.2:3b ''"
+            )
+        else:
+            expires_at = match.get("expires_at", "(unset)")
+            ok(f"ollama warm-pool: llama3.2:3b loaded (expires_at={expires_at})")
+    except Exception as exc:  # noqa: BLE001
+        warn(f"ollama warm-pool probe failed: {type(exc).__name__}: {exc}")
+
+
 def _render_coderag_panel() -> None:
     """Render the coderag bench panel (Plan 15-D Task D2).
 
@@ -929,6 +1016,14 @@ def run_doctor(*, redact_secrets: bool = True) -> int:
     # Subagent reachability and the Filtered-dense / Installed clients
     # sections per 15-D-PLAN insertion-order spec.
     _render_coderag_panel()
+
+    # ── Section 2i-ter: Ollama warm-pool panel (Phase 17 Plan D) ─────────
+    # Read-only panel — NEVER flips exit code (D-DOCTOR-04 invariant).
+    # Conditional render — fires ONLY when ``retrieval == "tuned_hybrid_hyde"``
+    # so default users never see it. Surfaces ``llama3.2:3b`` warm/cold
+    # state via ``/api/ps`` to complement Plan 17-C's per-request
+    # ``keep_alive=-1`` (T-17-02 belt-and-suspenders).
+    _render_ollama_warmpool_panel(cfg)
 
     # ── Section 2j: Filtered-dense backend (Phase 11 D-CS-02) ────────────
     # Read-only one-line panel — NEVER flips exit code (mirrors Plan 08.1
