@@ -49,6 +49,7 @@ tuned_hybrid = "supamem.retrieval.tuned_hybrid:TunedHybridBackend"
 dense = "supamem.retrieval.dense:DenseBackend"
 bm25 = "supamem.retrieval.bm25:BM25Backend"
 filtered_dense = "supamem.retrieval.filtered_dense:FilteredDenseBackend"
+tuned_hybrid_hyde = "supamem.retrieval.tuned_hybrid_hyde:TunedHybridHyDEBackend"
 
 [project.entry-points."supamem.embedder"]
 minilm = "supamem.embedders.minilm:MiniLMEmbedder"
