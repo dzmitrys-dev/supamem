@@ -15,6 +15,7 @@ count of upserted Qdrant points.
 """
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -43,6 +44,20 @@ _DENSE_VECTOR_NAME = "dense"
 _SPARSE_VECTOR_NAME = "sparse"
 _DEFAULT_VECTOR_SIZE = 384
 _UPSERT_BATCH = 64
+
+
+def chunk_id_for(doc_id: str, chunk_text: str) -> str:
+    """Deterministic per-chunk identifier (D-METRIC-03 + 17-RESEARCH Q-1).
+
+    Format: ``{doc_id}#{sha1(chunk_text)[:12]}``. Same (doc_id, chunk_text)
+    yields identical chunk_id across runs — required for chunk-level recall
+    scoring (Phase 17 Plan A). 12 hex chars ≈ 48 bits of entropy, ample for
+    intra-doc chunk uniqueness without bloating payload size.
+
+    Anti-pattern: do NOT conflate with the sequential ``point_id`` integer
+    used as Qdrant primary key — those are NOT stable across re-ingest.
+    """
+    return f"{doc_id}#{hashlib.sha1(chunk_text.encode()).hexdigest()[:12]}"
 
 
 def coderag_collection_name() -> str:
@@ -209,6 +224,10 @@ def ingest(
                     "document": chunk_text,
                     "file_path": rel,
                     "doc_id": rel,
+                    # Phase 17-A D-METRIC-03: deterministic per-chunk id for
+                    # chunk-level recall scoring. Ingest-time emission only
+                    # — no manifest schema change (RESEARCH Q-1).
+                    "chunk_id": chunk_id_for(rel, chunk_text),
                 },
             )
             batch.append(point)
@@ -229,6 +248,7 @@ __all__ = [
     "CODERAG_COLLECTION",
     "CODERAG_PAYLOAD_INDEX_FIELDS",
     "EVAL_COLLECTION_PREFIX",
+    "chunk_id_for",
     "coderag_collection_name",
     "ensure_indexes",
     "ingest",

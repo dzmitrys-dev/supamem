@@ -56,6 +56,39 @@ def _build_run(qid: str, hits: list) -> dict[str, dict[str, float]]:
     return {qid: run} if run else {}
 
 
+def _hit_chunk_id(hit: Any) -> str | None:
+    """Extract the chunk-level identifier set by Phase 17-A ingest.
+
+    Mirrors :func:`_hit_doc_id` shape. Reads ``payload["chunk_id"]`` with no
+    fallback — chunk_id is REQUIRED post-Phase 17 (D-METRIC-03). Returns
+    None for hits whose payload predates the migration so the runner stays
+    forward-compatible with mixed corpora during the transition.
+    """
+    payload = getattr(hit, "payload", None) or {}
+    return payload.get("chunk_id")
+
+
+def _build_run_chunk(qid: str, hits: list) -> dict[str, dict[str, float]]:
+    """Chunk-level sibling of :func:`_build_run` — does NOT dedup.
+
+    Each distinct ``chunk_id`` gets its own slot in the inner dict, so two
+    hits referencing different chunks of the same file both contribute.
+    Pitfall 4 mitigation: the doc-level path's last-write-wins on doc_id
+    collapses chunk-level signal; this function is the carry path that
+    keeps that signal alive for chunk-level recall scoring.
+    """
+    run: dict[str, float] = {}
+    for hit in hits:
+        cid = _hit_chunk_id(hit)
+        if cid is None:
+            continue
+        # NO doc-level dedup — distinct chunk_ids of the same doc_id all
+        # get separate slots. (Same chunk_id seen twice is degenerate and
+        # last-write-wins is safe per chunk.)
+        run[cid] = float(getattr(hit, "score", 0.0))
+    return {qid: run} if run else {}
+
+
 def _percentile(values: list[float], p: float) -> float | None:
     """numpy.percentile with empty-list short-circuit. Returns None on empty."""
     if not values:
@@ -324,4 +357,12 @@ def _run_coderag(records, backend, *, k: int = DEFAULT_K, **kwargs) -> dict[str,
     )
 
 
-__all__ = ["WARMUP_QUERIES", "DEFAULT_K", "_run_coderag"]
+__all__ = [
+    "DEFAULT_K",
+    "WARMUP_QUERIES",
+    "_build_run",
+    "_build_run_chunk",
+    "_hit_chunk_id",
+    "_hit_doc_id",
+    "_run_coderag",
+]
