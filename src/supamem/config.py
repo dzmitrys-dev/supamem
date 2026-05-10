@@ -120,6 +120,17 @@ class ResolvedConfig:
     # Independent of the MCP transport cap (``mcp_caps_max_preview_chars``);
     # both caps act on the SAME RAW INPUT (``h.text``) — never composed (D-PREV-03).
     retrieval_filtered_dense_preview_chars: int = 240
+    # ── Phase 17 D-HYDE-04 / D-DOCTOR-04 ──────────────────────────────────
+    # Selected retrieval backend name — resolved by ``supamem.retrieval``
+    # entry-point dispatch (see ``supamem.retrieval.load_retrieval``).
+    # TOML key ``retrieval = "<name>"`` under ``[supamem]`` /
+    # ``[tool.supamem]`` is mapped onto this flat field via
+    # ``_apply_section`` (collision with the nested ``retrieval.*`` table
+    # group is resolved by an explicit alias in ``load_config``). Default
+    # ``"tuned_hybrid"`` preserves Phase 16 byte-identical retrieval for
+    # opt-out users (T-17-04 carry-lock). Read by ``doctor`` to gate the
+    # Ollama warm-pool panel (D-HYDE-04 + D-DOCTOR-04).
+    retrieval_name: str = "tuned_hybrid"
 
 
 @dataclass
@@ -160,6 +171,10 @@ class ConfigChain:
     temporal_retention_days: Source = "default"
     # Phase 11 FILT-01.
     retrieval_filtered_dense_preview_chars: Source = "default"
+    # Phase 17 D-HYDE-04 / D-DOCTOR-04 — top-level ``retrieval = "..."``
+    # selector under ``[supamem]`` / ``[tool.supamem]`` (TOML key ``retrieval``
+    # → flat field ``retrieval_name`` via ``_apply_section`` alias).
+    retrieval_name: Source = "default"
 
 
 _LEGACY_ENV: dict[str, str] = {
@@ -286,7 +301,18 @@ def _apply_section(
       future schema additions.
     """
     skip_first_segments = {sub.split(".", 1)[0] for sub, _ in _NESTED_TABLES}
+    # Phase 17 D-HYDE-04 — explicit aliases for TOML keys whose first
+    # segment collides with a nested table prefix (``retrieval`` collides
+    # with the ``retrieval.filtered_dense`` nested group). Scalar value at
+    # the colliding top-level key is routed to a renamed flat field; dict
+    # values pass through to ``_apply_nested``.
+    _SCALAR_ALIASES: dict[str, str] = {"retrieval": "retrieval_name"}
     for key, value in section.items():
+        if key in _SCALAR_ALIASES and not isinstance(value, dict):
+            dst = _SCALAR_ALIASES[key]
+            setattr(cfg, dst, value)
+            setattr(chain, dst, source)
+            continue
         if hasattr(cfg, key) and not isinstance(getattr(cfg, key), dict):
             if key in skip_first_segments:
                 continue
