@@ -33,7 +33,6 @@ from __future__ import annotations
 import importlib
 import importlib.metadata as ilm
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -231,21 +230,19 @@ def epsilon():
     parser = _ts_parser()
     for chunk_idx, chunk in enumerate(chunks):
         tree = parser.parse(chunk.encode("utf-8"))
-
-        def _walk(node) -> None:
-            if node.type in BOUNDARY_TYPES and node.start_byte > 0:
-                # A boundary node starting mid-chunk = straddle.
-                # Allow whitespace-only prefix (start_byte counts bytes from chunk[0]).
-                prefix = chunk.encode("utf-8")[: node.start_byte]
+        # Only inspect TOP-LEVEL children of the chunk's parse — nested
+        # function_definition nodes inside a class_definition are expected
+        # (methods) and do NOT constitute a straddle. The straddle invariant
+        # is "no chunk begins partway through a top-level definition".
+        chunk_bytes = chunk.encode("utf-8")
+        for child in tree.root_node.children:
+            if child.type in BOUNDARY_TYPES and child.start_byte > 0:
+                prefix = chunk_bytes[: child.start_byte]
                 if prefix.strip():
                     raise AssertionError(
-                        f"chunk {chunk_idx} straddles a {node.type} at byte "
-                        f"{node.start_byte}: prefix={prefix!r}"
+                        f"chunk {chunk_idx} straddles a {child.type} at byte "
+                        f"{child.start_byte}: prefix={prefix!r}"
                     )
-            for child in node.children:
-                _walk(child)
-
-        _walk(tree.root_node)
 
 
 # ---------------------------------------------------------------------------

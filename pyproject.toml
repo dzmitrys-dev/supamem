@@ -39,6 +39,7 @@ Issues = "https://github.com/dzmitrys-dev/supamem/issues"
 dev = ["pytest>=8.0", "ruff>=0.6", "pytest-asyncio>=0.24"]
 eval = ["ragas>=0.4,<0.5", "datasets>=2.18", "huggingface_hub>=0.24", "pytrec_eval>=0.5"]
 peers-mem0 = ["mem0ai>=2.0,<3.0", "ollama>=0.4"]
+ast-chunker = ["tree-sitter>=0.23,<0.26", "tree-sitter-python>=0.23,<0.26"]
 
 [project.scripts]
 supamem = "supamem.cli:main"
@@ -56,6 +57,7 @@ bm25 = "supamem.embedders.bm25:BM25Embedder"
 [project.entry-points."supamem.chunker"]
 markdown_header = "supamem.indexer.chunker:chunk_markdown"
 transcript = "supamem.indexer.transcript.chunker:chunk_transcript"
+tree_sitter_code = "supamem.indexer.chunker_tree_sitter:chunk_tree_sitter_python"
 
 # Phase 8 D-CONTRACT-04 — reranker plugin group. Installing third-party
 # `supamem.reranker` packages is equivalent to installing arbitrary Python
