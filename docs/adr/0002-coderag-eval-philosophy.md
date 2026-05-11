@@ -368,6 +368,203 @@ numbers, we do not **gate** on them (D-DEF-04, §5).
 - Reranker (supamem side only): `mixedbread-ai/mxbai-rerank-base-v2` on AMD ROCm 6.4 (`torch==2.9.1+rocm6.4`)
 - Live envelope: `15-MEM0-RUN.json` (gitignored under `.planning/phases/16-coderag-live-numbers-and-auto-queries/`); reconstructable by any maintainer with the SHA chain + commands above
 
+### 9. Phase 17 uplift comparison
+
+Phase 17 measured three opt-in interventions against Phase 16 baseline-3 (default `markdown_header` chunker + `tuned_hybrid` retrieval, rerank-on):
+
+- `ast_on` — `chunker = "tree_sitter_code"` (Python AST-aware chunking; plan 17-E, envelope `17-E-LIVE.json`).
+- `hyde_on` — `retrieval = "tuned_hybrid_hyde"` (HyDE query expansion via local Ollama `llama3.2:3b`; plan 17-F, envelope `17-F-LIVE.json`).
+- `ast_plus_hyde` — both opt-ins simultaneously (plan 17-G, envelope `17-G-LIVE.json`).
+
+Each sub-table below mirrors §8's column shape verbatim (`metric / supamem / mem0 / delta / ci_lower / ci_upper / qualitative`) so the regex parser is shared across the Phase 16 floors test (`tests/test_adr_phase16_floors.py`) and the Phase 17 uplift test (`tests/test_adr_phase17_uplift.py`). The intervention identity is encoded in the `### default vs <intervention>` sub-heading, not in the column header — that's why `mem0` stays as the second column header even though the data in that column is the §9 intervention's value, not mem0. The `supamem` column holds Phase 16 baseline-3 values (default config); the second value column holds the §9 intervention's value. Sign convention rotates for §9: `samples_a = intervention_metric`, `samples_b = baseline_3_metric`, so **positive delta = intervention is better** than baseline-3 on that `(metric, axis, col)` cell.
+
+Confidence intervals come from `paired_bootstrap_delta` (`src/supamem/eval/coderag/metrics.py:54-99`, `n_resamples = 10000`, `seed = 42`, percentile 95% CI) — the same Phase 16 G2 helper reused unchanged.
+
+**Caveat — per-query data not preserved in v1 envelopes.** The Phase 16-E and Phase 17 LIVE envelopes record per-axis × per-column metric *means* only; `envelope.scores.<axis>.<col>` is a flat aggregate with no per-query array attached. The §9 paired-bootstrap call therefore operates on constant-mean reconstructed arrays of length `n = len(qrels)` per `(axis, col)` (reverse-engineered from `recall_at_1 = k/n` rationals: `code_fact.supamem_only` n=242, `fastapi_only` n=4722, `combined` n=1151, `decision_rationale` n=2). With zero within-cell variance the percentile CI collapses to `[delta, delta]`; the `delta` cell itself is exact, but `ci_lower` / `ci_upper` cells **do not reflect query-level uncertainty** at the resolution a live per-query bootstrap would produce. A future envelope-schema bump (preserve `envelope.per_query.<axis>.<col>.<metric>` arrays) lets the same `paired_bootstrap_delta` call produce real CIs without any change to §9's structure. The qualitative tag is computed from the CI as-rendered: `win` if `ci_lower > 0`, `loss` if `ci_upper < 0`, else `tie`.
+
+**Unified verdict.** AST-only (plan 17-E) is the only Phase 17 configuration that stays under the §3 / D-LAT-01 hard p95 ceiling of 5000 ms on **all five** `(axis, col)` cells (max observed p95 = 4790 ms on `decision_rationale.supamem_only`); it also produces the largest `code_fact.combined.ndcg_at_10` lift (+0.2265 vs baseline-3). HyDE-bearing configurations (17-F HyDE-only and 17-G AST+HyDE) saturate Track B's `decision_rationale.supamem_only.recall_at_1` reading (0.0 → 0.5, exactly at threshold) but violate D-LAT-01 on **4 of 5** cells (max p95 = 6069 ms on 17-F, 6046 ms on 17-G). HyDE alone (17-F) additionally regresses `code_fact.combined.mrr` from 1.000 to 0.750 — a user-felt drift because the decision-rationale-shaped prompt rewrites code-fact queries off-target. AST + HyDE (17-G) rescues that MRR back to 1.000 (function-level AST boundaries help the reranker discriminate after HyDE prompt drift) but inherits HyDE's full latency penalty. Per D-LAT-01: ceiling violation on any cell forecloses default-flip; **AST is the only default-flip-viable configuration in v0.3.0a7, and HyDE-bearing configurations remain opt-in-only**, gated on a future v0.4 phase that delivers an explicit cross-encoder fast-path or Ollama-side latency reduction.
+
+**Footnote — combined-config GPU instability.** The first 17-G attempt (AST re-ingest + HyDE-rewritten queries running through the ROCm reranker pass) triggered an AMD `HW Exception … GPU Hang` on the 8th reranker batch; the eval process swallowed the error and exited 0 without writing JSON. Recovered by GPU driver self-reset + Ollama re-warm + retry without `--reingest-coderag` (the AST corpus was already populated from 17-E). Full diagnosis in `.claude/insights/coderag-eval-rocm.md`; a follow-up plan should make the eval runner re-raise reranker exceptions or write `incomplete: true` envelopes instead of silently succeeding.
+
+**Known limitation — `recall_at_*_chunk` cells.** All three Phase 17 runs report `recall_at_*_chunk = null` across all cells despite plan 17-A wiring the envelope keys; the chunk-level gold-set derivation either did not fire or produced empty sets. Doc-level recall remains the gated signal (Req-06 preserved) and §9 omits chunk-level rows. The chunker-granularity caveat from §8 still applies to readers comparing Phase 17 numbers to mem0 peer numbers across phases.
+
+**Small-N caveat on `decision_rationale`.** The `decision_rationale` axis has only n=2 supamem-only queries at the v1 corpus pin; even a real per-query bootstrap on this axis would produce CIs that should be read as directional signals rather than confident effect sizes. The Track B saturation reading (`recall_at_1` 0.0 → 0.5) is a single-query flip; readers should not extrapolate from it to a general HyDE win on rationale-shaped queries.
+
+### default vs ast_on
+
+#### code_fact axis — supamem_only column
+
+| metric         | supamem | mem0    | delta   | ci_lower | ci_upper | qualitative |
+|----------------|--------:|--------:|--------:|---------:|---------:|:-----------:|
+| `recall_at_1`  |  0.0041 |  0.0041 | +0.0000 |  +0.0000 |  +0.0000 |    tie    |
+| `recall_at_5`  |  0.0209 |  0.0209 | +0.0000 |  +0.0000 |  +0.0000 |    tie    |
+| `recall_at_10` |  0.0374 |  0.0291 | -0.0083 |  -0.0083 |  -0.0083 |   loss    |
+| `recall_at_20` |  0.0374 |  0.0291 | -0.0083 |  -0.0083 |  -0.0083 |   loss    |
+| `mrr`          |  0.6667 |  0.6667 | +0.0000 |  +0.0000 |  +0.0000 |    tie    |
+| `ndcg_at_10`   |  0.5232 |  0.4554 | -0.0678 |  -0.0678 |  -0.0678 |   loss    |
+
+#### code_fact axis — fastapi_only column
+
+| metric         | supamem | mem0    | delta   | ci_lower | ci_upper | qualitative |
+|----------------|--------:|--------:|--------:|---------:|---------:|:-----------:|
+| `recall_at_1`  |  0.0002 |  0.0002 | +0.0000 |  +0.0000 |  +0.0000 |    tie    |
+| `recall_at_5`  |  0.0011 |  0.0011 | +0.0000 |  +0.0000 |  +0.0000 |    tie    |
+| `recall_at_10` |  0.0017 |  0.0019 | +0.0002 |  +0.0002 |  +0.0002 |    win    |
+| `recall_at_20` |  0.0017 |  0.0019 | +0.0002 |  +0.0002 |  +0.0002 |    win    |
+| `mrr`          |  0.5000 |  0.5000 | +0.0000 |  +0.0000 |  +0.0000 |    tie    |
+| `ndcg_at_10`   |  0.4351 |  0.4682 | +0.0331 |  +0.0331 |  +0.0331 |    win    |
+
+#### code_fact axis — combined column
+
+| metric         | supamem | mem0    | delta   | ci_lower | ci_upper | qualitative |
+|----------------|--------:|--------:|--------:|---------:|---------:|:-----------:|
+| `recall_at_1`  |  0.0043 |  0.0043 | +0.0000 |  +0.0000 |  +0.0000 |    tie    |
+| `recall_at_5`  |  0.0211 |  0.0215 | +0.0004 |  +0.0004 |  +0.0004 |    win    |
+| `recall_at_10` |  0.0254 |  0.0304 | +0.0050 |  +0.0050 |  +0.0050 |    win    |
+| `recall_at_20` |  0.0254 |  0.0304 | +0.0050 |  +0.0050 |  +0.0050 |    win    |
+| `mrr`          |  1.0000 |  1.0000 | +0.0000 |  +0.0000 |  +0.0000 |    tie    |
+| `ndcg_at_10`   |  0.5603 |  0.7868 | +0.2265 |  +0.2265 |  +0.2265 |    win    |
+
+#### decision_rationale axis — supamem_only column
+
+| metric         | supamem | mem0    | delta   | ci_lower | ci_upper | qualitative |
+|----------------|--------:|--------:|--------:|---------:|---------:|:-----------:|
+| `recall_at_1`  |  0.0000 |  0.5000 | +0.5000 |  +0.5000 |  +0.5000 |    win    |
+| `recall_at_5`  |  0.5000 |  1.0000 | +0.5000 |  +0.5000 |  +0.5000 |    win    |
+| `recall_at_10` |  0.5000 |  1.0000 | +0.5000 |  +0.5000 |  +0.5000 |    win    |
+| `recall_at_20` |  0.5000 |  1.0000 | +0.5000 |  +0.5000 |  +0.5000 |    win    |
+| `mrr`          |  0.1667 |  0.7500 | +0.5833 |  +0.5833 |  +0.5833 |    win    |
+| `ndcg_at_10`   |  0.2500 |  0.8155 | +0.5655 |  +0.5655 |  +0.5655 |    win    |
+
+#### decision_rationale axis — combined column
+
+| metric         | supamem | mem0    | delta   | ci_lower | ci_upper | qualitative |
+|----------------|--------:|--------:|--------:|---------:|---------:|:-----------:|
+| `recall_at_1`  |  0.0000 |  0.5000 | +0.5000 |  +0.5000 |  +0.5000 |    win    |
+| `recall_at_5`  |  0.5000 |  1.0000 | +0.5000 |  +0.5000 |  +0.5000 |    win    |
+| `recall_at_10` |  0.5000 |  1.0000 | +0.5000 |  +0.5000 |  +0.5000 |    win    |
+| `recall_at_20` |  0.5000 |  1.0000 | +0.5000 |  +0.5000 |  +0.5000 |    win    |
+| `mrr`          |  0.1667 |  0.7500 | +0.5833 |  +0.5833 |  +0.5833 |    win    |
+| `ndcg_at_10`   |  0.2500 |  0.8155 | +0.5655 |  +0.5655 |  +0.5655 |    win    |
+
+
+### default vs hyde_on
+
+#### code_fact axis — supamem_only column
+
+| metric         | supamem | mem0    | delta   | ci_lower | ci_upper | qualitative |
+|----------------|--------:|--------:|--------:|---------:|---------:|:-----------:|
+| `recall_at_1`  |  0.0041 |  0.0041 | +0.0000 |  +0.0000 |  +0.0000 |    tie    |
+| `recall_at_5`  |  0.0209 |  0.0207 | -0.0002 |  -0.0002 |  -0.0002 |   loss    |
+| `recall_at_10` |  0.0374 |  0.0289 | -0.0085 |  -0.0085 |  -0.0085 |   loss    |
+| `recall_at_20` |  0.0374 |  0.0289 | -0.0085 |  -0.0085 |  -0.0085 |   loss    |
+| `mrr`          |  0.6667 |  0.5000 | -0.1667 |  -0.1667 |  -0.1667 |   loss    |
+| `ndcg_at_10`   |  0.5232 |  0.4003 | -0.1229 |  -0.1229 |  -0.1229 |   loss    |
+
+#### code_fact axis — fastapi_only column
+
+| metric         | supamem | mem0    | delta   | ci_lower | ci_upper | qualitative |
+|----------------|--------:|--------:|--------:|---------:|---------:|:-----------:|
+| `recall_at_1`  |  0.0002 |  0.0002 | +0.0000 |  +0.0000 |  +0.0000 |    tie    |
+| `recall_at_5`  |  0.0011 |  0.0011 | +0.0000 |  +0.0000 |  +0.0000 |    tie    |
+| `recall_at_10` |  0.0017 |  0.0019 | +0.0002 |  +0.0002 |  +0.0002 |    win    |
+| `recall_at_20` |  0.0017 |  0.0019 | +0.0002 |  +0.0002 |  +0.0002 |    win    |
+| `mrr`          |  0.5000 |  0.5000 | +0.0000 |  +0.0000 |  +0.0000 |    tie    |
+| `ndcg_at_10`   |  0.4351 |  0.4682 | +0.0331 |  +0.0331 |  +0.0331 |    win    |
+
+#### code_fact axis — combined column
+
+| metric         | supamem | mem0    | delta   | ci_lower | ci_upper | qualitative |
+|----------------|--------:|--------:|--------:|---------:|---------:|:-----------:|
+| `recall_at_1`  |  0.0043 |  0.0041 | -0.0002 |  -0.0002 |  -0.0002 |   loss    |
+| `recall_at_5`  |  0.0211 |  0.0213 | +0.0002 |  +0.0002 |  +0.0002 |    win    |
+| `recall_at_10` |  0.0254 |  0.0298 | +0.0043 |  +0.0043 |  +0.0043 |    win    |
+| `recall_at_20` |  0.0254 |  0.0298 | +0.0043 |  +0.0043 |  +0.0043 |    win    |
+| `mrr`          |  1.0000 |  0.7500 | -0.2500 |  -0.2500 |  -0.2500 |   loss    |
+| `ndcg_at_10`   |  0.5603 |  0.5964 | +0.0361 |  +0.0361 |  +0.0361 |    win    |
+
+#### decision_rationale axis — supamem_only column
+
+| metric         | supamem | mem0    | delta   | ci_lower | ci_upper | qualitative |
+|----------------|--------:|--------:|--------:|---------:|---------:|:-----------:|
+| `recall_at_1`  |  0.0000 |  0.5000 | +0.5000 |  +0.5000 |  +0.5000 |    win    |
+| `recall_at_5`  |  0.5000 |  1.0000 | +0.5000 |  +0.5000 |  +0.5000 |    win    |
+| `recall_at_10` |  0.5000 |  1.0000 | +0.5000 |  +0.5000 |  +0.5000 |    win    |
+| `recall_at_20` |  0.5000 |  1.0000 | +0.5000 |  +0.5000 |  +0.5000 |    win    |
+| `mrr`          |  0.1667 |  0.7500 | +0.5833 |  +0.5833 |  +0.5833 |    win    |
+| `ndcg_at_10`   |  0.2500 |  0.8155 | +0.5655 |  +0.5655 |  +0.5655 |    win    |
+
+#### decision_rationale axis — combined column
+
+| metric         | supamem | mem0    | delta   | ci_lower | ci_upper | qualitative |
+|----------------|--------:|--------:|--------:|---------:|---------:|:-----------:|
+| `recall_at_1`  |  0.0000 |  0.5000 | +0.5000 |  +0.5000 |  +0.5000 |    win    |
+| `recall_at_5`  |  0.5000 |  1.0000 | +0.5000 |  +0.5000 |  +0.5000 |    win    |
+| `recall_at_10` |  0.5000 |  1.0000 | +0.5000 |  +0.5000 |  +0.5000 |    win    |
+| `recall_at_20` |  0.5000 |  1.0000 | +0.5000 |  +0.5000 |  +0.5000 |    win    |
+| `mrr`          |  0.1667 |  0.7500 | +0.5833 |  +0.5833 |  +0.5833 |    win    |
+| `ndcg_at_10`   |  0.2500 |  0.8155 | +0.5655 |  +0.5655 |  +0.5655 |    win    |
+
+
+### default vs ast_plus_hyde
+
+#### code_fact axis — supamem_only column
+
+| metric         | supamem | mem0    | delta   | ci_lower | ci_upper | qualitative |
+|----------------|--------:|--------:|--------:|---------:|---------:|:-----------:|
+| `recall_at_1`  |  0.0041 |  0.0041 | +0.0000 |  +0.0000 |  +0.0000 |    tie    |
+| `recall_at_5`  |  0.0209 |  0.0207 | -0.0002 |  -0.0002 |  -0.0002 |   loss    |
+| `recall_at_10` |  0.0374 |  0.0289 | -0.0085 |  -0.0085 |  -0.0085 |   loss    |
+| `recall_at_20` |  0.0374 |  0.0289 | -0.0085 |  -0.0085 |  -0.0085 |   loss    |
+| `mrr`          |  0.6667 |  0.5000 | -0.1667 |  -0.1667 |  -0.1667 |   loss    |
+| `ndcg_at_10`   |  0.5232 |  0.4003 | -0.1229 |  -0.1229 |  -0.1229 |   loss    |
+
+#### code_fact axis — fastapi_only column
+
+| metric         | supamem | mem0    | delta   | ci_lower | ci_upper | qualitative |
+|----------------|--------:|--------:|--------:|---------:|---------:|:-----------:|
+| `recall_at_1`  |  0.0002 |  0.0002 | +0.0000 |  +0.0000 |  +0.0000 |    tie    |
+| `recall_at_5`  |  0.0011 |  0.0011 | +0.0000 |  +0.0000 |  +0.0000 |    tie    |
+| `recall_at_10` |  0.0017 |  0.0019 | +0.0002 |  +0.0002 |  +0.0002 |    win    |
+| `recall_at_20` |  0.0017 |  0.0019 | +0.0002 |  +0.0002 |  +0.0002 |    win    |
+| `mrr`          |  0.5000 |  0.5000 | +0.0000 |  +0.0000 |  +0.0000 |    tie    |
+| `ndcg_at_10`   |  0.4351 |  0.4682 | +0.0331 |  +0.0331 |  +0.0331 |    win    |
+
+#### code_fact axis — combined column
+
+| metric         | supamem | mem0    | delta   | ci_lower | ci_upper | qualitative |
+|----------------|--------:|--------:|--------:|---------:|---------:|:-----------:|
+| `recall_at_1`  |  0.0043 |  0.0043 | +0.0000 |  +0.0000 |  +0.0000 |    tie    |
+| `recall_at_5`  |  0.0211 |  0.0215 | +0.0004 |  +0.0004 |  +0.0004 |    win    |
+| `recall_at_10` |  0.0254 |  0.0298 | +0.0043 |  +0.0043 |  +0.0043 |    win    |
+| `recall_at_20` |  0.0254 |  0.0298 | +0.0043 |  +0.0043 |  +0.0043 |    win    |
+| `mrr`          |  1.0000 |  1.0000 | +0.0000 |  +0.0000 |  +0.0000 |    tie    |
+| `ndcg_at_10`   |  0.5603 |  0.6698 | +0.1095 |  +0.1095 |  +0.1095 |    win    |
+
+#### decision_rationale axis — supamem_only column
+
+| metric         | supamem | mem0    | delta   | ci_lower | ci_upper | qualitative |
+|----------------|--------:|--------:|--------:|---------:|---------:|:-----------:|
+| `recall_at_1`  |  0.0000 |  0.5000 | +0.5000 |  +0.5000 |  +0.5000 |    win    |
+| `recall_at_5`  |  0.5000 |  1.0000 | +0.5000 |  +0.5000 |  +0.5000 |    win    |
+| `recall_at_10` |  0.5000 |  1.0000 | +0.5000 |  +0.5000 |  +0.5000 |    win    |
+| `recall_at_20` |  0.5000 |  1.0000 | +0.5000 |  +0.5000 |  +0.5000 |    win    |
+| `mrr`          |  0.1667 |  0.7500 | +0.5833 |  +0.5833 |  +0.5833 |    win    |
+| `ndcg_at_10`   |  0.2500 |  0.8155 | +0.5655 |  +0.5655 |  +0.5655 |    win    |
+
+#### decision_rationale axis — combined column
+
+| metric         | supamem | mem0    | delta   | ci_lower | ci_upper | qualitative |
+|----------------|--------:|--------:|--------:|---------:|---------:|:-----------:|
+| `recall_at_1`  |  0.0000 |  0.5000 | +0.5000 |  +0.5000 |  +0.5000 |    win    |
+| `recall_at_5`  |  0.5000 |  1.0000 | +0.5000 |  +0.5000 |  +0.5000 |    win    |
+| `recall_at_10` |  0.5000 |  1.0000 | +0.5000 |  +0.5000 |  +0.5000 |    win    |
+| `recall_at_20` |  0.5000 |  1.0000 | +0.5000 |  +0.5000 |  +0.5000 |    win    |
+| `mrr`          |  0.1667 |  0.7500 | +0.5833 |  +0.5833 |  +0.5833 |    win    |
+| `ndcg_at_10`   |  0.2500 |  0.8155 | +0.5655 |  +0.5655 |  +0.5655 |    win    |
+
+
+
 ## Consequences
 
 - **(Positive)** Phase 13 ships when `supamem eval --suite coderag --full`
