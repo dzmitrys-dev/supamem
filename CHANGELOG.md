@@ -2,6 +2,148 @@
 
 All notable changes to `supamem` will be documented in this file.
 
+## [0.3.0a7] — 2026-05-11 — AST chunker + HyDE retrieval (opt-in plugins) + ADR §9 uplift (Phase 17)
+
+Phase 17 ships two **opt-in** retrieval-stack plugins (AST chunker for
+Python, HyDE-style query expansion via local Ollama) plus a chunk-level
+recall metric, an Ollama warm-pool doctor panel, and ADR-0002 §9 — the
+paired-bootstrap uplift comparison vs the Phase 16 baseline-3. **Defaults
+are unchanged in the 0.3.x line.** Default-flip is gated on v0.4 per
+**D-LAT-01** (the new HyDE retrieval violates the 5000 ms p95 hard
+ceiling on 4/5 cells against the live corpus; AST chunker stays inside
+the ceiling but the recall lift is modest).
+
+### Added
+
+- **`tree_sitter_code` AST chunker plugin (opt-in, Python only) (Req-02).**
+  Registered under the existing `supamem.chunker` entry-point group
+  alongside `markdown_header` and `transcript`:
+  `tree_sitter_code = "supamem.indexer.chunker_tree_sitter:chunk_tree_sitter_python"`.
+  Function-style entry mirrors `chunk_markdown`. Installed only when the
+  user opts in via the new optional extra `pip install supamem[ast-chunker]`
+  (`tree-sitter>=0.23,<0.26`, `tree-sitter-python>=0.23,<0.26`). Token
+  budget enforced via `fastembed.TextEmbedding.token_count` (matches the
+  MiniLM tokenizer used downstream). Parse errors fall back to
+  `chunk_markdown` with an `err_console` warning per D-AST-03 — never
+  raises into the indexer hot loop. When the extra is missing and a user
+  has set `chunker = "tree_sitter_code"`, the lazy import raises a
+  `RuntimeError` naming the fix command (`pip install supamem[ast-chunker]`)
+  per D-PKG-02 — silent fallback would hide the misconfiguration. Cited
+  Plan 17-B.
+- **`tuned_hybrid_hyde` retrieval plugin (opt-in, Ollama-backed) (Req-03).**
+  Registered under `supamem.retrieval` next to `tuned_hybrid` /
+  `filtered_dense` / `dense` / `bm25`. Composition-over-inheritance —
+  `self._inner = TunedHybridBackend(config=config)` keeps the
+  `tuned_hybrid.py` backend byte-identical. Per query: POST to
+  `<localhost-ollama>/api/generate` with the locked HyDE prompt
+  (`Write a 3-5 sentence decision rationale that would answer this question, as if extracted from an ADR or code comment. Be specific and technical.` per D-HYDE-01),
+  `keep_alive=-1` (warm-pool retention per D-HYDE-04, RESEARCH Pitfall 2),
+  600 ms timeout with one retry, fall back to original query text on any
+  failure (D-HYDE-03) and emit an `err_console` warning. Localhost-only
+  guard reused from `supamem.eval.judge._resolve_ollama_host`
+  (`SystemExit(2)` on non-localhost — inherits D-07). Latency telemetry
+  via `stats.counter.bump("hyde", "hyde_latency_ms", 0, elapsed_ms)`.
+  Cited Plan 17-C.
+- **Chunk-level recall metric + `payload.chunk_id` envelope key (Req-01).**
+  Coderag eval envelopes now carry `recall_at_1_chunk` / `recall_at_5_chunk`
+  / `recall_at_10_chunk` / `recall_at_20_chunk` siblings beside the
+  existing doc-level keys. `payload.chunk_id` is set ONLY by the coderag
+  bench ingest path (`supamem.eval.coderag.ingest`) — deterministic
+  `<rel_path>#<sha1(text)[:12]>`. New `_build_run_chunk` sibling does NOT
+  dedup on duplicate doc_ids (Pitfall 4 — Phase 16's `_build_run`
+  collapsed chunks of the same file to one row, hiding the very signal
+  chunk-level recall is supposed to expose). Doc-level path stays
+  byte-identical — Phase 16 floors test re-runs green (Req-06). Cited
+  Plan 17-A.
+- **Ollama warm-pool diagnostic panel in `supamem doctor` (Req-04 mitigation).**
+  Fires only when `retrieval.backend = "tuned_hybrid_hyde"` is configured.
+  Probes `/api/ps` with a 1s timeout; surfaces loaded model + load
+  duration. Read-only — NEVER raises, NEVER flips the doctor exit code
+  per D-DOCTOR-04. Same localhost guard as the HyDE retrieval backend.
+  Cited Plan 17-D.
+- **ADR-0002 §9 — "Phase 17 uplift comparison" (Req-07).** Three sibling
+  sub-tables (`### default vs ast_on`, `### default vs hyde_on`,
+  `### default vs ast_plus_hyde`) carrying paired-bootstrap deltas of
+  the three Wave-3 LIVE envelopes against the Phase 16 baseline-3 LIVE
+  envelope, parser-locked by `tests/test_adr_phase17_uplift.py` (mirrors
+  the Phase 16 §8 ADR-as-test pattern). Reuses `paired_bootstrap_delta`
+  unchanged. Cited Plan 17-H.
+- **`--reingest-coderag` CLI flag on `supamem eval --suite coderag`
+  (Req-09 / G5 wiring).** Default OFF — Phase 16 baseline byte-identical
+  replay path preserved when the flag is absent. When ON: drops the
+  `supamem_eval_coderag` collection and rebuilds it via the
+  `supamem.chunker` entry-point keyed on `cfg.chunker` (e.g.
+  `tree_sitter_code`) BEFORE scoring. The same flag also dispatches the
+  retrieval backend by `cfg.retrieval` (e.g. `tuned_hybrid_hyde`) so a
+  single CLI invocation drives both interventions end-to-end. Cited
+  Plan 17-B2.
+- **Three Wave-3 LIVE coderag envelopes (Req-05/06).** `17-E-LIVE.json`
+  (AST-only), `17-F-LIVE.json` (HyDE-only), `17-G-LIVE.json` (AST + HyDE
+  combined) — produced against the live 21,235-chunk corpus with
+  `--reingest-coderag` and re-rank ON. Anchor the ADR §9 deltas.
+
+### Changed
+
+- **HyDE retrieval verdict — opt-in only; defaults UNCHANGED (D-LAT-01).**
+  HyDE meets the Track B recall goal exactly at threshold
+  (`decision_rationale.supamem_only.recall_at_1` 0.000 → 0.500) but
+  **violates the D-LAT-01 hard ceiling on 4/5 cells** (max measured p95
+  6069 ms on `decision_rationale.supamem_only`, vs the 5000 ms ceiling
+  set in v0.3.0a6) AND the Req-04 per-cell budget on 5/5 cells (max
+  delta +2270 ms). HyDE rewrites also produce a **−0.25 MRR regression
+  on the `code_fact` axis** that users would feel — the one-size-fits-all
+  prompt over-steers code-fact queries. HyDE stays opt-in only in
+  v0.3.0a7; no default-flip path. Phase 18 follow-up — selectivity
+  gating by axis. Cited Plans 17-F, 17-G, 17-H.
+- **AST chunker verdict — opt-in only; defaults UNCHANGED.** AST chunker
+  stays under the D-LAT-01 ceiling on all cells; modest recall lift
+  (`code_fact.combined.recall_at_10` +0.005, `ndcg_at_10` +0.227;
+  `decision_rationale.supamem_only.recall_at_10` +0.500 on small N).
+  Default-flip is gated on v0.4 — 0.3.x defaults preserved so the
+  Phase 16 byte-identical replay path stays the released-and-locked
+  baseline. Cited Plan 17-E.
+- **Combined (AST + HyDE) verdict.** Same latency violation as HyDE-only
+  (the HyDE leg dominates the p95). Combined rescues `code_fact.combined`
+  MRR vs HyDE-alone (back to 0.000 delta, no regression) but does NOT
+  fix the hard-ceiling violation. Opt-in only. Cited Plan 17-G.
+
+### Known caveats (disclosed honestly per supamem discipline)
+
+- **ADR §9 paired-bootstrap CIs collapse to `[delta, delta]`.** The
+  v1 LIVE envelope schema records per-cell means only — no
+  `per_query.<axis>.<col>.<metric>` arrays. The §9 §8-shaped tables
+  therefore call `paired_bootstrap_delta(samples_a, samples_b)` with
+  constant-mean arrays of length `n = len(qrels)`, which produces an
+  exact `delta` but a degenerate `[delta, delta]` CI. Qualitative tag
+  (`win` / `tie` / `loss`) reads from the CI sign. **Delta values are
+  exact; CI bounds do NOT reflect query-level uncertainty.** A future
+  envelope-schema bump (preserve per-query arrays) unlocks real CIs
+  through the same call site with no §9 structural change. Surfaced
+  explicitly in §9's intro paragraph and `17-H-SUMMARY.md`.
+- **`recall_at_*_chunk` null across 17-E/F/G.** Common gold-chunk
+  derivation gap — Plan 17-A wired the envelope keys but the derivation
+  either didn't fire or produced empty sets. §9 omits chunk-level rows;
+  doc-level recall remains the gated signal per Req-06. Follow-up:
+  investigate `coderag/runner.py` chunk-gold path before any future
+  §9-style write-up.
+
+### Internal
+
+- **Phase 14 + 15 + 16 byte-identical regression locks preserved.**
+  `_run_goldens_legacy` (D-VEND-04) and `src/supamem/retrieval/filters.py`
+  (D-QGEN-06; `repo`, `axis`, `session_id` all remain pass-through with
+  ZERO new branches) still byte-identical after every Phase 17 commit.
+  The Phase 17 §9 append to `docs/adr/0002-coderag-eval-philosophy.md`
+  leaves §§1-8 verbatim — the Phase 16 floors test (§7 + §8) still
+  parses green.
+- **New optional extra `[ast-chunker]`** is opt-in by construction —
+  users who never set `chunker = "tree_sitter_code"` and never set
+  `retrieval.backend = "tuned_hybrid_hyde"` see zero behavior change and
+  pay zero import cost (lazy plugin discovery).
+- **5-README lockstep + bumped `synced-with` SHA** per AGENTS.md.
+  `tests/test_readme_translations_phase17.py` is the new sibling
+  regression mirroring `_phase16.py`.
+
 ## [0.3.0a6] — 2026-05-09 — CodeRAG live numbers + mem0 head-to-head (Phase 16)
 
 ### Added
