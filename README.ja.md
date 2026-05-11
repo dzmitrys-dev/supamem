@@ -1,6 +1,6 @@
 **言語:** [English](README.md) · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [日本語](README.ja.md) · [Русский](README.ru.md)
 
-<!-- synced-with: README.md @ 7c5b4ad -->
+<!-- synced-with: README.md @ 0a99bb7 -->
 
 > この翻訳は AI 支援によるものです。ネイティブスピーカーによる修正 PR を歓迎します。
 
