@@ -682,6 +682,49 @@ axis × колонка × метрика (соглашение знака `mem0_
 [ADR-0002 §8](docs/adr/0002-coderag-eval-philosophy.md#8-mem0-peer-comparison-d-peer-04-live-phase-16-e-head-to-head).
 Установка: `pip install supamem[peers-mem0]`.
 
+**AST-чанкер + HyDE-ретривал (опциональные плагины; v0.3.0a7+).**
+Phase 17 поставляет два **opt-in** плагина для retrieval-стека плюс
+chunk-уровневую метрику recall и ADR-0002 §9 — paired-bootstrap
+сравнение прироста относительно Phase 16 baseline-3. **Дефолты в
+линии 0.3.x не меняются; смена дефолта зашлюзована до v0.4 согласно
+D-LAT-01.**
+
+- Плагин-чанкер `tree_sitter_code` — зарегистрирован в группе
+  `supamem.chunker` рядом с `markdown_header` и `transcript`. Opt-in
+  через `pip install supamem[ast-chunker]`. В v1 только Python.
+  Ошибки парсинга приводят к fallback на `chunk_markdown` с
+  предупреждением в `err_console`. Прирост recall скромный; остаётся
+  внутри потолка D-LAT-01 по латентности.
+- Плагин-ретривал `tuned_hybrid_hyde` — зарегистрирован в
+  `supamem.retrieval`. Композиция вместо наследования: оборачивает
+  `TunedHybridBackend` (тот остаётся байт-в-байт идентичным).
+  Localhost-only Ollama-переписыватель запросов (`/api/generate`,
+  `keep_alive=-1` для удержания warm-pool, таймаут 600 мс + 1 повтор,
+  fallback на исходный запрос при любой ошибке). Вердикт: ровно
+  достигает цель Track B `decision_rationale.supamem_only.recall_at_1 ≥ 0.5`,
+  но **нарушает жёсткий потолок p95 5000 мс на 4 из 5 ячеек
+  (максимум 6069 мс)** и даёт регрессию MRR −0.25 по `code_fact`. Только
+  opt-in; пути смены дефолта нет; продолжение в Phase 18 = селективное
+  гейтирование по axis.
+- Chunk-уровневая метрика recall + bench-only `payload.chunk_id` —
+  ключи `recall_at_*_chunk` как сиблинги doc-уровневых; новый
+  `_build_run_chunk` НЕ дедуплицирует повторные doc_id (в Phase 16
+  `_build_run` сжимал чанки одного файла в одну строку, скрывая сам
+  сигнал). Doc-уровневый путь остаётся байт-идентичным — тест floors
+  Phase 16 по-прежнему зелёный.
+- Doctor-панель Ollama warm-pool — рендерится только при
+  `retrieval.backend = "tuned_hybrid_hyde"`; пингует `/api/ps` с
+  таймаутом 1с. Read-only — НИКОГДА не бросает исключений, НИКОГДА не
+  меняет exit code (D-DOCTOR-04).
+
+См. [ADR-0002 §9](docs/adr/0002-coderag-eval-philosophy.md#9-phase-17-uplift-comparison)
+для paired-bootstrap-дельт (default vs ast_on / hyde_on /
+ast_plus_hyde). Оговорка: CI в §9 коллапсируют в `[delta, delta]`,
+потому что v1 LIVE envelope хранит только средние по ячейкам — сами
+значения delta точные, но границы CI НЕ отражают per-query
+неопределённость (будущий апгрейд схемы envelope разблокирует
+настоящие CI).
+
 **LongMemEval демотирован.** С v0.3.0a5 полный LongMemEval_S — только
 on-demand; фикстура `longmemeval_scoped_smoke` из 5 вопросов остаётся в
 PR-CI. Диагноз: LongMemEval измеряет диалоговую долговременную память,

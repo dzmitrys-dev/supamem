@@ -333,7 +333,7 @@ discover this flow naturally.
 | `supamem stats` | Welford schema-v2 usage counters from `.supamem/state/` |
 | `supamem live` | 👀 Live dashboard tailing the audit JSONL — pipe-safe (plain JSONL when not a TTY); handles rotation, resize, Ctrl-C |
 | `supamem migrate` | Brownfield migration from a pre-existing `dev_memory` collection |
-| `supamem eval` | Run the bench harness. `--suite goldens` (default, bundled 33-query regression corpus), `--suite longmemeval_s` (lazy-fetched LongMemEval_S, ~3 GB on first run; **DEMOTED to on-demand-only in v0.3.0a5** per [ADR-0002](docs/adr/0002-coderag-eval-philosophy.md) — no longer the Phase 13 ship gate), `--suite longmemeval_scoped_smoke` (bundled, ≤5 questions, no lazy-fetch — stays on PR-CI), or **`supamem eval --suite coderag [--full] [--out PATH] [--peer mem0]`** (v0.3.0a5+, code-shaped retrieval suite — new Phase 13 ship gate). Outputs an MTEB-style JSON envelope to `~/.supamem/eval/<utc-iso>.json`. Default judge is heuristic (offline); pass `--judge ollama:<model>` for a localhost Ollama judge — SaaS endpoints are refused (D-07). Optional extras: `pip install supamem[eval]` for the RAGAS triad + `pytrec_eval`; `pip install supamem[peers-mem0]` for the mem0 peer adapter (v0.3.0a5+). Legacy `--regress` mode preserved. |
+| `supamem eval` | Run the bench harness. `--suite goldens` (default, bundled 33-query regression corpus), `--suite longmemeval_s` (lazy-fetched LongMemEval_S, ~3 GB on first run; **DEMOTED to on-demand-only in v0.3.0a5** per [ADR-0002](docs/adr/0002-coderag-eval-philosophy.md) — no longer the Phase 13 ship gate), `--suite longmemeval_scoped_smoke` (bundled, ≤5 questions, no lazy-fetch — stays on PR-CI), or **`supamem eval --suite coderag [--full] [--out PATH] [--peer mem0] [--reingest-coderag]`** (v0.3.0a5+, code-shaped retrieval suite — new Phase 13 ship gate; v0.3.0a7+ `--reingest-coderag` drops + rebuilds the bench collection via the `supamem.chunker` entry-point keyed on `cfg.chunker` — required to exercise `tree_sitter_code`). Outputs an MTEB-style JSON envelope to `~/.supamem/eval/<utc-iso>.json`. Default judge is heuristic (offline); pass `--judge ollama:<model>` for a localhost Ollama judge — SaaS endpoints are refused (D-07). Optional extras: `pip install supamem[eval]` for the RAGAS triad + `pytrec_eval`; `pip install supamem[peers-mem0]` for the mem0 peer adapter (v0.3.0a5+); `pip install supamem[ast-chunker]` for the `tree_sitter_code` Python AST chunker plugin (v0.3.0a7+; opt-in). Legacy `--regress` mode preserved. |
 | `supamem uninstall --client <name>` | Reverse `supamem install` cleanly. Strips supamem from BOTH project and user scopes. |
 | `supamem unpatch-agents` | 🔄 Reverse subagent reachability patches (v0.2.5+). Restores agent files to their pre-patch form per the manifest at `~/.cache/supamem/agent_patches.json`. Skips files you've edited since with a per-file warning. Run BEFORE `pip uninstall supamem` for a clean uninstall. |
 
@@ -747,6 +747,44 @@ per axis × column × metric (sign convention `mem0_vs_supamem` — positive
 delta = peer wins) at
 [ADR-0002 §8](docs/adr/0002-coderag-eval-philosophy.md#8-mem0-peer-comparison-d-peer-04-live-phase-16-e-head-to-head).
 Install with `pip install supamem[peers-mem0]`.
+
+**AST chunker + HyDE retrieval (opt-in plugins; v0.3.0a7+).** Phase 17
+ships two opt-in retrieval-stack plugins plus a chunk-level recall metric
+and ADR-0002 §9 — the paired-bootstrap uplift comparison vs the Phase 16
+baseline-3. **Defaults are unchanged in the 0.3.x line; default-flip is
+gated on v0.4 per D-LAT-01.**
+
+- `tree_sitter_code` chunker plugin — registered under `supamem.chunker`
+  alongside `markdown_header` and `transcript`. Opt-in via
+  `pip install supamem[ast-chunker]`. Python only at v1. Parse errors
+  fall back to `chunk_markdown` with an `err_console` warning. Recall
+  lift is modest; stays inside the D-LAT-01 latency ceiling.
+- `tuned_hybrid_hyde` retrieval plugin — registered under
+  `supamem.retrieval`. Composition-over-inheritance wrap of
+  `TunedHybridBackend` (kept byte-identical). Localhost-only Ollama
+  query rewriter (`/api/generate`, `keep_alive=-1` warm-pool retention,
+  600 ms timeout + 1 retry, falls back to original query on failure).
+  Verdict: meets the Track B `decision_rationale.supamem_only.recall_at_1`
+  ≥ 0.5 goal exactly but **violates the 5000 ms p95 hard ceiling on 4/5
+  cells (max 6069 ms)** and produces a −0.25 MRR regression on
+  `code_fact`. Opt-in only; no default-flip path; Phase 18 follow-up =
+  selectivity gating by axis.
+- Chunk-level recall metric + bench-only `payload.chunk_id` —
+  `recall_at_*_chunk` siblings beside doc-level keys; new
+  `_build_run_chunk` does NOT dedup duplicate doc_ids (Phase 16's
+  `_build_run` collapsed chunks of the same file to one row, hiding the
+  signal). Doc-level path stays byte-identical — Phase 16 floors test
+  still green.
+- Ollama warm-pool doctor panel — fires only when
+  `retrieval.backend = "tuned_hybrid_hyde"`; probes `/api/ps` with 1s
+  timeout. Read-only — NEVER raises, NEVER flips exit code (D-DOCTOR-04).
+
+See [ADR-0002 §9](docs/adr/0002-coderag-eval-philosophy.md#9-phase-17-uplift-comparison)
+for the paired-bootstrap deltas (default vs ast_on / hyde_on /
+ast_plus_hyde). Caveat: §9 CIs collapse to `[delta, delta]` because v1
+LIVE envelope schema records per-cell means only — delta values are
+exact, CI bounds do NOT reflect query-level uncertainty (future
+envelope-schema bump unlocks real CIs).
 
 **LongMemEval demoted.** Full LongMemEval_S becomes on-demand-only as
 of v0.3.0a5; the existing 5-question `longmemeval_scoped_smoke`

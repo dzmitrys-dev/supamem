@@ -632,6 +632,39 @@ paired-bootstrap delta + 95% CI(符号约定 `mem0_vs_supamem` —— 正 delta
 [ADR-0002 §8](docs/adr/0002-coderag-eval-philosophy.md#8-mem0-peer-comparison-d-peer-04-live-phase-16-e-head-to-head)。
 通过 `pip install supamem[peers-mem0]` 安装。
 
+**AST 分块器 + HyDE 检索(可选插件;v0.3.0a7+)。** Phase 17 推出两个
+**可选启用**的检索栈插件,外加 chunk 级 recall 指标和 ADR-0002 §9 ——
+对比 Phase 16 baseline-3 的配对自举(paired-bootstrap)上升量。
+**0.3.x 系列默认值保持不变;按 D-LAT-01,默认切换被推迟到 v0.4。**
+
+- `tree_sitter_code` 分块器插件 —— 在 `supamem.chunker` 入口下与
+  `markdown_header`、`transcript` 并列注册。通过
+  `pip install supamem[ast-chunker]` 启用。v1 仅支持 Python。解析失败时
+  回退到 `chunk_markdown` 并向 `err_console` 输出告警。recall 提升
+  有限,但保持在 D-LAT-01 延迟上限内。
+- `tuned_hybrid_hyde` 检索插件 —— 在 `supamem.retrieval` 下注册。
+  采用组合优于继承的方式包装 `TunedHybridBackend`(后者保持字节一致)。
+  本地 Ollama 重写器(`/api/generate`,`keep_alive=-1` 暖池保留,
+  600 ms 超时 + 1 次重试,失败时回退到原始查询)。结论:正好达到
+  Track B `decision_rationale.supamem_only.recall_at_1 ≥ 0.5` 目标,
+  但 **在 5/4 个单元上违反 5000 ms p95 硬上限(最高 6069 ms)**,并在
+  `code_fact` 上产生 −0.25 的 MRR 回退。仅可选;不存在默认切换路径;
+  Phase 18 后续工作 = 按 axis 进行选择性门控。
+- Chunk 级 recall 指标 + bench 专用 `payload.chunk_id` —— 在 doc 级
+  键旁新增 `recall_at_*_chunk`;新的 `_build_run_chunk` 不再对相同
+  doc_id 去重(Phase 16 的 `_build_run` 把同一文件的多个 chunk 折叠
+  成单行,把信号本身遮蔽了)。doc 级路径保持字节一致 —— Phase 16
+  floors 测试依旧通过。
+- Ollama 暖池 doctor 面板 —— 仅当
+  `retrieval.backend = "tuned_hybrid_hyde"` 时显示;以 1s 超时探测
+  `/api/ps`。只读 —— 绝不抛异常、绝不改变退出码(D-DOCTOR-04)。
+
+详细的配对自举差值(default vs ast_on / hyde_on / ast_plus_hyde)
+参见 [ADR-0002 §9](docs/adr/0002-coderag-eval-philosophy.md#9-phase-17-uplift-comparison)。
+注意事项:§9 的 CI 收敛为 `[delta, delta]`,因为 v1 LIVE envelope 仅
+记录单元均值 —— delta 数值精确,但 CI 边界不反映 query 级别的不确定性
+(未来的 envelope schema 升级将解锁真正的 CI)。
+
 **LongMemEval 降级。** 自 v0.3.0a5 起,完整 LongMemEval_S 仅按需运行;
 原有 5 题 `longmemeval_scoped_smoke` 仍留在 PR-CI。诊断:LongMemEval
 衡量的是对话型长期记忆,而 supamem 索引的是 AI 编码 agent 用到的代码块

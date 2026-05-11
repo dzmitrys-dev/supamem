@@ -667,6 +667,48 @@ axis × カラム × メトリクスごとに paired-bootstrap delta + 95% CI �
 [ADR-0002 §8](docs/adr/0002-coderag-eval-philosophy.md#8-mem0-peer-comparison-d-peer-04-live-phase-16-e-head-to-head)
 を参照。`pip install supamem[peers-mem0]` でインストール。
 
+**AST チャンカー + HyDE 検索(オプトインプラグイン; v0.3.0a7+)。**
+Phase 17 では **オプトイン** の検索スタックプラグイン 2 種に加え、
+チャンクレベル recall メトリクス、Phase 16 baseline-3 に対する
+ペア・ブートストラップ・アップリフト比較である ADR-0002 §9 を提供。
+**0.3.x 系のデフォルトは据え置き。デフォルト切替は D-LAT-01 に従い
+v0.4 にゲート。**
+
+- `tree_sitter_code` チャンカープラグイン — `supamem.chunker`
+  エントリポイント配下に `markdown_header` / `transcript` と並列に
+  登録。`pip install supamem[ast-chunker]` でオプトイン。v1 は Python
+  のみ。パース失敗時は `chunk_markdown` にフォールバックし、
+  `err_console` に警告を出力。recall リフトは控えめだが、D-LAT-01
+  レイテンシ上限内に収まる。
+- `tuned_hybrid_hyde` 検索プラグイン — `supamem.retrieval` に登録。
+  継承ではなくコンポジションで `TunedHybridBackend` をラップ(後者は
+  バイト一致を維持)。localhost 限定 Ollama リライター
+  (`/api/generate`、`keep_alive=-1` のウォームプール保持、600 ms
+  タイムアウト + 1 回リトライ、失敗時は元クエリへフォールバック)。
+  判定:Track B の `decision_rationale.supamem_only.recall_at_1 ≥ 0.5`
+  目標をぎりぎり達成するが、**5 セル中 4 セルで 5000 ms p95 ハード
+  上限を違反(最大 6069 ms)** し、`code_fact` で −0.25 の MRR
+  リグレッションを発生させる。オプトインのみ;デフォルト切替の
+  経路なし。Phase 18 のフォローアップ = axis 単位のセレクティビティ
+  ゲーティング。
+- チャンクレベル recall メトリクス + bench 専用 `payload.chunk_id` —
+  doc レベルキーに `recall_at_*_chunk` を兄弟キーとして追加。新規の
+  `_build_run_chunk` は重複 doc_id を **重複排除しない**(Phase 16 の
+  `_build_run` は同一ファイルのチャンクを 1 行に畳み込み、シグナルを
+  覆い隠していた)。doc レベル経路はバイト一致を維持 —— Phase 16
+  floors テストは引き続きグリーン。
+- Ollama ウォームプール doctor パネル —
+  `retrieval.backend = "tuned_hybrid_hyde"` が設定されているときのみ
+  表示。1 秒タイムアウトで `/api/ps` を探査。読み取り専用 —
+  例外を投げず、exit code を反転させない(D-DOCTOR-04)。
+
+ペア・ブートストラップ差分(default vs ast_on / hyde_on /
+ast_plus_hyde)は [ADR-0002 §9](docs/adr/0002-coderag-eval-philosophy.md#9-phase-17-uplift-comparison)
+を参照。注意事項:§9 の CI は `[delta, delta]` に収束する。v1 LIVE
+envelope スキーマがセルごとの平均しか保持しないため — delta 値は
+正確だが、CI の上下限はクエリレベルの不確実性を反映しない(将来の
+envelope スキーマのバンプで真の CI を解放可能)。
+
 **LongMemEval の降格。** v0.3.0a5 以降、完全な LongMemEval_S は
 オンデマンドのみとなり、5 問の `longmemeval_scoped_smoke` フィクスチャは
 PR-CI に残ります。診断:LongMemEval は会話的長期記憶を測りますが、
