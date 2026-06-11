@@ -51,15 +51,21 @@ from supamem.indexer.chunker import CHUNK_MIN_TOKENS, _token_count, chunk_markdo
 from supamem.indexer.classifier import classify_room
 from supamem.indexer.manifest import Manifest
 from supamem.indexer.transcript import ChunkRecord, chunk_transcript
+from supamem.qdrant_collection import (
+    DEFAULT_VECTOR_SIZE,
+    DENSE_VECTOR_NAME,
+    SPARSE_VECTOR_NAME,
+    ensure_collection,
+    validate_writable_collection,
+)
 
 try:
     from qdrant_client import QdrantClient  # noqa: F401
 except ImportError:  # qdrant-client missing — fail-soft path still works
     QdrantClient = None  # type: ignore[assignment, misc]
 
-DENSE_VECTOR = "dense"
-SPARSE_VECTOR = "sparse"
-DEFAULT_VECTOR_SIZE = 384
+DENSE_VECTOR = DENSE_VECTOR_NAME
+SPARSE_VECTOR = SPARSE_VECTOR_NAME
 
 Target = Literal["prod", "tuned", "both"]
 
@@ -840,6 +846,12 @@ def run_index(
         client = QdrantClient(url=cfg.qdrant_url, timeout=60)
         client.get_collections()
     except Exception:  # noqa: BLE001 — fail-soft per plan acceptance criterion
+        return 0
+
+    validate_writable_collection(cfg)
+    try:
+        ensure_collection(client, cfg.collection)
+    except Exception:  # noqa: BLE001 — fail-soft on create failure
         return 0
 
     try:
