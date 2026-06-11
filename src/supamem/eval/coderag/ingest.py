@@ -35,6 +35,7 @@ from qdrant_client.http import models as qmodels
 from supamem.console import err_console
 from supamem.embedders import build_dense_embedder, build_sparse_embedder
 from supamem.eval.coderag.corpus import walk_corpus
+from supamem.qdrant_collection import ensure_collection as _ensure_collection
 
 # READ-ONLY library use of the markdown chunker — the SINGLE allowed
 # ``supamem.indexer.*`` import in this module. Any addition to this import
@@ -97,37 +98,6 @@ def ensure_indexes(client: QdrantClient, coll: str | None = None) -> None:
     target = coll or coderag_collection_name()
     for field in CODERAG_PAYLOAD_INDEX_FIELDS:
         _ensure_payload_index(client, target, field)
-
-
-def _ensure_collection(client: QdrantClient, coll: str) -> None:
-    """Create the bench collection with production vector params, idempotently."""
-    try:
-        existing = {c.name for c in client.get_collections().collections}
-    except Exception as exc:  # noqa: BLE001 — surface via err_console
-        err_console.print(
-            f"[supamem.warn]coderag-ingest: get_collections failed "
-            f"({type(exc).__name__}: {exc}); attempting create_collection anyway"
-            "[/supamem.warn]"
-        )
-        existing = set()
-
-    if coll in existing:
-        return
-
-    client.create_collection(
-        collection_name=coll,
-        vectors_config={
-            _DENSE_VECTOR_NAME: qmodels.VectorParams(
-                size=_DEFAULT_VECTOR_SIZE,
-                distance=qmodels.Distance.COSINE,
-            ),
-        },
-        sparse_vectors_config={
-            _SPARSE_VECTOR_NAME: qmodels.SparseVectorParams(
-                modifier=qmodels.Modifier.IDF,
-            ),
-        },
-    )
 
 
 def _detect_axis(rel_path: str) -> str:

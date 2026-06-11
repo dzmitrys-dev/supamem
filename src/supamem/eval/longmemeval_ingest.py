@@ -45,6 +45,7 @@ from supamem.config import ResolvedConfig
 from supamem.console import err_console
 from supamem.embedders import build_dense_embedder, build_sparse_embedder
 from supamem.eval.datasets.longmemeval_loader import iter_haystack_chunks
+from supamem.qdrant_collection import ensure_collection as _ensure_collection
 
 EVAL_COLLECTION_PREFIX = "supamem_eval_"
 
@@ -70,43 +71,6 @@ def eval_collection_name(cfg: ResolvedConfig, suite: str) -> str:
     """
     del cfg  # reserved for future per-project namespacing
     return f"{EVAL_COLLECTION_PREFIX}{suite}"
-
-
-def _ensure_collection(client: QdrantClient, coll: str) -> None:
-    """Create the bench collection if it does not already exist.
-
-    Idempotent: if the collection is already present we skip
-    create_collection. We intentionally do NOT delete-and-recreate (that
-    would forbid incremental ingestion for partial re-runs of the manual
-    re-capture ritual in Task A4).
-    """
-    try:
-        existing = {c.name for c in client.get_collections().collections}
-    except Exception as exc:  # noqa: BLE001 — surface via err_console
-        err_console.print(
-            f"[supamem.warn]bench-ingest: get_collections failed "
-            f"({type(exc).__name__}: {exc}); attempting create_collection anyway"
-            "[/supamem.warn]"
-        )
-        existing = set()
-
-    if coll in existing:
-        return
-
-    client.create_collection(
-        collection_name=coll,
-        vectors_config={
-            _DENSE_VECTOR_NAME: qmodels.VectorParams(
-                size=_DEFAULT_VECTOR_SIZE,
-                distance=qmodels.Distance.COSINE,
-            ),
-        },
-        sparse_vectors_config={
-            _SPARSE_VECTOR_NAME: qmodels.SparseVectorParams(
-                modifier=qmodels.Modifier.IDF,
-            ),
-        },
-    )
 
 
 def _ensure_session_id_index(client: QdrantClient, coll: str) -> None:
