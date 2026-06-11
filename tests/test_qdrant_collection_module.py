@@ -47,7 +47,8 @@ def test_ensure_collection_creates_when_missing() -> None:
 def test_ensure_collection_idempotent() -> None:
     """Collection already present → create_collection NOT called; returns False."""
     client = MagicMock()
-    existing = MagicMock(name="bench_coll")
+    existing = MagicMock()
+    existing.name = "bench_coll"
     client.get_collections.return_value = MagicMock(collections=[existing])
 
     created = ensure_collection(client, "bench_coll")
