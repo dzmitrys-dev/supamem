@@ -6,7 +6,7 @@ errors, and partial-failure handling when Qdrant indexing fails.
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
@@ -18,6 +18,7 @@ from supamem.memory_writer import (
     MAX_TOPIC_LEN,
     NAMESPACE_AGENT_WRITE,
     WriteResult,
+    _index_single_doc,
     _point_id_for_slug,
     _resolve_write_root,
     _safe_target_path,
@@ -162,6 +163,65 @@ def test_write_memory_rejects_too_many_tags(tmp_path: Path) -> None:
         write_memory(
             topic="t", content="x", tags=[f"t{i}" for i in range(11)], project_root=tmp_path
         )
+
+
+# ── Qdrant write-create lifecycle ───────────────────────────────────────────
+
+
+def test_index_single_doc_ensures_collection_before_upsert(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ensure_collection runs before upsert when collection is missing (Req-07)."""
+    call_order: list[str] = []
+
+    fake_client = MagicMock()
+    fake_client.get_collections.return_value = MagicMock(collections=[])
+    fake_client.create_collection.side_effect = lambda **_: call_order.append("create")
+    fake_client.upsert.side_effect = lambda **_: call_order.append("upsert")
+
+    class _SparseVec:
+        indices = [1]
+        values = [0.5]
+
+    monkeypatch.setattr("qdrant_client.QdrantClient", lambda *a, **k: fake_client)
+    monkeypatch.setattr(
+        "supamem.embedders.build_dense_embedder",
+        lambda: MagicMock(embed=lambda batch: iter([[0.1] * 384 for _ in batch])),
+    )
+    monkeypatch.setattr(
+        "supamem.embedders.build_sparse_embedder",
+        lambda: MagicMock(embed=lambda batch: iter([_SparseVec() for _ in batch])),
+    )
+    monkeypatch.setattr(
+        "supamem.indexer.chunker.chunk_markdown", lambda body: [body]
+    )
+
+    cfg = ResolvedConfig(collection="agent-test")
+    target = tmp_path / "test.md"
+    target.write_text("hello", encoding="utf-8")
+
+    n = _index_single_doc(
+        cfg,
+        target_path=target,
+        body="hello world",
+        point_id="00000000-0000-0000-0000-000000000001",
+    )
+    assert n == 1
+    assert call_order == ["create", "upsert"]
+
+
+def test_memory_writer_forbidden_collection_blocked(tmp_path: Path) -> None:
+    """Forbidden legacy collection → indexed=False, file still written (Req-06)."""
+    cfg = ResolvedConfig(sources=[".claude/insights/"], collection="dev_memory")
+    (tmp_path / ".claude" / "insights").mkdir(parents=True)
+
+    res = write_memory(topic="t", content="x", config=cfg, project_root=tmp_path)
+
+    assert res.indexed is False
+    assert res.error is not None
+    assert "forbidden" in res.error.lower()
+    assert "dev_memory" in res.error
+    assert Path(res.path).exists()
 
 
 # ── partial failure ─────────────────────────────────────────────────────────
