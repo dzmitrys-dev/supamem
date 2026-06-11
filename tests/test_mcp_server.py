@@ -88,6 +88,36 @@ def test_tool_registered_with_title_and_description(monkeypatch: pytest.MonkeyPa
     assert len(description) > 20
 
 
+def test_mcp_dual_memory_search_missing_collection_actionable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CollectionMissingError surfaces actionable remediation via RuntimeError."""
+    import asyncio
+    import io
+
+    import supamem.mcp_server as mod
+    from supamem.qdrant_collection import CollectionMissingError
+
+    coll = "ghost_collection"
+    fake_backend = MagicMock()
+    fake_backend.query.side_effect = CollectionMissingError(coll)
+    monkeypatch.setattr(mod, "_get_backend", lambda cfg: fake_backend)
+
+    cap = io.StringIO()
+    real_stdout = sys.stdout
+    sys.stdout = cap
+    try:
+        with pytest.raises(RuntimeError) as exc_info:
+            asyncio.run(mod.dual_memory_search(query="x", top_k=1, config=_cfg(collection=coll)))
+    finally:
+        sys.stdout = real_stdout
+
+    msg = str(exc_info.value)
+    assert coll in msg
+    assert __import__("re").search(r"(?i)supamem (index|init)", msg)
+    assert cap.getvalue() == ""
+
+
 def test_search_tool_sanitizes_qdrant_url_in_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

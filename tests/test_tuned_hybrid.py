@@ -40,6 +40,48 @@ def test_forbidden_collection_allowed_with_opt_in() -> None:
     assert backend.config.collection == "dev_memory"
 
 
+def test_query_missing_collection_actionable_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing collection on read path raises CollectionMissingError before query_points."""
+    import supamem.retrieval.tuned_hybrid as mod
+    from qdrant_client.http.exceptions import UnexpectedResponse
+
+    from supamem.qdrant_collection import CollectionMissingError
+
+    coll = "missing_bench_coll"
+    fake_client = MagicMock()
+    fake_client.get_collection.side_effect = UnexpectedResponse(
+        status_code=404,
+        reason_phrase="Not Found",
+        content=b"",
+        headers={},
+    )
+
+    fake_dense = MagicMock()
+    fake_dense.embed = lambda batch: iter([[0.1] * 384 for _ in batch])
+
+    class _SparseVec:
+        indices = [1]
+        values = [0.5]
+
+    fake_sparse = MagicMock()
+    fake_sparse.embed = lambda batch: iter([_SparseVec() for _ in batch])
+
+    monkeypatch.setattr(mod, "_SPARSE_AVAILABLE", True, raising=False)
+
+    backend = TunedHybridBackend(config=_cfg(collection=coll))
+    backend._client = fake_client
+    backend._dense = fake_dense
+    backend._sparse = fake_sparse
+
+    with pytest.raises(CollectionMissingError, match=r"(?i)supamem (index|init)") as exc_info:
+        backend.query("hello", k=5)
+
+    assert coll in str(exc_info.value)
+    fake_client.query_points.assert_not_called()
+
+
 def test_setup_raises_actionable_when_sparse_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
