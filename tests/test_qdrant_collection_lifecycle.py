@@ -1,4 +1,4 @@
-"""Lifecycle integration tests for Qdrant collection helpers (Plan 18-C, Req-10).
+"""Lifecycle integration tests for Qdrant collection helpers (Plan 18-C/D, Req-10).
 
 Mock-client coverage for read-error, idempotent ensure, forbidden write guard,
 and index create-on-missing — no live Qdrant required.
@@ -21,6 +21,8 @@ from supamem.qdrant_collection import (
 )
 from supamem.retrieval.tuned_hybrid import TunedHybridBackend
 
+from tests.test_indexer_dispatch import _wire_mocks
+
 
 def _cfg(**overrides: Any) -> ResolvedConfig:
     return ResolvedConfig(
@@ -28,36 +30,6 @@ def _cfg(**overrides: Any) -> ResolvedConfig:
         collection=overrides.pop("collection", "lifecycle_test_coll"),
         **overrides,
     )
-
-
-def _wire_indexer_mocks(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
-    """Mirror ``test_indexer_dispatch._wire_mocks`` for lifecycle tests."""
-    fake_client = MagicMock()
-    fake_client.get_collections.return_value = MagicMock(collections=[])
-    fake_client.query_points.return_value = MagicMock(points=[])
-
-    fake_dense = MagicMock()
-    fake_dense.embed = lambda batch: iter([[0.1] * 384 for _ in batch])
-
-    class _SparseVec:
-        indices = [1]
-        values = [0.5]
-
-    fake_sparse = MagicMock()
-    fake_sparse.embed = lambda batch: iter([_SparseVec() for _ in batch])
-
-    import supamem.indexer as indexer_mod
-
-    monkeypatch.setattr(
-        indexer_mod, "QdrantClient", lambda *a, **k: fake_client, raising=False
-    )
-    monkeypatch.setattr(
-        indexer_mod, "build_dense_embedder", lambda *a, **k: fake_dense, raising=False
-    )
-    monkeypatch.setattr(
-        indexer_mod, "build_sparse_embedder", lambda *a, **k: fake_sparse, raising=False
-    )
-    return fake_client
 
 
 def test_search_missing_collection_actionable_error(
@@ -127,7 +99,7 @@ def test_forbidden_collection_write_blocked_run_index(
     md = tmp_path / "doc.md"
     md.write_text("# Header\n" + " ".join(["lorem"] * 30) + "\n", encoding="utf-8")
 
-    fake_client = _wire_indexer_mocks(monkeypatch)
+    fake_client, _, _ = _wire_mocks(monkeypatch)
     cfg = ResolvedConfig(
         sources=[str(md)],
         cache_dir=str(tmp_path / "cache"),
@@ -147,7 +119,7 @@ def test_index_creates_collection_when_missing(
     md = tmp_path / "doc.md"
     md.write_text("# Header\n" + " ".join(["lorem"] * 30) + "\n", encoding="utf-8")
 
-    fake_client = _wire_indexer_mocks(monkeypatch)
+    fake_client, _, _ = _wire_mocks(monkeypatch)
     cfg = ResolvedConfig(
         sources=[str(md)],
         cache_dir=str(tmp_path / "cache"),
