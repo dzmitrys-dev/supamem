@@ -226,4 +226,11 @@ def run_init(
     return 0
 
 
-__all__ = ["create_collection", "probe_qdrant", "run_init"]
+__all__ = [
+    "create_collection",
+    "probe_qdrant",
+    "run_init",
+    "DENSE_VECTOR_NAME",
+    "SPARSE_VECTOR_NAME",
+    "DEFAULT_VECTOR_SIZE",
+]

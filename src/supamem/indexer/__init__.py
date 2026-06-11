@@ -72,6 +72,7 @@ Target = Literal["prod", "tuned", "both"]
 __all__ = [
     "DENSE_VECTOR",
     "SPARSE_VECTOR",
+    "DEFAULT_VECTOR_SIZE",
     "Progress",
     "QdrantClient",
     "_expand_sources",

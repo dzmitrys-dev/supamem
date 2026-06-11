@@ -26,6 +26,7 @@ from typing import Any
 import yaml
 
 from supamem.config import ResolvedConfig
+from supamem.qdrant_collection import ensure_collection, validate_writable_collection
 
 log = logging.getLogger("supamem.memory_writer")
 
@@ -167,6 +168,8 @@ def _index_single_doc(
         check_compatibility=False,
         timeout=60,
     )
+    validate_writable_collection(cfg)
+    ensure_collection(client, cfg.collection)
     dense = build_dense_embedder()
     sparse = build_sparse_embedder()
 
