@@ -21,6 +21,7 @@ from typing import Any, Optional
 from qdrant_client.http import models as qmodels
 
 from supamem.config import ResolvedConfig
+from supamem.qdrant_collection import assert_collection_exists_for_read
 from supamem.retrieval.filters import WhereDict, build_qdrant_filter
 from supamem.retrieval.types import RetrievedChunk
 
@@ -210,6 +211,7 @@ class TunedHybridBackend:
         where: Optional[WhereDict] = None,
     ) -> list[RetrievedChunk]:
         client, dense, sparse = self._ensure()
+        assert_collection_exists_for_read(client, self.config.collection)
         dense_q = [float(x) for x in next(dense.embed([text]))]
         sparse_q = next(sparse.embed([text]))
 
