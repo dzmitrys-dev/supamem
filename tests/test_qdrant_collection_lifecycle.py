@@ -1,7 +1,7 @@
 """Lifecycle integration tests for Qdrant collection helpers (Plan 18-C/D, Req-10).
 
 Mock-client coverage for read-error, idempotent ensure, forbidden write guard,
-and index create-on-missing — no live Qdrant required.
+index create-on-missing, and idempotent re-index — no live Qdrant required.
 """
 from __future__ import annotations
 
@@ -30,6 +30,31 @@ def _cfg(**overrides: Any) -> ResolvedConfig:
         collection=overrides.pop("collection", "lifecycle_test_coll"),
         **overrides,
     )
+
+
+def _wire_stateful_collections(
+    monkeypatch: pytest.MonkeyPatch, collection_name: str
+) -> MagicMock:
+    """Mock client whose get_collections reflects create_collection calls."""
+    fake_client, _, _ = _wire_mocks(monkeypatch)
+    created: list[str] = []
+
+    def _get_collections() -> MagicMock:
+        colls = []
+        for name in created:
+            entry = MagicMock()
+            entry.name = name
+            colls.append(entry)
+        return MagicMock(collections=colls)
+
+    def _create_collection(*, collection_name: str, **kwargs: Any) -> None:
+        if collection_name not in created:
+            created.append(collection_name)
+
+    fake_client.get_collections.side_effect = _get_collections
+    fake_client.create_collection.side_effect = _create_collection
+    fake_client.scroll.return_value = ([], None)
+    return fake_client
 
 
 def test_search_missing_collection_actionable_error(
@@ -130,3 +155,29 @@ def test_index_creates_collection_when_missing(
     assert rc == 0
     fake_client.create_collection.assert_called_once()
     assert fake_client.upsert.called
+
+
+def test_index_idempotent_when_collection_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two consecutive run_index calls must not recreate or delete the collection."""
+    md = tmp_path / "doc.md"
+    md.write_text("# Header\n" + " ".join(["lorem"] * 30) + "\n", encoding="utf-8")
+
+    coll = "lifecycle_idempotent_coll"
+    fake_client = _wire_stateful_collections(monkeypatch, coll)
+    cfg = ResolvedConfig(
+        sources=[str(md)],
+        cache_dir=str(tmp_path / "cache"),
+        collection=coll,
+    )
+
+    rc1 = run_index(target="tuned", force=True, sources=[str(md)], config=cfg)
+    assert rc1 == 0
+    first_create_count = fake_client.create_collection.call_count
+    assert first_create_count == 1
+
+    rc2 = run_index(target="tuned", force=True, sources=[str(md)], config=cfg)
+    assert rc2 == 0
+    assert fake_client.create_collection.call_count <= 1
+    fake_client.delete_collection.assert_not_called()
