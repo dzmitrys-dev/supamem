@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from supamem.eval.coderag.gate import load_floors, passes_no_regression_floor
 from supamem.eval.coderag.report import empty_envelope
 
@@ -30,7 +28,7 @@ def _passing_envelope() -> dict:
             "code_fact.fastapi_only.ndcg_at_10": 0.5,
             "code_fact.fastapi_only.latency_ms_p95": 3500.0,
             "code_fact.combined.recall_at_5": 0.05,
-            "code_fact.combined.mrr": 0.99,
+            "code_fact.combined.mrr": 0.996,
             "code_fact.combined.ndcg_at_10": 0.6,
             "code_fact.combined.latency_ms_p95": 3300.0,
             "decision_rationale.supamem_only.recall_at_5": 0.55,
