@@ -22,6 +22,12 @@ import tomli_w
 
 from supamem.config import ResolvedConfig
 from supamem.console import banner, err, info, ok, step, warn
+from supamem.qdrant_collection import (
+    DEFAULT_VECTOR_SIZE,
+    DENSE_VECTOR_NAME,
+    SPARSE_VECTOR_NAME,
+    ensure_collection,
+)
 
 log = logging.getLogger("supamem.init")
 
@@ -30,9 +36,7 @@ DOCKER_RECIPE = (
     "-v $HOME/.qdrant:/qdrant/storage qdrant/qdrant:latest"
 )
 
-DENSE_VECTOR_NAME = "dense"
-SPARSE_VECTOR_NAME = "sparse"
-DEFAULT_VECTOR_SIZE = 384
+# Re-exported from qdrant_collection for backward-compatible imports.
 
 # Auto-detected source path candidates (D-38).
 _SOURCE_CANDIDATES: tuple[str, ...] = (
@@ -63,29 +67,13 @@ def create_collection(client: Any, name: str, *, force: bool = False) -> bool:
 
     Returns True if created, False if it already existed (and force=False).
     """
-    from qdrant_client.http import models as qmodels
-
     existing = {c.name for c in client.get_collections().collections}
     if name in existing:
         if not force:
             return False
         client.delete_collection(collection_name=name)
 
-    client.create_collection(
-        collection_name=name,
-        vectors_config={
-            DENSE_VECTOR_NAME: qmodels.VectorParams(
-                size=DEFAULT_VECTOR_SIZE,
-                distance=qmodels.Distance.COSINE,
-            ),
-        },
-        sparse_vectors_config={
-            SPARSE_VECTOR_NAME: qmodels.SparseVectorParams(
-                modifier=qmodels.Modifier.IDF,
-            ),
-        },
-    )
-    return True
+    return ensure_collection(client, name)
 
 
 def _detect_sources(cwd: Path) -> list[str]:
