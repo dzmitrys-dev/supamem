@@ -113,6 +113,42 @@ def _wire_mocks(monkeypatch: pytest.MonkeyPatch) -> tuple[MagicMock, MagicMock, 
     return fake_client, fake_dense, fake_sparse
 
 
+def test_run_index_ensures_collection_when_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Missing collection → create_collection once before upsert (Req-07)."""
+    md = tmp_path / "doc.md"
+    md.write_text("# Header\n" + " ".join(["lorem"] * 30) + "\n", encoding="utf-8")
+
+    fake_client, _, _ = _wire_mocks(monkeypatch)
+
+    cfg = ResolvedConfig(
+        sources=[str(md)], cache_dir=str(tmp_path / "cache"), collection="t"
+    )
+    rc = run_index(target="tuned", force=True, sources=[str(md)], config=cfg)
+    assert rc == 0
+    fake_client.create_collection.assert_called_once()
+
+
+def test_run_index_forbidden_collection_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Legacy reserved collection names blocked before any upsert (Req-06)."""
+    md = tmp_path / "doc.md"
+    md.write_text("# Header\n" + " ".join(["lorem"] * 30) + "\n", encoding="utf-8")
+
+    fake_client, _, _ = _wire_mocks(monkeypatch)
+
+    cfg = ResolvedConfig(
+        sources=[str(md)],
+        cache_dir=str(tmp_path / "cache"),
+        collection="dev_memory",
+    )
+    with pytest.raises(RuntimeError, match="forbidden"):
+        run_index(target="tuned", force=True, sources=[str(md)], config=cfg)
+    fake_client.upsert.assert_not_called()
+
+
 def test_dispatch_routes_jsonl_to_chunk_transcript(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
