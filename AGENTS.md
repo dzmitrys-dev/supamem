@@ -167,6 +167,6 @@ CI guard candidate: a script that fails when `README.md` changes without bumping
 - New hook target: add module under `src/supamem/hooks/<client>.py`, register in `cli.py hook` dispatcher
 - Failure in network code: blanket `except Exception: pass` is correct for non-essential probes (update_check); for indexing/retrieval, surface error to user via `err_console`
 
-# BEGIN SUPAMEM v0.3.0a5 MANAGED BLOCK — DO NOT EDIT
+# BEGIN SUPAMEM v0.3.0a7 MANAGED BLOCK — DO NOT EDIT
 @~/.supamem/share/rules/dual-memory.md
-# END SUPAMEM v0.3.0a5 MANAGED BLOCK
+# END SUPAMEM v0.3.0a7 MANAGED BLOCK
