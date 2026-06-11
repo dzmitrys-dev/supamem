@@ -19,6 +19,7 @@ PHASE18_MODULES: tuple[str, ...] = (
     "supamem.memory_writer",
     "supamem.indexer",
     "supamem.eval.coderag.gate",
+    "supamem.eval.autotune",
 )
 
 _FORBIDDEN_IMPORT_ROOTS = frozenset({"openai", "anthropic", "ollama", "litellm"})

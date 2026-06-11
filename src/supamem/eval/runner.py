@@ -1093,6 +1093,9 @@ def run_bench(
     peer: str | None = None,
     ingest_peer: str | None = None,
     reingest_coderag: bool = False,
+    autotune: bool = False,
+    autotune_dry_run: bool = True,
+    autotune_apply: bool = False,
 ) -> int:
     """Run the bench. Returns 0 on pass, 1 on regression / fatal.
 
@@ -1180,6 +1183,15 @@ def run_bench(
 
         suite_cls = _load_suite("coderag")
         cfg = config or ResolvedConfig()
+
+        # Plan 18-I — explicit rule-based autotune (no daemon, no LLM).
+        if autotune:
+            from supamem.eval.autotune import run_autotune  # noqa: PLC0415
+
+            effective_dry_run = autotune_dry_run if not autotune_apply else False
+            return run_autotune(
+                cfg, dry_run=effective_dry_run, apply=autotune_apply
+            )
 
         # Phase 16 Plan E Task 3a — ``--ingest-peer mem0`` dispatch.
         # Drops + recreates the peer's Qdrant collection, then ingests the
