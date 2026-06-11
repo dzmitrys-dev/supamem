@@ -5,3 +5,7 @@
 enabled = false
 delta = 0.5
 k_max = 20
+
+[supamem.retrieval.dedup]
+enabled = false
+cosine_threshold = 0.97

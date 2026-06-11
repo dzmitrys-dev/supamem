@@ -137,6 +137,11 @@ class ResolvedConfig:
     adaptive_depth_enabled: bool = False
     adaptive_depth_delta: float = 0.5
     adaptive_depth_k_max: int = 20
+    # ── Phase 18 D-A3b — heuristic dedup (hash + cosine merge) ────────────
+    # Default OFF; when enabled, read/write paths collapse near-duplicates.
+    # Mapped from [supamem.retrieval.dedup] via _NESTED_TABLES.
+    dedup_enabled: bool = False
+    dedup_cosine_threshold: float = 0.97
 
 
 @dataclass
@@ -185,6 +190,8 @@ class ConfigChain:
     adaptive_depth_enabled: Source = "default"
     adaptive_depth_delta: Source = "default"
     adaptive_depth_k_max: Source = "default"
+    dedup_enabled: Source = "default"
+    dedup_cosine_threshold: Source = "default"
 
 
 _LEGACY_ENV: dict[str, str] = {
@@ -279,6 +286,14 @@ _NESTED_TABLES: list[tuple[str, dict[str, str]]] = [
             "enabled": "adaptive_depth_enabled",
             "delta": "adaptive_depth_delta",
             "k_max": "adaptive_depth_k_max",
+        },
+    ),
+    # ── Phase 18 D-A3b — [supamem.retrieval.dedup] ────────────────────────
+    (
+        "retrieval.dedup",
+        {
+            "enabled": "dedup_enabled",
+            "cosine_threshold": "dedup_cosine_threshold",
         },
     ),
 ]
@@ -522,6 +537,12 @@ def load_config(cwd: Path | None = None) -> tuple[ResolvedConfig, ConfigChain]:
         err_console.print(
             f"[supamem.err]config: retrieval.adaptive_depth.k_max="
             f"{cfg.adaptive_depth_k_max} must be in [1, 50]"
+        )
+        raise SystemExit(2)
+    if not (0.0 < cfg.dedup_cosine_threshold <= 1.0):
+        err_console.print(
+            f"[supamem.err]config: retrieval.dedup.cosine_threshold="
+            f"{cfg.dedup_cosine_threshold} must be in (0.0, 1.0]"
         )
         raise SystemExit(2)
 

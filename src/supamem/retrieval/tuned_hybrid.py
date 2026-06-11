@@ -113,6 +113,40 @@ def complexity_score(text: str, where: WhereDict | None) -> float:
     return token_term + clause_term + filter_term + id_term
 
 
+def _dedup_hits(
+    adjusted: list[tuple[str, float, dict, list[float] | None]],
+    config: ResolvedConfig,
+) -> list[tuple[str, float, dict, list[float] | None]]:
+    """T-5 cosine dedup with optional content_hash short-circuit (D-A3b).
+
+    When ``dedup_enabled`` is False, only the legacy cosine pass runs at the
+    locked ``DEDUP_COSINE_THRESHOLD``. When True, identical ``content_hash``
+    values are skipped before cosine comparisons (mitigates O(n²) on hashes).
+    """
+    dedup_enabled = getattr(config, "dedup_enabled", False)
+    threshold = (
+        getattr(config, "dedup_cosine_threshold", DEDUP_COSINE_THRESHOLD)
+        if dedup_enabled
+        else DEDUP_COSINE_THRESHOLD
+    )
+    kept_vecs: list[list[float]] = []
+    seen_hashes: set[str] = set()
+    out: list[tuple[str, float, dict, list[float] | None]] = []
+    for doc_id, score, payload, vec in adjusted:
+        if dedup_enabled:
+            content_hash = payload.get("content_hash")
+            if isinstance(content_hash, str) and content_hash:
+                if content_hash in seen_hashes:
+                    continue
+                seen_hashes.add(content_hash)
+        if vec and any(_cosine(vec, kv) >= threshold for kv in kept_vecs):
+            continue
+        if vec:
+            kept_vecs.append(vec)
+        out.append((doc_id, score, payload, vec))
+    return out
+
+
 def _effective_k(
     text: str,
     k: int,
@@ -461,21 +495,14 @@ class TunedHybridBackend:
         )
 
         # T-5 cosine dedup + T-8 token-budget truncation.
-        kept_vecs: list[list[float]] = []
         out: list[RetrievedChunk] = []
         cumulative_tokens = 0
-        for doc_id, score, payload, vec in adjusted:
-            if vec and any(
-                _cosine(vec, kv) >= DEDUP_COSINE_THRESHOLD for kv in kept_vecs
-            ):
-                continue
+        for doc_id, score, payload, vec in _dedup_hits(adjusted, self.config):
             text_body = str(payload.get("document") or "")
             tokens = _approx_token_count(text_body)
             if cumulative_tokens + tokens > TOKEN_BUDGET and out:
                 break
             cumulative_tokens += tokens
-            if vec:
-                kept_vecs.append(vec)
             out.append(
                 RetrievedChunk(
                     id=doc_id,
