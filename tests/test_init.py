@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
-from supamem.init import _slugify, probe_qdrant, run_init
+from supamem.init import _slugify, create_collection, probe_qdrant, run_init
 
 
 def test_probe_qdrant_returns_false_on_connection_refused() -> None:
@@ -80,6 +81,50 @@ def test_run_init_refuses_to_overwrite_existing_config(
     rc = run_init(tmp_path, yes=True)
     assert rc == 3  # refuse-to-overwrite exit code
     fake_client.create_collection.assert_not_called()
+
+
+def test_create_collection_delegates_to_ensure_when_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-force path uses shared ensure_collection (Req-09)."""
+    fake_client = MagicMock()
+    fake_client.get_collections.return_value = MagicMock(collections=[])
+
+    ensure_calls: list[tuple[Any, str]] = []
+
+    def _fake_ensure(client: Any, name: str) -> bool:
+        ensure_calls.append((client, name))
+        return True
+
+    monkeypatch.setattr("supamem.init.ensure_collection", _fake_ensure)
+
+    created = create_collection(fake_client, "supamem-test", force=False)
+    assert created is True
+    assert ensure_calls == [(fake_client, "supamem-test")]
+    fake_client.delete_collection.assert_not_called()
+
+
+def test_create_collection_force_deletes_then_ensures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """force=True delete-and-recreate stays init-only; then shared ensure runs."""
+    existing = MagicMock()
+    existing.name = "supamem-test"
+    fake_client = MagicMock()
+    fake_client.get_collections.return_value = MagicMock(collections=[existing])
+
+    ensure_calls: list[str] = []
+
+    def _fake_ensure(_client: Any, name: str) -> bool:
+        ensure_calls.append(name)
+        return True
+
+    monkeypatch.setattr("supamem.init.ensure_collection", _fake_ensure)
+
+    created = create_collection(fake_client, "supamem-test", force=True)
+    assert created is True
+    fake_client.delete_collection.assert_called_once_with(collection_name="supamem-test")
+    assert ensure_calls == ["supamem-test"]
 
 
 def test_run_init_aborts_when_qdrant_down_without_yes(
