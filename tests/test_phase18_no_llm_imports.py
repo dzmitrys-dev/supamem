@@ -16,6 +16,8 @@ import pytest
 PHASE18_MODULES: tuple[str, ...] = (
     "supamem.qdrant_collection",
     "supamem.retrieval.tuned_hybrid",
+    "supamem.memory_writer",
+    "supamem.indexer",
 )
 
 _FORBIDDEN_IMPORT_ROOTS = frozenset({"openai", "anthropic", "ollama", "litellm"})

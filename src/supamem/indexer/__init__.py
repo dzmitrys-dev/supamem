@@ -628,6 +628,7 @@ def _index_records(
     is_transcript: bool,
     classifier_rooms: dict[str, list[str]],
     wallclock_fallback: Optional[list[int]] = None,
+    dedup_enabled: bool = False,
 ) -> int:
     """Embed ``records`` and upsert hybrid points. Returns chunks written.
 
@@ -658,6 +659,7 @@ def _index_records(
         if wallclock_fallback is not None:
             wallclock_fallback[0] += 1
     points: list[Any] = []
+    seen_hashes: set[str] = set()
     for idx, rec in enumerate(records):
         if _token_count(rec.text) < CHUNK_MIN_TOKENS and not is_transcript:
             # Transcript drawers can be short (single Q+A); markdown chunks
@@ -682,6 +684,11 @@ def _index_records(
         else:
             content_hash = sha
             point_id = _chunk_id(abs_path, idx, content_hash)
+
+        if dedup_enabled and content_hash in seen_hashes:
+            continue
+        if dedup_enabled:
+            seen_hashes.add(content_hash)
 
         # Phase 9 D-VFROM-01: transcripts may already expose a per-message
         # timestamp via rec.metadata['valid_from'] (Phase 6 owns the chunker).
@@ -816,6 +823,7 @@ def _process_one_source(
             is_transcript=is_transcript,
             classifier_rooms=classifier_rooms,
             wallclock_fallback=wallclock_fallback,
+            dedup_enabled=cfg.dedup_enabled,
         )
         if n > 0 and not is_transcript:
             manifest.update(abs_path, target, sha)

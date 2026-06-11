@@ -150,6 +150,9 @@ def _index_single_doc(
     Uses ``UUIDv5(slug)`` as the FIRST chunk's id so re-writes overwrite in
     place. Subsequent chunks (if the doc spans multiple T-1 chunks) get
     deterministic ``UUIDv5(slug + ":" + idx)`` IDs.
+
+    When ``cfg.dedup_enabled``, skips later points in the same upsert batch
+    that share the same file-level ``content_hash`` (no collection-wide scan).
     """
     from qdrant_client import QdrantClient
     from qdrant_client.http import models as qmodels
@@ -176,7 +179,12 @@ def _index_single_doc(
     sha = hashlib.sha256(body.encode("utf-8")).hexdigest()
     abs_path = str(target_path.resolve())
     points: list[Any] = []
+    seen_hashes: set[str] = set()
     for idx, chunk in enumerate(chunks):
+        if cfg.dedup_enabled:
+            if sha in seen_hashes:
+                continue
+            seen_hashes.add(sha)
         chunk_id = (
             point_id
             if idx == 0

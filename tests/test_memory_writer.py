@@ -168,6 +168,47 @@ def test_write_memory_rejects_too_many_tags(tmp_path: Path) -> None:
 # ── Qdrant write-create lifecycle ───────────────────────────────────────────
 
 
+def test_index_single_doc_dedup_off_writes_all_chunks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """dedup_enabled=False preserves pre-Phase-18 multi-chunk upsert counts."""
+    upserted: list[int] = []
+
+    fake_client = MagicMock()
+    fake_client.get_collections.return_value = MagicMock(collections=[])
+    fake_client.upsert.side_effect = lambda **kw: upserted.append(len(kw["points"]))
+
+    class _SparseVec:
+        indices = [1]
+        values = [0.5]
+
+    monkeypatch.setattr("qdrant_client.QdrantClient", lambda *a, **k: fake_client)
+    monkeypatch.setattr(
+        "supamem.embedders.build_dense_embedder",
+        lambda: MagicMock(embed=lambda batch: iter([[0.1] * 384 for _ in batch])),
+    )
+    monkeypatch.setattr(
+        "supamem.embedders.build_sparse_embedder",
+        lambda: MagicMock(embed=lambda batch: iter([_SparseVec() for _ in batch])),
+    )
+    monkeypatch.setattr(
+        "supamem.indexer.chunker.chunk_markdown", lambda body: ["a", "b"]
+    )
+
+    target = tmp_path / "note.md"
+    target.write_text("x", encoding="utf-8")
+    cfg = ResolvedConfig(collection="agent-test", dedup_enabled=False)
+
+    n = _index_single_doc(
+        cfg,
+        target_path=target,
+        body="shared hash parent",
+        point_id="00000000-0000-0000-0000-000000000002",
+    )
+    assert n == 2
+    assert upserted == [2]
+
+
 def test_index_single_doc_ensures_collection_before_upsert(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
