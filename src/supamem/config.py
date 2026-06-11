@@ -131,6 +131,12 @@ class ResolvedConfig:
     # opt-out users (T-17-04 carry-lock). Read by ``doctor`` to gate the
     # Ollama warm-pool panel (D-HYDE-04 + D-DOCTOR-04).
     retrieval_name: str = "tuned_hybrid"
+    # ── Phase 18 D-A3a — adaptive retrieval depth (SimpleMem k_dyn borrow) ─
+    # Local heuristic C_q modulates effective k; default OFF (D-A4 carry-lock).
+    # Mapped from [supamem.retrieval.adaptive_depth] via _NESTED_TABLES.
+    adaptive_depth_enabled: bool = False
+    adaptive_depth_delta: float = 0.5
+    adaptive_depth_k_max: int = 20
 
 
 @dataclass
@@ -175,6 +181,10 @@ class ConfigChain:
     # selector under ``[supamem]`` / ``[tool.supamem]`` (TOML key ``retrieval``
     # → flat field ``retrieval_name`` via ``_apply_section`` alias).
     retrieval_name: Source = "default"
+    # Phase 18 D-A3a — adaptive retrieval depth.
+    adaptive_depth_enabled: Source = "default"
+    adaptive_depth_delta: Source = "default"
+    adaptive_depth_k_max: Source = "default"
 
 
 _LEGACY_ENV: dict[str, str] = {
@@ -260,6 +270,15 @@ _NESTED_TABLES: list[tuple[str, dict[str, str]]] = [
         "retrieval.filtered_dense",
         {
             "preview_chars": "retrieval_filtered_dense_preview_chars",
+        },
+    ),
+    # ── Phase 18 D-A3a — [supamem.retrieval.adaptive_depth] ───────────────
+    (
+        "retrieval.adaptive_depth",
+        {
+            "enabled": "adaptive_depth_enabled",
+            "delta": "adaptive_depth_delta",
+            "k_max": "adaptive_depth_k_max",
         },
     ),
 ]
@@ -490,6 +509,19 @@ def load_config(cwd: Path | None = None) -> tuple[ResolvedConfig, ConfigChain]:
             f"[supamem.err]config: retrieval.filtered_dense.preview_chars="
             f"{cfg.retrieval_filtered_dense_preview_chars} must be >= 0 "
             "(0 disables truncation, positive values cap each hit's preview)."
+        )
+        raise SystemExit(2)
+    # Phase 18 D-A3a — adaptive depth bounds (T-18-F-01 k_max ceiling).
+    if cfg.adaptive_depth_delta < 0.0:
+        err_console.print(
+            f"[supamem.err]config: retrieval.adaptive_depth.delta="
+            f"{cfg.adaptive_depth_delta} must be >= 0"
+        )
+        raise SystemExit(2)
+    if not (1 <= cfg.adaptive_depth_k_max <= 50):
+        err_console.print(
+            f"[supamem.err]config: retrieval.adaptive_depth.k_max="
+            f"{cfg.adaptive_depth_k_max} must be in [1, 50]"
         )
         raise SystemExit(2)
 

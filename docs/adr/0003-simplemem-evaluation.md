@@ -109,3 +109,19 @@ non-LLM compression need emerges.
 
 **Rejected for Phase 18.** Per Phase 17 D-LAT-01 precedent and D-A4, borrows ship
 opt-in first; default flip requires CodeRAG floors.
+
+### Adaptive depth signal (D-A3a implementation)
+
+When `[supamem.retrieval.adaptive_depth] enabled = true`, ``tuned_hybrid`` modulates
+effective ``k`` via a local complexity score ``C_q ∈ [0, 1]`` (no LLM):
+
+| Component | Weight | Signal |
+|-----------|--------|--------|
+| Token length | 0.40 | ``min(1, approx_tokens / 64)`` |
+| Clause markers | 0.25 | ``?``, `` and ``, `` or ``, ``;``, ``:`` |
+| Facet filter | 0.15 | non-empty ``where`` |
+| Code identifiers | 0.20 | snake_case, ``::``, ``.py``, backticks |
+
+``k_eff = max(k, min(k_max, floor(k * (1 + delta * C_q))))`` with shipped defaults
+``delta = 0.5``, ``k_max = 20``. Default ``enabled = false`` preserves byte-identical
+retrieval (D-A4).

@@ -15,6 +15,7 @@ instance construction (not import) so config-driven runtimes can opt in.
 from __future__ import annotations
 
 import math
+import re
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -68,6 +69,62 @@ def _cosine(a: list[float] | None, b: list[float] | None) -> float:
 def _approx_token_count(text: str) -> int:
     """Cheap token estimate for the T-8 budget loop."""
     return max(1, len(text) // 4)
+
+
+_SNAKE_CASE_RE = re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b")
+
+
+def _count_clause_markers(text: str) -> int:
+    lowered = text.lower()
+    count = text.count("?")
+    for marker in (" and ", " or ", ";", ":"):
+        count += lowered.count(marker)
+    return count
+
+
+def _count_identifier_tokens(text: str) -> int:
+    count = len(_SNAKE_CASE_RE.findall(text))
+    count += text.count("::")
+    count += text.count(".py")
+    count += text.count("`") // 2
+    return count
+
+
+def complexity_score(text: str, where: WhereDict | None) -> float:
+    """Local query-complexity signal C_q for adaptive depth (ADR-0003 / D-A3a).
+
+    Composite heuristic (no LLM) — weights locked for Phase 18:
+
+    - 0.40 × min(1, token_estimate / 64) via :func:`_approx_token_count`
+    - 0.25 × min(1, clause_markers / 3) for ``?``, `` and ``, `` or ``,
+      ``;``, ``:``
+    - 0.15 when ``where`` filter is non-empty
+    - 0.20 × min(1, identifier_tokens / 2) for snake_case, ``::``, ``.py``,
+      backtick spans
+
+  Returns a value in ``[0.0, 1.0]`` used by :func:`_effective_k` as
+  ``k_eff = max(k, min(k_max, floor(k * (1 + delta * C_q))))``.
+    """
+    tokens = _approx_token_count(text)
+    token_term = 0.40 * min(1.0, tokens / 64.0)
+    clause_term = 0.25 * min(1.0, _count_clause_markers(text) / 3.0)
+    filter_term = 0.15 if where else 0.0
+    id_term = 0.20 * min(1.0, _count_identifier_tokens(text) / 2.0)
+    return token_term + clause_term + filter_term + id_term
+
+
+def _effective_k(
+    text: str,
+    k: int,
+    where: WhereDict | None,
+    config: ResolvedConfig,
+) -> int:
+    """Map base ``k`` to ``k_eff`` using config delta/k_max and :func:`complexity_score`."""
+    cq = complexity_score(text, where)
+    delta = getattr(config, "adaptive_depth_delta", 0.5)
+    k_max = getattr(config, "adaptive_depth_k_max", 20)
+    scaled = math.floor(k * (1.0 + delta * cq))
+    return max(k, min(k_max, scaled))
 
 
 def _recency_multiplier(updated_at: str | None) -> float:
@@ -254,6 +311,12 @@ class TunedHybridBackend:
         # drown filtered hits in unfiltered ones, RESEARCH Pitfall 5).
         qf = build_qdrant_filter(where)
 
+        k_query = (
+            _effective_k(text, k, where, self.config)
+            if getattr(self.config, "adaptive_depth_enabled", False)
+            else k
+        )
+
         resp = client.query_points(
             collection_name=self.config.collection,
             prefetch=[
@@ -275,7 +338,7 @@ class TunedHybridBackend:
             ],
             query=qmodels.FusionQuery(fusion=qmodels.Fusion.RRF),
             query_filter=qf,
-            limit=max(k * 2, 10),
+            limit=max(k_query * 2, 10),
             with_payload=True,
             with_vectors=True,
         )
@@ -424,6 +487,6 @@ class TunedHybridBackend:
                     rerank_score=score if reranker else None,
                 )
             )
-            if len(out) >= k:
+            if len(out) >= k_query:
                 break
         return out

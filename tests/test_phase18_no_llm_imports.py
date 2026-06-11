@@ -15,6 +15,7 @@ import pytest
 # Updated as Phase 18 borrow modules ship (Plans F–H).
 PHASE18_MODULES: tuple[str, ...] = (
     "supamem.qdrant_collection",
+    "supamem.retrieval.tuned_hybrid",
 )
 
 _FORBIDDEN_IMPORT_ROOTS = frozenset({"openai", "anthropic", "ollama", "litellm"})

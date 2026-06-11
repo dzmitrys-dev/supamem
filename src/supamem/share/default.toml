@@ -1,0 +1,7 @@
+# Shipped supamem defaults — lowest precedence after ResolvedConfig dataclass
+# fields. Project ``.supamem/config.toml`` and user config override these.
+
+[supamem.retrieval.adaptive_depth]
+enabled = false
+delta = 0.5
+k_max = 20
