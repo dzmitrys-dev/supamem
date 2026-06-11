@@ -458,6 +458,28 @@ def cmd_evalbench(
             "Default OFF preserves Phase 16 baseline replay byte-identical."
         ),
     ),
+    autotune: bool = typer.Option(
+        False, "--autotune",
+        help=(
+            "Rule-based CodeRAG config tuner (EvolveMem-inspired, explicit "
+            "invoke). Runs observe→diagnose→gate; default is dry-run with "
+            "zero config writes."
+        ),
+    ),
+    autotune_apply: bool = typer.Option(
+        False, "--apply",
+        help=(
+            "Persist gate-passing config deltas to .supamem/config.toml "
+            "(requires --autotune; disables dry-run)."
+        ),
+    ),
+    autotune_dry_run: bool = typer.Option(
+        True, "--dry-run/--no-dry-run",
+        help=(
+            "Propose autotune deltas without writing config (default when "
+            "--autotune without --apply)."
+        ),
+    ),
 ) -> None:
     """Run the supamem bench harness (Phase 10).
 
@@ -494,6 +516,12 @@ def cmd_evalbench(
     from supamem.eval.runner import run_bench
 
     cfg, _chain = load_config()
+    if autotune_apply and not autotune:
+        err_console.print(
+            "[supamem.error]--apply requires --autotune[/supamem.error]"
+        )
+        raise typer.Exit(2)
+    effective_dry_run = False if autotune_apply else autotune_dry_run
     raise typer.Exit(run_bench(
         suite=suite,
         full=full,
@@ -508,6 +536,9 @@ def cmd_evalbench(
         peer=peer,
         ingest_peer=ingest_peer,
         reingest_coderag=reingest_coderag,
+        autotune=autotune,
+        autotune_dry_run=effective_dry_run,
+        autotune_apply=autotune_apply,
     ))
 
 

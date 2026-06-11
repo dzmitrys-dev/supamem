@@ -543,6 +543,31 @@ def test_eval_coderag_help_lists_full_and_out_and_peer() -> None:
         assert flag in out, f"expected {flag!r} in eval --help, got: {out!r}"
 
 
+def test_eval_help_lists_autotune_flags() -> None:
+    """Plan 18-I: eval --help surfaces --autotune, --apply, --dry-run."""
+    r = _run("eval", "--help")
+    assert r.returncode == 0, r.stderr
+    out = r.stdout + r.stderr
+    for flag in ("--autotune", "--apply", "--dry-run"):
+        assert flag in out, f"expected {flag!r} in eval --help, got: {out!r}"
+
+
+def test_eval_coderag_autotune_dry_run_smoke() -> None:
+    """Plan 18-I: ``eval --suite coderag --autotune --dry-run`` exits 0 offline."""
+    r = _run(
+        "eval",
+        "--suite",
+        "coderag",
+        "--autotune",
+        "--dry-run",
+        env={
+            "SUPAMEM_NO_UPDATE_CHECK": "1",
+            "SUPAMEM_AUTOTUNE_OFFLINE": "1",
+        },
+    )
+    assert r.returncode == 0, f"stderr: {r.stderr}\nstdout: {r.stdout}"
+
+
 def test_version_prints_current() -> None:
     """Test 6: --version prints styled banner with current __version__ + credit line."""
     from supamem import __version__

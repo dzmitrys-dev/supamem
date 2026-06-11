@@ -6,6 +6,7 @@ propose → gate → apply. Explicit CLI invoke only — no background daemon.
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -233,13 +234,20 @@ def persist_config(
 
 
 def _observe_bench(cfg: ResolvedConfig) -> dict[str, Any]:
-    """Run a full CodeRAG bench and return the envelope dict."""
+    """Run a CodeRAG bench and return the envelope dict."""
     from supamem.eval.runner import run_bench
 
+    offline = os.environ.get("SUPAMEM_AUTOTUNE_OFFLINE", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
         out_path = Path(tmp.name)
     try:
-        rc = run_bench(suite="coderag", config=cfg, full=True, out=out_path)
+        rc = run_bench(
+            suite="coderag", config=cfg, full=not offline, out=out_path
+        )
         if rc != 0:
             err_console.print(
                 "[supamem.error]autotune: baseline bench failed "

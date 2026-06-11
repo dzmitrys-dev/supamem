@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from pathlib import Path
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import patch
 
 from supamem.config import ResolvedConfig
 from supamem.eval.coderag.gate import load_floors
