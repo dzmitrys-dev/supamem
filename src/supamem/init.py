@@ -48,11 +48,14 @@ def _slugify(name: str) -> str:
     return s or "supamem"
 
 
-def probe_qdrant(url: str, timeout: float = 2.0) -> bool:
+def probe_qdrant(url: str, api_key: str = "", timeout: float = 2.0) -> bool:
     """Return True iff ``GET <url>/healthz`` returns 200 within ``timeout``."""
     target = url.rstrip("/") + "/healthz"
     try:
-        with urllib.request.urlopen(target, timeout=timeout) as resp:  # noqa: S310 — explicit URL
+        req = urllib.request.Request(target)
+        if api_key:
+            req.add_header("api-key", api_key)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — explicit URL
             return resp.status == 200
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, socket.timeout, OSError):
         return False
@@ -134,14 +137,16 @@ def run_init(
     skip_patch_agents: bool = False,
 ) -> int:
     """Greenfield bootstrap. Returns 0 on success, non-zero on hard failure."""
+    import os
     cwd = cwd.resolve()
-    url = (qdrant_url or "http://localhost:6333").rstrip("/")
+    url = (qdrant_url or os.environ.get("QDRANT_URL") or "http://localhost:6333").rstrip("/")
+    api_key = os.environ.get("QDRANT_API_KEY", "")
 
     banner("supamem init", f"bootstrapping in {cwd}")
 
     # ── 1. Probe Qdrant ────────────────────────────────────────────────────
     info(f"probing Qdrant at {url}")
-    if not probe_qdrant(url):
+    if not probe_qdrant(url, api_key=api_key):
         warn(f"Qdrant unreachable at {url}")
         info("Start Qdrant with:")
         step(DOCKER_RECIPE)
@@ -190,7 +195,7 @@ def run_init(
 
     # ── 4. Create collection ───────────────────────────────────────────────
     try:
-        client = _get_client(url)
+        client = _get_client(url, api_key=api_key)
         created = create_collection(client, collection, force=force)
         if not created:
             err(f"collection {collection!r} already exists")
