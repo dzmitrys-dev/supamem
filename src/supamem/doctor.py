@@ -752,7 +752,7 @@ def run_doctor(*, redact_secrets: bool = True) -> int:
 
     # ── Section 1: Health ────────────────────────────────────────────────
     console.print("[supamem.brand]Health[/supamem.brand]")
-    qdrant_up = probe_qdrant(cfg.qdrant_url)
+    qdrant_up = probe_qdrant(cfg.qdrant_url, api_key=cfg.qdrant_api_key)
     if qdrant_up:
         ok(f"Qdrant reachable at {cfg.qdrant_url}")
     else:
@@ -777,7 +777,7 @@ def run_doctor(*, redact_secrets: bool = True) -> int:
             sparse = "sparse+dense" if coll_status.get("sparse") else "dense-only"
             ok(f"collection {cfg.collection!r} ({sparse})")
         else:
-            err(f"collection {cfg.collection!r} missing")
+            err(f"collection {cfg.collection!r} missing — error: {coll_status.get('error', 'unknown')}")
 
     # ── Section 2: Config chain ──────────────────────────────────────────
     console.print()

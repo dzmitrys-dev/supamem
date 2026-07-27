@@ -20,7 +20,7 @@ def test_run_init_writes_config_toml(
     """Mock Qdrant client; assert .supamem/config.toml has [supamem] collection key."""
     import supamem.init as mod
 
-    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: True)
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, api_key="", timeout=2.0: True)
 
     fake_client = MagicMock()
     fake_client.get_collections.return_value = MagicMock(collections=[])
@@ -42,7 +42,7 @@ def test_run_init_skips_create_when_collection_exists(
     """Refuse to create_collection if name already exists (T-80.6-08-04)."""
     import supamem.init as mod
 
-    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: True)
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, api_key="", timeout=2.0: True)
 
     existing = MagicMock()
     existing.name = f"supamem-{tmp_path.name.lower().replace('_', '-')}"
@@ -68,7 +68,7 @@ def test_run_init_refuses_to_overwrite_existing_config(
     """T-80.6-08-02: refuse to clobber .supamem/config.toml without --force."""
     import supamem.init as mod
 
-    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: True)
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, api_key="", timeout=2.0: True)
     fake_client = MagicMock()
     fake_client.get_collections.return_value = MagicMock(collections=[])
     monkeypatch.setattr(mod, "_get_client", lambda url, api_key="": fake_client)
@@ -88,6 +88,47 @@ def test_run_init_aborts_when_qdrant_down_without_yes(
     """If Qdrant is unreachable AND yes=False, abort cleanly without prompting."""
     import supamem.init as mod
 
-    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: False)
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, api_key="", timeout=2.0: False)
     rc = run_init(tmp_path, yes=False)
     assert rc == 2
+
+
+def test_run_init_respects_qdrant_env_vars(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Assert run_init falls back to QDRANT_URL and resolves QDRANT_API_KEY from environment."""
+    import supamem.init as mod
+
+    captured_url = None
+    captured_api_key = None
+
+    def mock_probe_qdrant(url, api_key="", timeout=2.0):
+        nonlocal captured_url, captured_api_key
+        captured_url = url
+        captured_api_key = api_key
+        return True
+
+    monkeypatch.setattr(mod, "probe_qdrant", mock_probe_qdrant)
+    monkeypatch.setenv("QDRANT_URL", "https://env-qdrant-url.example.com:443")
+    monkeypatch.setenv("QDRANT_API_KEY", "env-api-key-value")
+
+    fake_client = MagicMock()
+    fake_client.get_collections.return_value = MagicMock(collections=[])
+
+    captured_client_url = None
+    captured_client_api_key = None
+
+    def mock_get_client(url, api_key=""):
+        nonlocal captured_client_url, captured_client_api_key
+        captured_client_url = url
+        captured_client_api_key = api_key
+        return fake_client
+
+    monkeypatch.setattr(mod, "_get_client", mock_get_client)
+
+    rc = run_init(tmp_path, yes=True)
+    assert rc == 0
+    assert captured_url == "https://env-qdrant-url.example.com:443"
+    assert captured_api_key == "env-api-key-value"
+    assert captured_client_url == "https://env-qdrant-url.example.com:443"
+    assert captured_client_api_key == "env-api-key-value"
