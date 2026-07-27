@@ -52,7 +52,11 @@ def probe_qdrant(url: str, timeout: float = 2.0) -> bool:
     """Return True iff ``GET <url>/healthz`` returns 200 within ``timeout``."""
     target = url.rstrip("/") + "/healthz"
     try:
-        with urllib.request.urlopen(target, timeout=timeout) as resp:  # noqa: S310 — explicit URL
+        req = urllib.request.Request(
+            target,
+            headers={"User-Agent": "Mozilla/5.0 (supamem-probe)"}
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — explicit URL
             return resp.status == 200
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, socket.timeout, OSError):
         return False
