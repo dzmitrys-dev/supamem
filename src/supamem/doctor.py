@@ -777,7 +777,7 @@ def run_doctor(*, redact_secrets: bool = True) -> int:
             sparse = "sparse+dense" if coll_status.get("sparse") else "dense-only"
             ok(f"collection {cfg.collection!r} ({sparse})")
         else:
-            err(f"collection {cfg.collection!r} missing")
+            err(f"collection {cfg.collection!r} missing — error: {coll_status.get('error', 'unknown')}")
 
     # ── Section 2: Config chain ──────────────────────────────────────────
     console.print()

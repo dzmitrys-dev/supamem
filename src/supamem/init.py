@@ -52,7 +52,10 @@ def probe_qdrant(url: str, api_key: str = "", timeout: float = 2.0) -> bool:
     """Return True iff ``GET <url>/healthz`` returns 200 within ``timeout``."""
     target = url.rstrip("/") + "/healthz"
     try:
-        req = urllib.request.Request(target)
+        req = urllib.request.Request(
+            target,
+            headers={"User-Agent": "Mozilla/5.0 (supamem-probe)"}
+        )
         if api_key:
             req.add_header("api-key", api_key)
         with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — explicit URL
