@@ -265,6 +265,11 @@ def test_flat_classifier_rooms_under_supamem_is_ignored(
     honored. Locks WR-05 contract: dict-typed fields are excluded by
     ``_apply_section`` (``isinstance(..., dict)`` filter), so the user's
     flat-form value is silently dropped and defaults remain in effect.
+
+    Phase 19.1 SM-1c LOCK: stays green and UNMODIFIED as the unknown-key
+    warning lands — warnings add signal only, apply semantics stay
+    byte-identical (``classifier_rooms`` is a dataclass attr name, so the
+    section-level unknown-key diff excludes it).
     """
     monkeypatch.delenv("SUPAMEM_CONFIG", raising=False)
     cfg_dir = tmp_path / ".supamem"
@@ -281,3 +286,129 @@ def test_flat_classifier_rooms_under_supamem_is_ignored(
     assert "backend" in cfg.classifier_rooms
     # Default backend prefix list is the shipped one, not the user's ["src"].
     assert cfg.classifier_rooms["backend"] != ["src"]
+
+
+# ── Phase 19.1 SM-1a — warn-only unknown-key detection (TDD Task 1) ─────────
+#
+# SM-1a truths under test:
+#   * unknown key in a nested table (e.g. [supamem.eval]) → ONE err_console
+#     warning naming the table, the sorted unknown key(s), and the accepted
+#     keys; stdout stays clean (MCP stdio purity — Pitfall 6).
+#   * unknown FLAT key under [supamem] → same style of warning naming
+#     [supamem]; the value still does NOT land on the dataclass.
+#   * fully-known config → no unknown-key warning at all.
+#   * a key that is the first segment of a nested table (e.g. ``eval``
+#     itself) is NOT flagged at the [supamem] level.
+#
+# SM-1c lock (Test 3 of the plan): ``test_flat_classifier_rooms_under_
+# supamem_is_ignored`` above — passes unmodified.
+
+
+def test_unknown_eval_key_warns_on_stderr_with_accepted_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """SM-1a nested: an unknown key in [supamem.eval] emits ONE warning that
+    names the unknown key AND the accepted keys; the warning reaches stderr
+    and stdout stays clean (JSON-RPC stdio contract)."""
+    monkeypatch.delenv("SUPAMEM_CONFIG", raising=False)
+    cfg_dir = tmp_path / ".supamem"
+    cfg_dir.mkdir()
+    (cfg_dir / "config.toml").write_text(
+        "[supamem.eval]\n"
+        'goldens_path = "custom/goldens.jsonl"\n'
+        "bogus_eval_key = 42\n",
+        encoding="utf-8",
+    )
+    cfg, _chain = load_config(tmp_path)
+    captured = capsys.readouterr()
+    # Warning names the unknown key …
+    assert "bogus_eval_key" in captured.err
+    # … the table it lives in (literal [supamem.eval], Rich-markup-escaped) …
+    assert "supamem.eval" in captured.err
+    # … and the accepted keys so the typo is actionable.
+    assert "baseline_total_tokens" in captured.err
+    assert "goldens_path" in captured.err
+    # MCP stdio purity: nothing on stdout.
+    assert captured.out == ""
+    # Apply semantics unchanged: known key still lands, unknown one does not.
+    assert cfg.goldens_path == "custom/goldens.jsonl"
+
+
+def test_unknown_flat_key_under_supamem_warns_and_does_not_apply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """SM-1a top-level: an unknown flat scalar under [supamem] warns naming
+    the key; the value still does NOT land on the dataclass while known flat
+    keys keep applying (byte-identical apply semantics)."""
+    monkeypatch.delenv("SUPAMEM_CONFIG", raising=False)
+    cfg_dir = tmp_path / ".supamem"
+    cfg_dir.mkdir()
+    (cfg_dir / "config.toml").write_text(
+        "[supamem]\n"
+        'collection = "warn_probe"\n'
+        'totally_bogus_flat_key = "nope"\n',
+        encoding="utf-8",
+    )
+    cfg, chain = load_config(tmp_path)
+    captured = capsys.readouterr()
+    assert "totally_bogus_flat_key" in captured.err
+    assert "supamem]" in captured.err  # the [supamem] table is named
+    assert captured.out == ""
+    # Unknown value never lands; known keys still apply with source attribution.
+    assert not hasattr(cfg, "totally_bogus_flat_key")
+    assert cfg.collection == "warn_probe"
+    assert chain.collection == "supamem_toml"
+
+
+def test_known_config_emits_no_unknown_key_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """SM-1a negative: a fully-known config (flat fields, scalar alias,
+    nested tables) emits no unknown-key warning."""
+    monkeypatch.delenv("SUPAMEM_CONFIG", raising=False)
+    cfg_dir = tmp_path / ".supamem"
+    cfg_dir.mkdir()
+    (cfg_dir / "config.toml").write_text(
+        "[supamem]\n"
+        'collection = "known_cfg"\n'
+        "chunk_size = 300\n"
+        'retrieval = "dense"\n'
+        "\n"
+        "[supamem.eval]\n"
+        'goldens_path = "g.jsonl"\n'
+        "\n"
+        "[supamem.reranker]\n"
+        'name = "off"\n',
+        encoding="utf-8",
+    )
+    cfg, _chain = load_config(tmp_path)
+    captured = capsys.readouterr()
+    assert "unknown" not in captured.err
+    assert captured.out == ""
+    # Known keys (flat + alias + nested) all still apply.
+    assert cfg.collection == "known_cfg"
+    assert cfg.chunk_size == 300
+    assert cfg.retrieval_name == "dense"
+    assert cfg.goldens_path == "g.jsonl"
+    assert cfg.reranker_name == "off"
+
+
+def test_nested_table_first_segment_not_flagged_as_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """SM-1a exclusion: a section key that is the first segment of a nested
+    table (``eval`` from ``[supamem.eval]``) does not trigger the top-level
+    unknown-key warning — only genuinely unknown keys warn."""
+    monkeypatch.delenv("SUPAMEM_CONFIG", raising=False)
+    cfg_dir = tmp_path / ".supamem"
+    cfg_dir.mkdir()
+    (cfg_dir / "config.toml").write_text(
+        "[supamem.eval]\n"
+        'goldens_path = "only_table.jsonl"\n',
+        encoding="utf-8",
+    )
+    cfg, _chain = load_config(tmp_path)
+    captured = capsys.readouterr()
+    assert "unknown" not in captured.err
+    assert captured.out == ""
+    assert cfg.goldens_path == "only_table.jsonl"
