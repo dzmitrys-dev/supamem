@@ -488,6 +488,7 @@ def _render_coderag_panel() -> None:
         operator visibility (Plan 15-D Task D1 INV-A2).
     """
     from importlib import resources as _resources  # noqa: PLC0415
+    import importlib.util  # noqa: PLC0415
     import json as _json  # noqa: PLC0415
 
     from platformdirs import user_cache_dir  # noqa: PLC0415
@@ -496,24 +497,34 @@ def _render_coderag_panel() -> None:
     console.print("[supamem.brand]coderag bench[/supamem.brand]")
 
     # 1. Supamem-side bench collection (constant — never config-driven).
-    try:
-        from supamem.eval.coderag.ingest import (  # noqa: PLC0415
-            CODERAG_COLLECTION,
-        )
+    # SM-3 (Phase 19.1): find_spec distinguishes "optional extra absent"
+    # (info — expected on a base install) from "present but broken" (warn —
+    # actionable), mirroring the RAGAS availability fork above.
+    if importlib.util.find_spec("pytrec_eval") is None:
+        # \\[ — Rich markup escape so the literal "[eval]" renders.
+        info("pytrec_eval      = not installed (pip install supamem\\[eval])")
+    else:
+        try:
+            from supamem.eval.coderag.ingest import (  # noqa: PLC0415
+                CODERAG_COLLECTION,
+            )
 
-        ok(f"collection      = {CODERAG_COLLECTION}")
-    except Exception as exc:  # noqa: BLE001
-        warn(f"coderag ingest module probe failed: {type(exc).__name__}: {exc}")
+            ok(f"collection      = {CODERAG_COLLECTION}")
+        except Exception as exc:  # noqa: BLE001
+            warn(f"coderag ingest module probe failed: {type(exc).__name__}: {exc}")
 
     # 2. mem0 peer collection (Plan 15-D D1 INV-A2: distinct collection).
-    try:
-        from supamem.eval.coderag.peers.mem0_adapter import (  # noqa: PLC0415
-            MEM0_COLLECTION,
-        )
+    if importlib.util.find_spec("mem0") is None:
+        info("mem0             = not installed (pip install supamem\\[peers-mem0])")
+    else:
+        try:
+            from supamem.eval.coderag.peers.mem0_adapter import (  # noqa: PLC0415
+                MEM0_COLLECTION,
+            )
 
-        info(f"mem0_collection = {MEM0_COLLECTION}")
-    except Exception as exc:  # noqa: BLE001
-        warn(f"coderag mem0 adapter probe failed: {type(exc).__name__}: {exc}")
+            info(f"mem0_collection = {MEM0_COLLECTION}")
+        except Exception as exc:  # noqa: BLE001
+            warn(f"coderag mem0 adapter probe failed: {type(exc).__name__}: {exc}")
 
     # 3. Bundled corpus manifest (placeholder vs populated).
     try:
