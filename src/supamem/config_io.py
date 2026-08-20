@@ -132,6 +132,24 @@ def atomic_write_json(
     """
     new_text = _serialize(content)
     old_text = _read_existing(target)
+
+    # WR-01: decide "changed" on the OBJECT GRAPH, not on the text. Comparing
+    # text made any formatting difference — compact JSON, 4-space indent, tabs,
+    # a different key order — count as a change, so a semantic no-op rewrote
+    # config files supamem does not own and dropped a `.bak.<ns>` sibling each
+    # time. Because `repair` is uninstall-then-install, EVERY repair reformatted
+    # the user's ~/.claude.json (Claude Code's primary state file),
+    # ~/.claude/settings.json and .mcp.json, accumulating backups nothing
+    # prunes — and inflated the SM-7 dry-run count with whitespace-only
+    # rewrites. An unparseable existing file falls through to the text compare
+    # below, so a corrupt file is still repaired (with a backup).
+    if old_text:
+        try:
+            if json.loads(old_text) == content:
+                return WriteResult(written=False, backup_path=None, diff="")
+        except json.JSONDecodeError:
+            pass
+
     diff = compute_diff(
         old_text,
         new_text,
