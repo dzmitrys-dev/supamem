@@ -15,12 +15,14 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 from importlib import resources
 from pathlib import Path
 from typing import Any
 
 from supamem.config_io import atomic_write_json, deep_merge_json
+from supamem.console import warn
 from supamem.install._types import InstallResult
 
 log = logging.getLogger("supamem.install.cursor")
@@ -121,6 +123,44 @@ def _hooks_with_snapshot(existing: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
+# SM-9a: conventional generator markings. Detection keys on these signals
+# ONLY — never on content difference alone (Pitfall 9: a differing but
+# unmarked file is the legitimate upgrade case).
+_GENERATED_MARK = re.compile(r"(?i)\b(generated|do[- ]not[- ]edit|auto[- ]generated)\b")
+_GENERATED_HEAD_LINES = 10
+_SIBLING_MANIFEST_SUFFIXES = (".manifest.json", ".manifest")
+
+
+def _looks_generated(target: Path) -> bool:
+    """SM-9a heuristic: does ``target`` look generator-managed?
+
+    True when the head of an existing file carries a conventional generated
+    marker (``generated`` / ``do-not-edit`` / ``auto-generated`` — case
+    insensitive, hyphen-or-space tolerant, first ~10 lines) or when any
+    sibling in the target's directory is a ``*.manifest.json`` / ``*.manifest``
+    (the common "a generator owns this directory" convention). A detection
+    miss degrades to today's behavior plus the overwrite warning — never
+    worse (assumption A8).
+    """
+    if not target.exists():
+        return False
+    try:
+        head = "\n".join(
+            target.read_text(encoding="utf-8", errors="replace").splitlines()[
+                :_GENERATED_HEAD_LINES
+            ]
+        )
+    except OSError:
+        return False
+    if _GENERATED_MARK.search(head):
+        return True
+    try:
+        siblings = list(target.parent.iterdir())
+    except OSError:  # pragma: no cover — vanished mid-run
+        return False
+    return any(s.name.endswith(_SIBLING_MANIFEST_SUFFIXES) for s in siblings)
+
+
 def install(*, dry_run: bool = False, scope: str = "project") -> InstallResult:
     """Install supamem MCP entry + hooks for Cursor.
 
@@ -169,28 +209,61 @@ def install(*, dry_run: bool = False, scope: str = "project") -> InstallResult:
 
     cur_hooks = _read_json(hooks_path)
     merged_hooks = _hooks_with_snapshot(cur_hooks)
-    res_hooks = atomic_write_json(hooks_path, merged_hooks, dry_run=dry_run)
-    if res_hooks.diff:
-        diffs.append(res_hooks.diff)
-        would_write += 1
-    if res_hooks.written:
-        written.append(hooks_path)
-    if res_hooks.backup_path:
-        backups.append(res_hooks.backup_path)
+    # SM-9: probe (side-effect-free dry run) whether the merge write would
+    # actually change bytes — guards fire only on a real would-be clobber,
+    # never on no-op re-runs.
+    hooks_would_change = hooks_path.exists() and bool(
+        atomic_write_json(hooks_path, merged_hooks, dry_run=True).diff
+    )
+    if hooks_would_change and _looks_generated(hooks_path):
+        # SM-9a: generator-managed destination — skip the merge entirely
+        # (no write, no would-write count, no diff).
+        warn(
+            f"supamem: {hooks_path} appears generator-managed — leaving it "
+            f"untouched; re-run your generator, or pass --force-cursor-rules "
+            f"to let supamem own it"
+        )
+    else:
+        if hooks_would_change and not dry_run:
+            # SM-9b floor: unmarked differing target — the overwrite is visible.
+            warn(f"supamem: overwriting existing {hooks_path} (content differs; backup retained)")
+        res_hooks = atomic_write_json(hooks_path, merged_hooks, dry_run=dry_run)
+        if res_hooks.diff:
+            diffs.append(res_hooks.diff)
+            would_write += 1
+        if res_hooks.written:
+            written.append(hooks_path)
+        if res_hooks.backup_path:
+            backups.append(res_hooks.backup_path)
 
     src = _packaged_mdc_source()
     if src.exists():
         new_mdc = src.read_bytes()
         cur_mdc = mdc_target.read_bytes() if mdc_target.exists() else b""
         if cur_mdc != new_mdc:
-            would_write += 1
-            if not dry_run:
-                mdc_target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src, mdc_target)
-                written.append(mdc_target)
-            diffs.append(
-                f"--- {mdc_target}\n+++ {mdc_target}\n@@ supamem dual-memory.mdc copy @@\n"
-            )
+            if mdc_target.exists() and _looks_generated(mdc_target):
+                # SM-9a: generator-managed destination — skip the copy
+                # entirely (no write, no would-write count, no diff).
+                warn(
+                    f"supamem: {mdc_target} appears generator-managed — "
+                    f"leaving it untouched; re-run your generator, or pass "
+                    f"--force-cursor-rules to let supamem own it"
+                )
+            else:
+                if mdc_target.exists() and not dry_run:
+                    # SM-9b floor: unmarked differing target — visible overwrite.
+                    warn(
+                        f"supamem: overwriting existing {mdc_target} — replacing "
+                        f"outdated dual-memory rules with the packaged copy"
+                    )
+                would_write += 1
+                if not dry_run:
+                    mdc_target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src, mdc_target)
+                    written.append(mdc_target)
+                diffs.append(
+                    f"--- {mdc_target}\n+++ {mdc_target}\n@@ supamem dual-memory.mdc copy @@\n"
+                )
 
     no_op = not written and not diffs
     return InstallResult(
