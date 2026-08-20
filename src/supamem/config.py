@@ -361,18 +361,30 @@ def _warn_unknown_config_keys(
     the MCP stdio server path, so a typo must never break startup (no
     SystemExit here, unlike the fail-closed validation gates below). Routes
     through ``err_console`` (stderr) with ``[supamem.warn]`` markup so the
-    JSON-RPC stdout contract is preserved (Pitfall 6). Table labels are
-    Rich-markup-escaped so the literal ``[supamem.eval]`` renders.
+    JSON-RPC stdout contract is preserved (Pitfall 6).
+
+    CR-04: the message is assembled as PLAIN text and escaped exactly once at
+    print time, so the only Rich markup in the printed string is the glyph tag
+    we control. Key names are user-supplied and TOML permits arbitrary
+    characters in quoted keys, so interpolating them raw into markup was an
+    injection: a key named ``[/bold]`` raised ``MarkupError`` out of
+    ``load_config`` and killed CLI/MCP startup — breaking the very invariant
+    this docstring promises — while ``[bold]my_typo`` was silently swallowed
+    down to ``my_typo``, naming a key absent from the user's file. Escaping the
+    whole message also makes the literal ``[{table}]`` render without the
+    hand-rolled ``\\[`` that only covered the label.
     """
+    from rich.markup import escape  # noqa: PLC0415
+
     from supamem.console import err_console  # noqa: PLC0415
 
     msg = (
-        f"config: unknown key(s) in \\[{table}]: "
+        f"config: unknown key(s) in [{table}]: "
         f"{', '.join(sorted(unknown))} — accepted: {', '.join(accepted)}"
     )
     if note:
         msg += f" {note}"
-    err_console.print(f"[supamem.warn]⚠[/supamem.warn] {msg}")
+    err_console.print(f"[supamem.warn]⚠[/supamem.warn] {escape(msg)}")
 
 
 def _load_toml(p: Path) -> dict[str, Any]:
@@ -607,12 +619,22 @@ def load_config(cwd: Path | None = None) -> tuple[ResolvedConfig, ConfigChain]:
 
         known = {ep.name for ep in entry_points(group="supamem.reranker")}
         if cfg.reranker_name not in known:
-            err_console.print(
-                f"[supamem.err]config: reranker_name={cfg.reranker_name!r} "
+            # CR-04 sibling: reranker_name is a user-controlled string, so it
+            # carries the same markup-injection shape as the warn path — a
+            # value of "[/bold]" turned this fail-closed gate into a
+            # MarkupError traceback instead of a clean exit 2. Escaping also
+            # restores the "[supamem.reranker]" table name in the remedy, which
+            # Rich was silently swallowing as an unknown style tag ("Set
+            # name = 'off'" — omitting *which* table to set it in).
+            from rich.markup import escape  # noqa: PLC0415
+
+            detail = (
+                f"config: reranker_name={cfg.reranker_name!r} "
                 f"is not a registered supamem.reranker entry-point "
                 f"(known: {sorted(known) or '[]'}). "
                 f"Set [supamem.reranker] name = 'off' to disable."
             )
+            err_console.print(f"[supamem.err]{escape(detail)}")
             raise SystemExit(2)
 
     # ── Phase 9 D-CONFIG-02 — Pydantic-style fail-closed validation ──────
@@ -667,9 +689,15 @@ def load_config(cwd: Path | None = None) -> tuple[ResolvedConfig, ConfigChain]:
         raise SystemExit(2)
     # Phase 19 L3 — response_format enum gate (fail closed at boot).
     if cfg.mcp_response_format not in ("concise", "detailed"):
+        # CR-04 sibling: user-controlled string in markup (see reranker_name).
+        from rich.markup import escape  # noqa: PLC0415
+
         err_console.print(
-            f"[supamem.err]config: mcp.response_format="
-            f"{cfg.mcp_response_format!r} must be one of: concise, detailed"
+            "[supamem.err]"
+            + escape(
+                f"config: mcp.response_format={cfg.mcp_response_format!r} "
+                f"must be one of: concise, detailed"
+            )
         )
         raise SystemExit(2)
     # Phase 19 L2 — cache_ttl_ms must be non-negative (0 = off).
