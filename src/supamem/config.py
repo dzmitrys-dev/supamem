@@ -24,6 +24,7 @@ NOTE on secrets: ``ResolvedConfig.qdrant_api_key`` may contain a user secret.
 ``supamem doctor`` (plan 11) MUST redact this field by default — see STRIDE
 T-80.6-03-01.
 """
+
 from __future__ import annotations
 
 import os
@@ -324,6 +325,55 @@ _NESTED_TABLES: list[tuple[str, dict[str, str]]] = [
     ),
 ]
 
+# ── Phase 19.1 SM-1b — flat-name aliases for [supamem.eval]. ────────────────
+# Doctor's config-chain panel prints the FLAT dataclass names
+# (``regress_baseline_*``); users copy those names into ``[supamem.eval]``
+# and they were silently inert (field report SM-1: the reporter's config
+# enforced a 6x-stricter token gate for its entire life). Mirrors the
+# explicit ``_SCALAR_ALIASES`` precedent in ``_apply_section`` — alias keys
+# are counted as KNOWN by the unknown-key diff and (from Task 2) applied to
+# their canonical fields with chain source attribution.
+_EVAL_ALIASES: dict[str, str] = {
+    "regress_baseline_recall_at_5": "baseline_recall_at_5",
+    "regress_baseline_total_tokens": "baseline_total_tokens",
+    "regress_baseline_p95_latency_ms": "baseline_p95_latency_ms",
+}
+
+
+def _child_table_keys(sub_key: str) -> set[str]:
+    """Segments consumed by DEEPER nested tables under ``sub_key``.
+
+    E.g. for ``"mcp"`` the ``"mcp.caps"`` entry consumes ``caps`` — that key
+    must not be reported as unknown inside ``[supamem.mcp]``.
+    """
+    depth = len(sub_key.split("."))
+    return {
+        other.split(".")[depth] for other, _ in _NESTED_TABLES if other.startswith(sub_key + ".")
+    }
+
+
+def _warn_unknown_config_keys(
+    table: str, unknown: set[str], accepted: list[str], note: str = ""
+) -> None:
+    """Warn-only unknown-config-key report (Phase 19.1 SM-1a, T-19.1-07/08).
+
+    MUST stay warn-only — ``load_config`` runs on every invocation including
+    the MCP stdio server path, so a typo must never break startup (no
+    SystemExit here, unlike the fail-closed validation gates below). Routes
+    through ``err_console`` (stderr) with ``[supamem.warn]`` markup so the
+    JSON-RPC stdout contract is preserved (Pitfall 6). Table labels are
+    Rich-markup-escaped so the literal ``[supamem.eval]`` renders.
+    """
+    from supamem.console import err_console  # noqa: PLC0415
+
+    msg = (
+        f"config: unknown key(s) in \\[{table}]: "
+        f"{', '.join(sorted(unknown))} — accepted: {', '.join(accepted)}"
+    )
+    if note:
+        msg += f" {note}"
+    err_console.print(f"[supamem.warn]⚠[/supamem.warn] {msg}")
+
 
 def _load_toml(p: Path) -> dict[str, Any]:
     try:
@@ -378,6 +428,27 @@ def _apply_section(
                 continue
             setattr(cfg, key, value)
             setattr(chain, key, source)
+    # Phase 19.1 SM-1a — warn-only unknown flat-key diff. Known top-level
+    # keys: dataclass attr names (``hasattr`` — includes dict-typed fields
+    # like ``classifier_rooms``, keeping the flat-ignore LOCK byte-identical),
+    # ``_SCALAR_ALIASES`` keys, and nested-table first segments (those keys
+    # are dicts consumed by ``_apply_nested``). Warnings add signal only.
+    unknown_flat = {
+        key
+        for key in section
+        if not hasattr(cfg, key) and key not in _SCALAR_ALIASES and key not in skip_first_segments
+    }
+    if unknown_flat:
+        _warn_unknown_config_keys(
+            "supamem",
+            unknown_flat,
+            sorted(skip_first_segments),
+            note=(
+                "— accepted flat keys are ResolvedConfig field names "
+                "(see 'supamem doctor' config chain) or the nested tables "
+                "listed"
+            ),
+        )
 
 
 def _apply_nested(
@@ -392,6 +463,12 @@ def _apply_nested(
     level-by-level through ``section`` via ``dict.get(part, {})``. Single-level
     keys keep the existing flat behavior. A non-dict at any intermediate level
     falls through harmlessly (defaults remain in effect).
+
+    Phase 19.1 SM-1a — after the field-map walk per table, unknown keys
+    (table keys minus field-map keys minus eval alias keys minus deeper
+    nested-table segments) emit ONE warn-only err_console warning naming the
+    table, the sorted unknown keys, and the sorted accepted keys. Apply
+    semantics are byte-identical; the warning never raises.
     """
     for sub_key, field_map in _NESTED_TABLES:
         sub: Any = section
@@ -406,6 +483,13 @@ def _apply_nested(
             if src_key in sub:
                 setattr(cfg, dst_field, sub[src_key])
                 setattr(chain, dst_field, source)
+        known = set(field_map) | _child_table_keys(sub_key)
+        if sub_key == "eval":
+            known |= set(_EVAL_ALIASES)
+        unknown = set(sub) - known
+        if unknown:
+            note = "(flat regress_baseline_* aliases also accepted)" if sub_key == "eval" else ""
+            _warn_unknown_config_keys(f"supamem.{sub_key}", unknown, sorted(field_map), note=note)
 
 
 def find_project_root(start: Path | None = None) -> Path | None:
@@ -442,9 +526,7 @@ def find_project_root(start: Path | None = None) -> Path | None:
                 data = _load_toml(pyproject)
             except RuntimeError:
                 data = {}
-            if isinstance(data.get("tool"), dict) and isinstance(
-                data["tool"].get("supamem"), dict
-            ):
+            if isinstance(data.get("tool"), dict) and isinstance(data["tool"].get("supamem"), dict):
                 return current
 
         parent = current.parent
@@ -487,9 +569,7 @@ def load_config(cwd: Path | None = None) -> tuple[ResolvedConfig, ConfigChain]:
     if explicit:
         ep = Path(explicit)
         if not ep.is_file():
-            raise FileNotFoundError(
-                f"supamem: SUPAMEM_CONFIG points to missing file: {ep}"
-            )
+            raise FileNotFoundError(f"supamem: SUPAMEM_CONFIG points to missing file: {ep}")
         data = _load_toml(ep)
         section = data.get("supamem", {}) or {}
         _apply_section(cfg, chain, section, "env")
