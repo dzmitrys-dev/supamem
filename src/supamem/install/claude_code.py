@@ -161,14 +161,19 @@ def _settings_with_hook(
     return merged
 
 
-def _claude_md_with_import(existing: str) -> str:
+def _claude_md_with_import(existing: str, *, dry_run: bool = False) -> str:
     # SM-4/SM-6: heal duplicate managed blocks and unpaired marker lines
     # BEFORE the strict extract — sweep is a byte-level no-op on healthy text,
     # so only anomalous files (the accumulated-upgrade state, or a hand-mangled
     # fence, both of which used to crash install) change.
+    #
+    # WR-02: the verb must match reality. This helper was not dry-run-aware and
+    # unconditionally reported past-tense "swept N ...", so `install --dry-run`
+    # told the user work had been performed while writing nothing.
     existing, removed = sweep_managed_blocks(existing)
     if removed:
-        info(f"CLAUDE.md: swept {removed} stale SUPAMEM managed-block marker(s)")
+        verb = "would sweep" if dry_run else "swept"
+        info(f"CLAUDE.md: {verb} {removed} stale SUPAMEM managed-block marker(s)")
     before, owned, after = extract_managed_block(existing)
     if owned and CLAUDE_MD_IMPORT_LINE in owned:
         return existing
@@ -268,7 +273,7 @@ def install(
         backups.append(res_s.backup_path)
 
     existing_md = claude_md.read_text(encoding="utf-8") if claude_md.exists() else ""
-    new_md = _claude_md_with_import(existing_md)
+    new_md = _claude_md_with_import(existing_md, dry_run=dry_run)
     if new_md != existing_md:
         would_write += 1
         if not dry_run:

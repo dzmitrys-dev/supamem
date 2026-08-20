@@ -53,13 +53,17 @@ def _read_json(path: Path) -> dict[str, Any]:
     return raw if isinstance(raw, dict) else {}
 
 
-def _agents_md_with_import(existing: str) -> str:
+def _agents_md_with_import(existing: str, *, dry_run: bool = False) -> str:
     # SM-4/SM-6: heal duplicate managed blocks and unpaired marker lines
     # BEFORE the strict extract — sweep is a byte-level no-op on healthy text
     # (claude_code twin).
+    #
+    # WR-02: past-tense "swept N ..." in a dry run claimed work that never
+    # happened. The verb now tracks dry_run (claude_code twin).
     existing, removed = sweep_managed_blocks(existing)
     if removed:
-        info(f"AGENTS.md: swept {removed} stale SUPAMEM managed-block marker(s)")
+        verb = "would sweep" if dry_run else "swept"
+        info(f"AGENTS.md: {verb} {removed} stale SUPAMEM managed-block marker(s)")
     before, owned, after = extract_managed_block(existing)
     if owned and AGENTS_MD_IMPORT_LINE in owned:
         return existing
@@ -117,7 +121,7 @@ def install(*, dry_run: bool = False) -> InstallResult:
         backups.append(res.backup_path)
 
     existing_md = agents_md.read_text(encoding="utf-8") if agents_md.exists() else ""
-    new_md = _agents_md_with_import(existing_md)
+    new_md = _agents_md_with_import(existing_md, dry_run=dry_run)
     if new_md != existing_md:
         would_write += 1
         if not dry_run:

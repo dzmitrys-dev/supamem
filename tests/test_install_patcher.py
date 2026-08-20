@@ -338,10 +338,26 @@ def test_dry_run_phrasing_never_claims_performed_work(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """SM-7c phrasing: dry-run output contains NO ✓-glyph past-tense work
-    claims; detected patchable files render as 'would patch'."""
+    claims; detected patchable files render as 'would patch'.
+
+    WR-02: this guard used to assert only ``"✓" not in dry_out``, and its
+    fixture had no ``CLAUDE.md`` at all — so the managed-block sweep branch was
+    never entered and its past-tense ``info()`` line (rendered with ``→``, not
+    ``✓``) sailed straight through. The fixture now seeds a duplicated
+    ``CLAUDE.md`` so the sweep DOES run, and the assertion rejects any
+    past-tense work verb rather than one glyph.
+    """
+    from supamem.config_io import wrap_managed_block
     from supamem.install import install
 
     _seed_claude_fixture(fake_home)
+    # Seed the state that makes the sweep branch fire.
+    import_line = "@~/.supamem/share/rules/dual-memory.md"
+    dup = wrap_managed_block(import_line, version="0.2.0")
+    dup2 = wrap_managed_block(import_line, version="0.3.0a7")
+    claude_md = fake_home / "CLAUDE.md"
+    claude_md.write_text(f"# notes\n{dup}\nmiddle\n{dup2}\ntail\n", encoding="utf-8")
+    before_md = claude_md.read_text(encoding="utf-8")
 
     capsys.readouterr()
     install(client="claude-code", dry_run=True, skip_models=True)
@@ -349,6 +365,20 @@ def test_dry_run_phrasing_never_claims_performed_work(
 
     assert "✓" not in dry_out, f"dry-run output must not claim performed work:\n{dry_out}"
     assert "would patch 1 subagent file(s)" in dry_out
+    # The sweep branch must actually have been exercised by this fixture —
+    # this phrase is present in both the buggy and the fixed wording, so it
+    # asserts coverage without also asserting the tense.
+    assert "managed-block marker(s)" in dry_out, (
+        f"fixture no longer reaches the sweep branch:\n{dry_out}"
+    )
+    assert "would sweep" in dry_out, dry_out
+    # No past-tense work verb anywhere in a dry run.
+    for verb in ("swept", "wrote", "patched", "synced", "installed", "removed", "written"):
+        assert verb not in dry_out, (
+            f"dry-run output claims performed work with {verb!r}:\n{dry_out}"
+        )
+    # And the dry run really did write nothing.
+    assert claude_md.read_text(encoding="utf-8") == before_md
 
 
 def test_real_run_idempotent_second_pass_renders_info_not_ok(
