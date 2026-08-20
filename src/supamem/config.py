@@ -142,6 +142,13 @@ class ResolvedConfig:
     # Mapped from [supamem.retrieval.dedup] via _NESTED_TABLES.
     dedup_enabled: bool = False
     dedup_cosine_threshold: float = 0.97
+    # ── Phase 19 L3 — MCP response format ─────────────────────────────────
+    # Flat field populated from the single-level [supamem.mcp] TOML table
+    # (distinct from the two-level [supamem.mcp.caps] — both coexist).
+    # "concise" empties display previews (texts stay syntactically intact,
+    # v0.2.0 scope lock); default "detailed" keeps the byte-identical
+    # CAPS-02 shape. Boot-time gate in load_config rejects other values.
+    mcp_response_format: str = "detailed"
 
 
 @dataclass
@@ -192,6 +199,8 @@ class ConfigChain:
     adaptive_depth_k_max: Source = "default"
     dedup_enabled: Source = "default"
     dedup_cosine_threshold: Source = "default"
+    # Phase 19 L3 — MCP response format ([supamem.mcp] table).
+    mcp_response_format: Source = "default"
 
 
 _LEGACY_ENV: dict[str, str] = {
@@ -294,6 +303,17 @@ _NESTED_TABLES: list[tuple[str, dict[str, str]]] = [
         {
             "enabled": "dedup_enabled",
             "cosine_threshold": "dedup_cosine_threshold",
+        },
+    ),
+    # ── Phase 19 L3/L2 — [supamem.mcp] (single-level table; coexists with
+    # the two-level [supamem.mcp.caps] entry above — separate TOML tables).
+    # cache_ttl_ms lands as a mapped key in plan 19-03 Task 3; until then a
+    # cache_ttl_ms line in user TOML falls through harmlessly (_apply_nested
+    # reads only field-mapped keys).
+    (
+        "mcp",
+        {
+            "response_format": "mcp_response_format",
         },
     ),
 ]
@@ -543,6 +563,13 @@ def load_config(cwd: Path | None = None) -> tuple[ResolvedConfig, ConfigChain]:
         err_console.print(
             f"[supamem.err]config: retrieval.dedup.cosine_threshold="
             f"{cfg.dedup_cosine_threshold} must be in (0.0, 1.0]"
+        )
+        raise SystemExit(2)
+    # Phase 19 L3 — response_format enum gate (fail closed at boot).
+    if cfg.mcp_response_format not in ("concise", "detailed"):
+        err_console.print(
+            f"[supamem.err]config: mcp.response_format="
+            f"{cfg.mcp_response_format!r} must be one of: concise, detailed"
         )
         raise SystemExit(2)
 

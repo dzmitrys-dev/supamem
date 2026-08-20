@@ -220,24 +220,35 @@ async def dual_memory_search(
     # backends or future Qdrant versions). Enforce exact count post-call.
     hits = (hits or [])[:effective_top_k]
     pcap = cfg.mcp_caps_max_preview_chars
+    concise = cfg.mcp_response_format == "concise"
     chunks: list[Chunk] = []
     for h in hits:
         text = (h.text or "").strip()
         if not text:
             continue
-        if len(text) > pcap:
+        if concise:
+            # L3 (Phase 19): opt-in concise mode — empty the display preview;
+            # text is untouched (v0.2.0 scope lock: payloads stay intact).
+            preview = ""
+        elif len(text) > pcap:
             # Reserve one codepoint of budget for the ellipsis so the total
             # preview length remains ≤ pcap (test asserts <=).
             preview = text[: max(0, pcap - 1)] + "…" if pcap > 0 else ""
         else:
             preview = text[:pcap]
+        # L4 (Phase 19): drop file_path when it merely duplicates source
+        # (~2.6% wire dedup, both modes — the path survives in `source`).
+        src = h.source_path or h.file_path or "?"
+        file_path = (
+            None if (h.file_path is not None and h.file_path == src) else h.file_path
+        )
         chunks.append(
             Chunk(
                 score=float(h.score or 0.0),
                 text=text,
                 preview=preview,
-                source=h.source_path or h.file_path or "?",
-                file_path=h.file_path,
+                source=src,
+                file_path=file_path,
             )
         )
     total_tokens = sum(max(1, len(c.text) // 4) for c in chunks)

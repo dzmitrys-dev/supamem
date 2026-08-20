@@ -9,3 +9,12 @@ k_max = 20
 [supamem.retrieval.dedup]
 enabled = false
 cosine_threshold = 0.97
+
+# Phase 19 — MCP response shape. Mirrors the ResolvedConfig dataclass
+# defaults ([supamem.mcp] and [supamem.mcp.caps] are separate TOML tables
+# and coexist). response_format: "concise" empties display previews;
+# "detailed" (default) keeps the byte-identical CAPS-02 shape.
+# cache_ttl_ms: SEP-2549 tools/list cache-hint TTL, 0 = off (plan 19-03).
+[supamem.mcp]
+response_format = "detailed"
+cache_ttl_ms = 0

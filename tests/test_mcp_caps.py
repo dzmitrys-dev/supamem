@@ -307,7 +307,7 @@ async def test_response_format_concise_empties_preview_text_intact(
     display preview may be emptied (never the text).
     """
     _mock_backend_with_long_chunks(monkeypatch, n_hits=2, text_len=300)
-    cfg = _cfg_with_caps(max_preview_chars=50, response_format="concise")
+    cfg = _cfg_with_caps(max_preview_chars=50, mcp_response_format="concise")
     result = await dual_memory_search(query="hi", top_k=2, config=cfg)
     assert len(result.chunks) == 2
     for chunk in result.chunks:
@@ -348,7 +348,7 @@ async def test_file_path_null_when_duplicating_source(
     ]
     monkeypatch.setattr(mod, "_get_backend", lambda cfg: fake)
 
-    cfg = _cfg_with_caps(response_format=response_format)
+    cfg = _cfg_with_caps(mcp_response_format=response_format)
     result = await dual_memory_search(query="hi", top_k=2, config=cfg)
     dup, distinct = result.chunks[0], result.chunks[1]
     assert dup.source == "docs/x.md", "source keeps the path on dedup"
