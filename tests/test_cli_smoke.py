@@ -580,3 +580,47 @@ def test_version_prints_current() -> None:
     # Credit line is part of the banner — verifies the SoftChat / SoftSkillz attribution.
     assert "SoftChat" in out
     assert "SoftSkillz" in out
+
+
+# ───── Phase 19.1 SM-2c — stale-cache truthfulness at the CLI surface ─────
+
+
+def test_doctor_never_claims_latest_from_stale_cache(tmp_path) -> None:
+    """Phase 19.1 SM-2c: CLI doctor never renders a ✓-prefixed on-latest line
+    from a stale update-check cache.
+
+    Seeds a 48h-old cache (latest == installed version, so update_available
+    is False) under an env-overridden cache dir (XDG_CACHE_HOME on Linux) and
+    runs ``supamem doctor`` with the deterministic pinned env from ``_run``
+    (NO_COLOR=1, TERM=dumb, COLUMNS=200, FORCE_COLOR popped) per AGENTS.md.
+    """
+    import json as _json
+    import time as _time
+
+    from supamem import __version__
+
+    xdg = tmp_path / "xdg"
+    cache_dir = xdg / "supamem"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "update_check.json").write_text(
+        _json.dumps(
+            {
+                "last_check_ts": _time.time() - 48 * 3600,
+                "latest_version": __version__,
+                "etag": None,
+                "backoff_until_ts": 0.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    r = _run(
+        "doctor",
+        env={
+            "XDG_CACHE_HOME": str(xdg),
+            "SUPAMEM_NO_UPDATE_CHECK": "1",
+        },
+    )
+    out = r.stdout
+    assert "✓ on latest cached version" not in out, out
+    assert "cache stale" in out, out
+    assert "cannot confirm latest" in out, out

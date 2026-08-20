@@ -806,3 +806,199 @@ def test_doctor_temporal_panel_handles_count_exception(
     # cached in tmp_path) legitimately bump rc; the contract here is
     # that the temporal panel ITSELF survives a count() exception
     # without crashing or polluting stderr with a traceback.
+
+
+# ───── Phase 19.1 SM-2b — update-check render gating (stale never ✓) ──────
+
+
+@pytest.fixture
+def uc_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Redirect the update-check cache dir → tmp (mirrors test_update_check.py)."""
+    import supamem.update_check as uc
+
+    d = tmp_path / "uc"
+    monkeypatch.setattr(uc, "_cache_dir", lambda: d)
+    return d
+
+
+@pytest.fixture
+def uc_clean(monkeypatch: pytest.MonkeyPatch) -> None:
+    for v in ("SUPAMEM_NO_UPDATE_CHECK", "NO_UPDATE_NOTIFIER", "CI"):
+        monkeypatch.delenv(v, raising=False)
+
+
+def _seed_uc_cache(cache_dir: Path, *, age_seconds: float, latest: str) -> None:
+    import time as _time
+
+    import supamem.update_check as uc
+
+    uc._write_cache(
+        uc.UpdateCacheEntry(
+            last_check_ts=_time.time() - age_seconds,
+            latest_version=latest,
+            etag=None,
+        )
+    )
+
+
+def test_doctor_stale_cache_renders_neutral_marker_never_ok(
+    home: Path,
+    uc_cache: Path,
+    uc_clean: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """SM-2b Test 1: stale cache + update_available False → neutral info marker
+    naming the cache age and last-seen version; the ✓ on-latest line must NOT
+    appear (doctor cannot assert up-to-date from stale data)."""
+    import supamem.doctor as mod
+    import supamem.update_check as uc
+    from supamem import __version__
+
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: False)
+    # Belt-and-suspenders: no network from this test under any env state.
+    monkeypatch.setattr(uc, "_is_suppressed", lambda: True)
+    _seed_uc_cache(uc_cache, age_seconds=48 * 3600, latest=__version__)
+
+    mod.run_doctor()
+    out = capsys.readouterr().out
+    flat = " ".join(out.split())
+
+    assert "cache stale" in flat, flat
+    assert "2 days old" in flat, flat
+    assert "cannot confirm latest" in flat, flat
+    assert f"last seen v{__version__}" in flat, flat
+    assert "✓ on latest cached version" not in flat, flat
+
+
+def test_doctor_fresh_cache_renders_ok_on_latest(
+    home: Path,
+    uc_cache: Path,
+    uc_clean: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """SM-2b Test 2: fresh cache + update_available False → ✓ on-latest line."""
+    import supamem.doctor as mod
+    import supamem.update_check as uc
+
+    from supamem import __version__
+
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: False)
+    monkeypatch.setattr(uc, "_is_suppressed", lambda: True)
+    _seed_uc_cache(uc_cache, age_seconds=0.0, latest=__version__)
+
+    mod.run_doctor()
+    out = capsys.readouterr().out
+    flat = " ".join(out.split())
+
+    assert "✓ on latest cached version" in flat, flat
+    assert "cache stale" not in flat, flat
+
+
+def test_doctor_stale_cache_refreshes_before_render(
+    home: Path,
+    uc_cache: Path,
+    uc_clean: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """SM-2b Test 3: stale cache + mocked successful probe → doctor refreshes
+    (bounded, suppression-honored) and renders the fresh comparison result."""
+    import supamem.doctor as mod
+    import supamem.update_check as uc
+    from supamem import __version__
+
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: False)
+    monkeypatch.setattr(uc, "_is_suppressed", lambda: False)
+    monkeypatch.setattr(
+        uc, "_probe_github", lambda cur, etag: ("9.9.9", None, False)
+    )
+    _seed_uc_cache(uc_cache, age_seconds=48 * 3600, latest=__version__)
+
+    mod.run_doctor()
+    out = capsys.readouterr().out
+    flat = " ".join(out.split())
+
+    assert "update available" in flat, flat
+    assert "9.9.9" in flat, flat
+    assert "cache stale" not in flat, flat
+
+
+# ───── Phase 19.1 SM-4d — duplicate managed-block drift ────────────────────
+
+
+def _pin_green_qdrant(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin qdrant up + collection present so rc deltas isolate to drift."""
+    import supamem.doctor as mod
+
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: True)
+    monkeypatch.setattr(
+        mod, "_collection_health", lambda client, name: {"present": True, "sparse": True}
+    )
+
+    class _FakeClient:
+        def get_collection(self, *_a, **_kw):
+            class _Info:
+                class config:
+                    class params:
+                        sparse_vectors = {"sparse": object()}
+
+            return _Info()
+
+    monkeypatch.setattr(
+        "qdrant_client.QdrantClient", lambda *a, **kw: _FakeClient(), raising=False
+    )
+
+
+def test_doctor_duplicate_managed_blocks_warn_and_drift(
+    home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """SM-4d: two BEGIN markers → warn naming the count + advising repair; the
+    target counts as drift (rc 1) even though the first block's version matches."""
+    import supamem.doctor as mod
+    from supamem import __version__
+
+    _pin_green_qdrant(monkeypatch)
+    block = (
+        f"# BEGIN SUPAMEM v{__version__} MANAGED BLOCK — DO NOT EDIT\n"
+        "@~/.supamem/share/rules/dual-memory.md\n"
+        f"# END SUPAMEM v{__version__} MANAGED BLOCK\n"
+    )
+    (home / "CLAUDE.md").write_text(block + "\n" + block, encoding="utf-8")
+
+    rc = mod.run_doctor()
+    out = capsys.readouterr().out
+    flat = " ".join(out.split())
+
+    assert "2 managed blocks detected" in flat, flat
+    assert "supamem repair" in flat, flat
+    assert rc == 1, "duplicate blocks MUST count as drift (existing rc semantics)"
+
+
+def test_doctor_single_current_block_no_duplicate_warn(
+    home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """SM-4d regression: single current-version block → no duplicate warn; the
+    ✓ current line renders exactly as today."""
+    import supamem.doctor as mod
+    from supamem import __version__
+
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: False)
+    (home / "CLAUDE.md").write_text(
+        f"# BEGIN SUPAMEM v{__version__} MANAGED BLOCK — DO NOT EDIT\n"
+        "@~/.supamem/share/rules/dual-memory.md\n"
+        f"# END SUPAMEM v{__version__} MANAGED BLOCK\n",
+        encoding="utf-8",
+    )
+
+    mod.run_doctor()
+    out = capsys.readouterr().out
+    flat = " ".join(out.split())
+
+    assert "managed blocks detected" not in flat, flat
+    assert f"v{__version__} (current)" in flat, flat
