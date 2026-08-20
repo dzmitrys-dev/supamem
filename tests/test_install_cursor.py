@@ -424,3 +424,40 @@ def test_cursor_install_overwrites_unmarked_differing_mdc_with_warning(
     out = capsys.readouterr().out
     assert "dual-memory.mdc" in out, f"overwrite warn must name the file:\n{out}"
     assert "overwriting existing" in out
+
+
+# ---------------------------------------------------------------------------
+# SM-9c: --force-cursor-rules escape hatch (dispatcher-plumbed). Plan 19.1-05.
+# ---------------------------------------------------------------------------
+
+
+def test_dispatcher_force_cursor_rules_overrides_marker_skip(
+    home: Path,
+    project: Path,
+    capsys: pytest.CaptureFixture[str],
+    wide_console: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SM-9c: routed through the install() dispatcher, force_cursor_rules=True
+    overrides ONLY the generated-marker skip — the marked .mdc IS copied —
+    while the overwrite-warning floor still prints."""
+    from supamem.install import install as dispatcher_install
+    from supamem.install.cursor import _packaged_mdc_source
+
+    monkeypatch.setenv("SUPAMEM_CACHE_DIR", str(home / ".cache" / "supamem"))
+
+    target = _write_marked_mdc(project)
+
+    rc = dispatcher_install(
+        client="cursor",
+        skip_models=True,
+        force_cursor_rules=True,
+    )
+
+    assert rc == 0
+    assert target.read_bytes() == _packaged_mdc_source().read_bytes(), (
+        "force must let the copy proceed past the generated marker"
+    )
+    out = capsys.readouterr().out
+    assert "appears generator-managed" not in out, "force must suppress the skip warn"
+    assert "overwriting existing" in out, "the overwrite floor still prints under force"

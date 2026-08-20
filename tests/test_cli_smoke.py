@@ -281,6 +281,21 @@ def test_repair_help_lists_skip_patch_agents_flag() -> None:
     assert "D-LOCK-06" in out, out
 
 
+def test_force_cursor_rules_flag_in_install_and_repair_help() -> None:
+    """SM-9c (19.1-05): install and repair --help advertise --force-cursor-rules
+    with a description naming the generator-managed Cursor-rules skip it
+    overrides. Asserts on a stable short prefix (Rich/Typer truncation —
+    same discipline as the D-LOCK-06 flag tests above)."""
+    for verb in ("install", "repair"):
+        r = _run(verb, "--help")
+        assert r.returncode == 0, (r.stdout, r.stderr)
+        out = r.stdout + r.stderr
+        assert "force-cursor" in out, f"missing flag in {verb} --help:\n{out}"
+        assert "generator-managed" in out, (
+            f"{verb} --help must name the generator-managed skip the flag overrides"
+        )
+
+
 def test_init_help_lists_skip_patch_agents_flag() -> None:
     """Phase 08.1 D-LOCK-06: init --help advertises --skip-patch-agents."""
     r = _run("init", "--help")
