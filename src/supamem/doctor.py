@@ -34,11 +34,37 @@ from supamem.init import probe_qdrant
 log = logging.getLogger("supamem.doctor")
 
 def _client_targets() -> tuple[tuple[str, Path], ...]:
-    """Lazy lookup so test monkeypatches of ``Path.home`` take effect."""
-    return (
-        ("claude-code", Path.home() / "CLAUDE.md"),
-        ("opencode", Path.home() / "AGENTS.md"),
+    """Managed-block files to inspect, per client.
+
+    Lazy lookup so test monkeypatches of ``Path.home`` / ``Path.cwd`` take
+    effect.
+
+    WR-04: opencode is reported for BOTH scopes. ``opencode.install()`` /
+    ``uninstall()`` operate on ``Path.cwd() / "AGENTS.md"``, but this report
+    only ever looked at ``Path.home() / "AGENTS.md"`` — so the duplicate-block
+    warning was blind to the file that actually accumulates blocks, and a user
+    who once installed from ``$HOME`` was told to run a ``repair`` that, from a
+    project directory, would never touch the file being complained about.
+    Un-actionable red. The mismatch predates 19.1; SM-4d escalated it by wiring
+    ``block_count > 1`` into ``any_drift``.
+
+    De-duplicated so running from ``$HOME`` does not report the same file twice.
+    """
+    home = Path.home()
+    candidates = (
+        ("claude-code", home / "CLAUDE.md"),
+        ("opencode", Path.cwd() / "AGENTS.md"),
+        ("opencode", home / "AGENTS.md"),
     )
+    seen: set[tuple[str, str]] = set()
+    out: list[tuple[str, Path]] = []
+    for client, path in candidates:
+        key = (client, str(path))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((client, path))
+    return tuple(out)
 
 # The marker grammar lives in ONE place — supamem.config_io — and this module
 # imports it (``count_managed_blocks`` / ``managed_block_versions`` /
@@ -1143,10 +1169,13 @@ def run_doctor(*, redact_secrets: bool = True) -> int:
             continue
         if row.get("block_count", 1) > 1:
             # SM-4d: duplicates are actionable drift — repair heals them.
+            # WR-04: name the PATH. opencode is reported for both the project
+            # and the home scope, so "opencode has 2 managed blocks" is not
+            # actionable without saying which AGENTS.md.
             any_drift = True
             warn(
                 f"{row['client']:<12} {row['block_count']} managed blocks "
-                f"detected — run supamem repair"
+                f"detected in {row['path']} — run supamem repair"
             )
             continue
         if row.get("malformed"):
