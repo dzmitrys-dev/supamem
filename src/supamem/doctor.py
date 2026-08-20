@@ -73,19 +73,36 @@ def version_drift_report() -> list[dict[str, Any]]:
             out.append({"client": client, "path": str(path), "present": False, "drift": False})
             continue
         body = path.read_text(encoding="utf-8")
-        match = _VERSION_RE.search(body)
-        if not match:
-            out.append({"client": client, "path": str(path), "present": True, "block_version": None, "drift": False})
+        # SM-4d (Phase 19.1): count BEGIN markers per target — the drift
+        # report previously read only the FIRST block, so duplicate-block
+        # accumulation (what `supamem repair` heals) was invisible here.
+        block_versions = _VERSION_RE.findall(body)
+        block_count = len(block_versions)
+        if not block_versions:
+            out.append(
+                {
+                    "client": client,
+                    "path": str(path),
+                    "present": True,
+                    "block_version": None,
+                    "block_count": block_count,
+                    "drift": False,
+                }
+            )
             continue
-        block_version = match.group(1)
+        block_version = block_versions[0]
         out.append(
             {
                 "client": client,
                 "path": str(path),
                 "present": True,
                 "block_version": block_version,
+                "block_count": block_count,
                 "current": __version__,
-                "drift": block_version != __version__,
+                # Duplicate fences are drift even when the first block's
+                # version matches — accumulation is exactly the state
+                # repair exists to heal.
+                "drift": block_count > 1 or block_version != __version__,
             }
         )
     return out
@@ -1048,6 +1065,14 @@ def run_doctor(*, redact_secrets: bool = True) -> int:
         if not row["present"]:
             info(f"{row['client']:<12} not installed ({row['path']})")
             continue
+        if row.get("block_count", 1) > 1:
+            # SM-4d: duplicates are actionable drift — repair heals them.
+            any_drift = True
+            warn(
+                f"{row['client']:<12} {row['block_count']} managed blocks "
+                f"detected — run supamem repair"
+            )
+            continue
         if row.get("block_version") is None:
             info(f"{row['client']:<12} present, no managed block detected")
             continue
@@ -1063,9 +1088,16 @@ def run_doctor(*, redact_secrets: bool = True) -> int:
     # ── Section 4: Update check ──────────────────────────────────────────
     console.print()
     console.print("[supamem.brand]Update check[/supamem.brand]")
-    from supamem.update_check import doctor_report
+    from supamem.update_check import doctor_report, refresh_stale_cache
 
     uc = doctor_report(__version__)
+    if uc.get("stale"):
+        # SM-2 (Phase 19.1): an explicit doctor run may refresh a stale cache
+        # via one bounded, suppression-honored probe before rendering. The
+        # helper never raises and no-ops when suppressed; on failure we simply
+        # re-read the same stale cache and render the neutral marker below.
+        refresh_stale_cache(__version__)
+        uc = doctor_report(__version__)
     cached = uc.get("cached_latest_version")
     last_ts = uc.get("last_check_ts")
     last_human = (
@@ -1078,8 +1110,18 @@ def run_doctor(*, redact_secrets: bool = True) -> int:
             f"update available: {uc['current_version']} → {cached} "
             f"(last check: {last_human})"
         )
-    elif cached:
+    elif cached and not uc.get("stale"):
+        # ✓ only on FRESH data — a stale cache cannot support an up-to-date
+        # claim (SM-2: the render branch must structurally never reach ok()
+        # from stale data).
         ok(f"on latest cached version v{cached} (last check: {last_human})")
+    elif cached:
+        age_days = int((uc.get("cache_age_seconds") or 0) // 86400) or 1
+        plural = "s" if age_days != 1 else ""
+        info(
+            f"cache stale ({age_days} day{plural} old) — cannot confirm "
+            f"latest; last seen v{cached}"
+        )
     else:
         info(f"no probe yet — runs in background on next invocation (cache: {uc['cache_path']})")
     if uc.get("suppressed_by_env"):
