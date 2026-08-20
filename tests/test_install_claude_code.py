@@ -6,6 +6,17 @@ from pathlib import Path
 
 import pytest
 
+from supamem.config_io import wrap_managed_block
+
+IMPORT_LINE = "@~/.supamem/share/rules/dual-memory.md"
+
+
+def _duplicated_claude_md() -> str:
+    """SM-4 field-report replica: two fenced blocks (v0.2.0 + v0.3.0a7)."""
+    old = wrap_managed_block(IMPORT_LINE, version="0.2.0")
+    new = wrap_managed_block(IMPORT_LINE, version="0.3.0a7")
+    return f"# User notes\n{old}\nuser middle\n{new}\ntrailing\n"
+
 
 @pytest.fixture
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -191,3 +202,55 @@ def test_uninstall_removes_only_managed_block(home: Path, project: Path) -> None
     assert "Some notes here." in body
     assert "@~/.supamem/share/rules/dual-memory.md" not in body
     assert "BEGIN SUPAMEM" not in body
+
+
+def test_install_heals_duplicated_managed_blocks(home: Path, project: Path) -> None:
+    """SM-6a: field-report replica (two blocks in ~/CLAUDE.md) — install must
+    complete without ValueError and leave exactly ONE merged block at the
+    current version, user text preserved."""
+    from supamem import __version__
+    from supamem.install.claude_code import install
+
+    (home / "CLAUDE.md").write_text(_duplicated_claude_md(), encoding="utf-8")
+
+    install()  # must NOT raise ValueError
+
+    body = (home / "CLAUDE.md").read_text(encoding="utf-8")
+    assert body.count("BEGIN SUPAMEM") == 1
+    assert f"BEGIN SUPAMEM v{__version__} MANAGED BLOCK" in body
+    assert body.count(IMPORT_LINE) == 1
+    assert "# User notes" in body
+    assert "user middle" in body
+    assert "trailing" in body
+
+
+def test_uninstall_heals_duplicated_managed_blocks(home: Path, project: Path) -> None:
+    """SM-6a: duplicated ~/CLAUDE.md — uninstall must complete without
+    ValueError and leave ZERO managed blocks, user content preserved."""
+    from supamem.install.claude_code import uninstall
+
+    (home / "CLAUDE.md").write_text(_duplicated_claude_md(), encoding="utf-8")
+
+    uninstall()  # must NOT raise ValueError
+
+    body = (home / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "BEGIN SUPAMEM" not in body
+    assert IMPORT_LINE not in body
+    assert "# User notes" in body
+    assert "user middle" in body
+    assert "trailing" in body
+
+
+def test_sweep_rewrite_creates_bak_sibling(home: Path, project: Path) -> None:
+    """Any sweep-induced rewrite of ~/CLAUDE.md leaves a .bak.<time_ns>
+    sibling containing the pre-rewrite (duplicated) content."""
+    from supamem.install.claude_code import uninstall
+
+    duplicated = _duplicated_claude_md()
+    (home / "CLAUDE.md").write_text(duplicated, encoding="utf-8")
+
+    uninstall()
+
+    baks = list(home.glob("CLAUDE.md.bak.*"))
+    assert baks, "expected a .bak.<time_ns> sibling for the sweep rewrite"
+    assert any(bak.read_text(encoding="utf-8") == duplicated for bak in baks)
