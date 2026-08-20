@@ -412,3 +412,112 @@ def test_nested_table_first_segment_not_flagged_as_unknown(
     assert "unknown" not in captured.err
     assert captured.out == ""
     assert cfg.goldens_path == "only_table.jsonl"
+
+
+# ── Phase 19.1 SM-1b — flat regress_baseline_* aliases in [supamem.eval] ────
+#
+# The names doctor's config-chain panel prints become VALID [supamem.eval]
+# keys (field report: the reporter's regress_baseline_total_tokens = 25000
+# was silently inert while the 4000 default enforced a 6x-stricter gate).
+
+
+def test_eval_flat_name_aliases_apply_with_chain_attribution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SM-1b: the three flat names doctor prints are accepted [supamem.eval]
+    keys — 25000 LANDS (not the 4000 default) and ConfigChain marks the
+    regress_baseline_* fields with the config source (not "default")."""
+    monkeypatch.delenv("SUPAMEM_CONFIG", raising=False)
+    cfg_dir = tmp_path / ".supamem"
+    cfg_dir.mkdir()
+    (cfg_dir / "config.toml").write_text(
+        "[supamem.eval]\n"
+        "regress_baseline_recall_at_5 = 0.60\n"
+        "regress_baseline_total_tokens = 25000\n"
+        "regress_baseline_p95_latency_ms = 500\n",
+        encoding="utf-8",
+    )
+    cfg, chain = load_config(tmp_path)
+    # The field-report case closed by test: 25000 lands, not the 4000 default.
+    assert cfg.regress_baseline_total_tokens == 25000
+    assert cfg.regress_baseline_recall_at_5 == 0.60
+    assert cfg.regress_baseline_p95_latency_ms == 500
+    # Chain source attribution mirrors _SCALAR_ALIASES behavior.
+    assert chain.regress_baseline_total_tokens == "supamem_toml"
+    assert chain.regress_baseline_recall_at_5 == "supamem_toml"
+    assert chain.regress_baseline_p95_latency_ms == "supamem_toml"
+
+
+def test_eval_canonical_keys_still_load_exactly_as_before(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Canonical ``baseline_*`` spellings keep working with no behavior
+    change for existing valid configs — and no unknown-key warning."""
+    monkeypatch.delenv("SUPAMEM_CONFIG", raising=False)
+    cfg_dir = tmp_path / ".supamem"
+    cfg_dir.mkdir()
+    (cfg_dir / "config.toml").write_text(
+        "[supamem.eval]\n"
+        'goldens_path = "canonical/goldens.jsonl"\n'
+        "baseline_recall_at_5 = 0.75\n"
+        "baseline_total_tokens = 12000\n"
+        "baseline_p95_latency_ms = 650\n",
+        encoding="utf-8",
+    )
+    cfg, chain = load_config(tmp_path)
+    captured = capsys.readouterr()
+    assert cfg.goldens_path == "canonical/goldens.jsonl"
+    assert cfg.regress_baseline_recall_at_5 == 0.75
+    assert cfg.regress_baseline_total_tokens == 12000
+    assert cfg.regress_baseline_p95_latency_ms == 650
+    assert chain.regress_baseline_total_tokens == "supamem_toml"
+    assert "unknown" not in captured.err
+    assert captured.out == ""
+
+
+def test_eval_mixed_canonical_and_flat_names_both_apply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Mixed spellings: canonical and flat names apply side by side and
+    neither triggers an unknown-key warning."""
+    monkeypatch.delenv("SUPAMEM_CONFIG", raising=False)
+    cfg_dir = tmp_path / ".supamem"
+    cfg_dir.mkdir()
+    (cfg_dir / "config.toml").write_text(
+        "[supamem.eval]\n"
+        "baseline_recall_at_5 = 0.70\n"
+        "regress_baseline_total_tokens = 30000\n",
+        encoding="utf-8",
+    )
+    cfg, chain = load_config(tmp_path)
+    captured = capsys.readouterr()
+    assert cfg.regress_baseline_recall_at_5 == 0.70
+    assert cfg.regress_baseline_total_tokens == 30000
+    assert chain.regress_baseline_recall_at_5 == "supamem_toml"
+    assert chain.regress_baseline_total_tokens == "supamem_toml"
+    assert "unknown" not in captured.err
+    assert captured.out == ""
+
+
+def test_eval_unknown_key_alongside_aliases_warns_for_unknown_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A genuinely unknown eval key next to alias keys: the warning fires
+    for the unknown one only — alias spellings count as known AND apply."""
+    monkeypatch.delenv("SUPAMEM_CONFIG", raising=False)
+    cfg_dir = tmp_path / ".supamem"
+    cfg_dir.mkdir()
+    (cfg_dir / "config.toml").write_text(
+        "[supamem.eval]\n"
+        "regress_baseline_total_tokens = 25000\n"
+        "bogus_eval_key = 1\n",
+        encoding="utf-8",
+    )
+    cfg, _chain = load_config(tmp_path)
+    captured = capsys.readouterr()
+    assert "bogus_eval_key" in captured.err
+    # The alias spelling is NOT named as unknown (it was accepted).
+    assert "regress_baseline_total_tokens" not in captured.err
+    assert captured.out == ""
+    # And the alias still applied while warning about the bogus key.
+    assert cfg.regress_baseline_total_tokens == 25000
