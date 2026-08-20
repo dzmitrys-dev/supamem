@@ -31,6 +31,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 TRANSLATIONS = [
@@ -52,22 +54,86 @@ LANG_SWITCHER_TAIL = (
     "[Русский](README.ru.md)"
 )
 
-# Every doc that teaches an install command (SM-5 guard surface).
-INSTALL_DOC_FILES = ["README.md", *TRANSLATIONS, "llms.txt"]
+# Docs that MUST carry a pinned install of the shipped version, with the
+# minimum number of occurrences. Each README teaches the install twice
+# (60-second quickstart + the Install section); llms.txt carries the
+# Distribution bullet; the packaged skill carries its first-time-setup block.
+#
+# WR-09: the packaged skill is INSTALLED into the user's
+# ~/.supamem/share/skills/ and read by agents, so an unpinned install command
+# there is the same SM-5 failure as one in the README — an agent following
+# "Typical first-time setup" would downgrade the user to PyPI stable. It is
+# listed here (not only in the scan surface) so the pin can never silently rot
+# to a stale version. NOTE: this adds one file to the per-release pin bump.
+PACKAGED_SKILL = "src/supamem/share/skills/supamem/SKILL.md"
+MIN_PINS = (
+    {name: 2 for name in ["README.md", *TRANSLATIONS]}
+    | {"llms.txt": 1}
+    | {PACKAGED_SKILL: 1}
+)
 
-# Minimum pinned-command occurrences per file. Each README teaches the
-# install twice (60-second quickstart + the Install section); llms.txt
-# carries the Distribution bullet.
-MIN_PINS = {name: 2 for name in ["README.md", *TRANSLATIONS]} | {"llms.txt": 1}
+# Every doc that teaches an install command (SM-5 guard surface).
+INSTALL_DOC_FILES = list(MIN_PINS)
+
+# WR-09: the unpinned-command SCAN is deliberately wider than the pinned-count
+# assertion above. The old surface was the 6 canonical files only, so an
+# unpinned command introduced in AGENTS.md, MIGRATION.md, docs/, or the shipped
+# share/ tree regressed silently — the exact repo-wide sweep a human had to do
+# by hand before this release. Scanned dirs are the user-facing / shipped docs.
+#
+# Deliberately EXCLUDED:
+#   * CHANGELOG.md — a historical record. Its old entries describe what the
+#     install command WAS at that release; rewriting them would falsify
+#     history, and nobody installs from a v0.1.1 changelog entry.
+#   * tests/_fixtures/ — agent-frontmatter test DATA, not documentation.
+#   * untracked/generated trees (.planning, .venv, ...) so the guard result is
+#     identical in a clean checkout, a worktree, and CI.
+_SCAN_EXCLUDED_PARTS = {
+    ".git",
+    ".github",
+    "node_modules",
+    ".planning",
+    ".gsd",
+    ".venv",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".mypy_cache",
+    ".claude",
+    ".cursor",
+    ".supamem",
+    "dist",
+    "build",
+    "graphify-out",
+    "_fixtures",
+}
+
+
+def _scanned_doc_files() -> list[str]:
+    """Every user-facing / shipped doc the unpinned-install guard inspects."""
+    out = {"llms.txt"}
+    for path in REPO_ROOT.rglob("*.md"):
+        if _SCAN_EXCLUDED_PARTS & set(path.relative_to(REPO_ROOT).parts):
+            continue
+        if path.name == "CHANGELOG.md":
+            continue
+        out.add(path.relative_to(REPO_ROOT).as_posix())
+    return sorted(out)
+
 
 # An install command naming the bare `supamem` distribution with NO
 # version pin. The negative lookahead lets the pinned form
 # (`supamem==0.4.0a2`) and the extras forms (`supamem[eval]`,
-# `supamem[peers-mem0]`, `supamem[ast-chunker]`) through, while catching
-# `pip install supamem`, `pipx install supamem`, and
-# `uv tool install supamem` anywhere in the file — fenced block or prose.
+# `supamem[peers-mem0]`, `supamem[ast-chunker]`) through.
+#
+# WR-09: the distribution name no longer has to follow the verb immediately.
+# The old pattern required exactly that, so `pip install -U supamem`,
+# `pip install --upgrade supamem`, and `pipx install --pre supamem` all sailed
+# through the guard while being precisely the unpinned commands SM-5 is about.
+# `uv pip install` and `python -m pip install` are covered too.
 UNPINNED_INSTALL_RE = re.compile(
-    r"(?:uv tool install|pipx install|pip install)\s+'?supamem'?(?![=\[\w.\-])"
+    r"(?:uv tool install|uv pip install|pipx install|(?:python[0-9.]* -m )?pip install)"
+    r"(?:\s+-{1,2}[\w-]+)*"  # tolerate -U / --upgrade / --pre / --user / ...
+    r"\s+'?supamem'?(?![=\[\w.\-])"
 )
 
 PYPROJECT_VERSION_RE = re.compile(r'^version = "([^"]+)"', re.MULTILINE)
@@ -184,7 +250,7 @@ def test_no_unpinned_install_command_survives() -> None:
     unpinned bare distribution name is a finding.
     """
     offenders: list[str] = []
-    for name in INSTALL_DOC_FILES:
+    for name in _scanned_doc_files():
         text = (REPO_ROOT / name).read_text(encoding="utf-8")
         for lineno, line in enumerate(text.splitlines(), 1):
             match = UNPINNED_INSTALL_RE.search(line)
@@ -278,3 +344,49 @@ def test_dunder_version_matches_pyproject() -> None:
         f"together with pyproject.toml — a wheel that misreports its own "
         f"version nags every user with a phantom update forever."
     )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pip install supamem",
+        "pip install -U supamem",
+        "pip install --upgrade supamem",
+        "pip install --pre supamem",
+        "python -m pip install supamem",
+        "python3.12 -m pip install supamem",
+        "uv pip install supamem",
+        "uv tool install supamem",
+        "pipx install supamem",
+        "pipx install --pre supamem",
+        "pip install 'supamem'",
+    ],
+)
+def test_unpinned_regex_catches_every_unpinned_form(command: str) -> None:
+    """WR-09: the guard's own coverage is pinned.
+
+    The old pattern required the distribution name to follow the verb
+    IMMEDIATELY, so every upgrade form (`-U`, `--upgrade`, `--pre`) passed the
+    guard while being exactly the unpinned command SM-5 is about. A guard that
+    silently stops matching is the same class of bug as the drift it guards, so
+    the accepted/rejected sets are asserted directly.
+    """
+    assert UNPINNED_INSTALL_RE.search(command) is not None, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pip install supamem==0.4.0a2",
+        "uv tool install 'supamem==0.4.0a2'",
+        "pip install -U 'supamem==0.4.0a2'",
+        "pip install supamem[eval]",
+        "pip install supamem[peers-mem0]",
+        "pip install supamem[ast-chunker]",
+        "pip install supamem-extra",
+        "pip install other-package",
+    ],
+)
+def test_unpinned_regex_allows_pinned_and_extras_forms(command: str) -> None:
+    """Pinned installs, extras, and unrelated distributions are not findings."""
+    assert UNPINNED_INSTALL_RE.search(command) is None, command

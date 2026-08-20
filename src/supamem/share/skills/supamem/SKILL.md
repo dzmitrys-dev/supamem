@@ -26,7 +26,7 @@ retrieval), an MCP server, per-client hooks, and a usage counter as a single CLI
 ## Typical first-time setup
 
 ```bash
-uv tool install supamem
+uv tool install 'supamem==0.4.0a2'
 docker run -d -p 6333:6333 -v $HOME/.qdrant:/qdrant/storage qdrant/qdrant:latest
 cd <your-project>
 supamem init --yes
