@@ -329,3 +329,126 @@ def test_doctor_report_lists_suppression_envs(
     rpt = uc.doctor_report("0.1.0")
     assert "CI" in rpt["suppressed_by_env"]
     assert "SUPAMEM_NO_UPDATE_CHECK" in rpt["suppressed_by_env"]
+
+
+# ── doctor report staleness (Phase 19.1 SM-2a) ──────────────────────────────
+
+
+def test_doctor_report_fresh_cache_not_stale(
+    cache_dir: Path, clean_env: None
+) -> None:
+    """Fresh cache: stale=False, age below TTL (SM-2a Test 1)."""
+    uc._write_cache(
+        uc.UpdateCacheEntry(
+            last_check_ts=time.time(), latest_version="0.1.0", etag=None
+        )
+    )
+    rpt = uc.doctor_report("0.1.0")
+    assert rpt["stale"] is False
+    assert rpt["cache_age_seconds"] is not None
+    assert rpt["cache_age_seconds"] < uc.DEFAULT_TTL_SECONDS
+
+
+def test_doctor_report_stale_cache(
+    cache_dir: Path, clean_env: None
+) -> None:
+    """Cache 48h past its 24h TTL: stale=True, age ≥ 172800 (SM-2a Test 2)."""
+    uc._write_cache(
+        uc.UpdateCacheEntry(
+            last_check_ts=time.time() - 48 * 3600,
+            latest_version="0.1.0",
+            etag=None,
+        )
+    )
+    rpt = uc.doctor_report("0.1.0")
+    assert rpt["stale"] is True
+    assert rpt["cache_age_seconds"] >= 172800
+
+
+def test_doctor_report_backoff_in_effect_is_stale(
+    cache_dir: Path, clean_env: None
+) -> None:
+    """Fresh-looking last_check_ts but active backoff: stale=True (SM-2a Test 3)."""
+    uc._write_cache(
+        uc.UpdateCacheEntry(
+            last_check_ts=time.time(),
+            latest_version="0.1.0",
+            etag=None,
+            backoff_until_ts=time.time() + 3600,
+        )
+    )
+    rpt = uc.doctor_report("0.1.0")
+    assert rpt["stale"] is True
+
+
+def test_doctor_report_no_cache_is_stale_with_null_age(
+    cache_dir: Path, clean_env: None
+) -> None:
+    """No cache: age None, stale True — absence of knowledge ≠ freshness (SM-2a Test 4)."""
+    rpt = uc.doctor_report("0.1.0")
+    assert rpt["cache_age_seconds"] is None
+    assert rpt["stale"] is True
+
+
+def test_refresh_stale_cache_rewrites_cache_via_probe(
+    cache_dir: Path,
+    clean_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bounded refresh: mocked probe result lands via the cache-write path (SM-2a Test 5)."""
+    uc._write_cache(
+        uc.UpdateCacheEntry(
+            last_check_ts=time.time() - 48 * 3600,
+            latest_version="0.1.0",
+            etag=None,
+        )
+    )
+    monkeypatch.setattr(uc, "_is_suppressed", lambda: False)
+    monkeypatch.setattr(
+        uc, "_probe_github", lambda cur, etag: ("0.2.0", 'W/"new"', False)
+    )
+    uc.refresh_stale_cache("0.1.0")
+    rpt = uc.doctor_report("0.1.0")
+    assert rpt["stale"] is False, "refreshed cache must read as fresh"
+    assert rpt["cached_latest_version"] == "0.2.0"
+
+
+def test_refresh_stale_cache_offline_safe(
+    cache_dir: Path,
+    clean_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Probe failure: helper returns silently, cache file untouched (SM-2a Test 6)."""
+    uc._write_cache(
+        uc.UpdateCacheEntry(
+            last_check_ts=time.time() - 48 * 3600,
+            latest_version="0.1.0",
+            etag=None,
+        )
+    )
+    cache_file = cache_dir / "update_check.json"
+    before = cache_file.read_text(encoding="utf-8")
+
+    def _boom(cur: str, etag: str | None) -> tuple[str | None, str | None, bool]:
+        raise OSError("offline")
+
+    monkeypatch.setattr(uc, "_is_suppressed", lambda: False)
+    monkeypatch.setattr(uc, "_probe_github", _boom)
+    uc.refresh_stale_cache("0.1.0")  # must not raise
+    assert cache_file.read_text(encoding="utf-8") == before
+
+
+@pytest.mark.parametrize(
+    "var", ["CI", "SUPAMEM_NO_UPDATE_CHECK", "NO_UPDATE_NOTIFIER"]
+)
+def test_refresh_stale_cache_suppressed_skips_probe(
+    cache_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    var: str,
+    tty_stderr: None,
+) -> None:
+    """Suppression envs: helper performs no probe at all (SM-2a Test 7)."""
+    monkeypatch.setenv(var, "1")
+    with patch.object(uc, "_probe_github") as probe:
+        uc.refresh_stale_cache("0.1.0")
+    probe.assert_not_called()
