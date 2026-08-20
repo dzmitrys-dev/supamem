@@ -83,6 +83,14 @@ def test_sweep_preserves_lines_between_duplicate_fences() -> None:
 
 def test_extract_still_raises_on_raw_two_block_fixture() -> None:
     """Belt-and-braces alongside tests/test_config_io.py:122 — the strict
-    tripwire remains reachable on the unhealed field-report replica."""
-    with pytest.raises(ValueError, match="multiple BEGIN SUPAMEM markers"):
+    tripwire remains reachable on the unhealed field-report replica.
+
+    CR-01 narrowed *what* trips it: the tripwire now counts complete BEGIN/END
+    fence pairs rather than bare BEGIN mentions, so it fires only on states
+    ``sweep_managed_blocks`` can actually heal. This fixture — two genuinely
+    complete blocks — is exactly such a state, so it still raises; the message
+    changed to say "managed blocks" because that is now what is being counted.
+    See tests/test_managed_block_asymmetry.py for the states that must NOT raise.
+    """
+    with pytest.raises(ValueError, match="multiple SUPAMEM managed blocks"):
         extract_managed_block(_two_block_fixture())

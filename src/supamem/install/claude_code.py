@@ -162,12 +162,13 @@ def _settings_with_hook(
 
 
 def _claude_md_with_import(existing: str) -> str:
-    # SM-4/SM-6: heal duplicate managed blocks BEFORE the strict extract —
-    # sweep is a byte-level no-op on healthy text, so only duplicated files
-    # (the accumulated-upgrade state that used to crash install) change.
+    # SM-4/SM-6: heal duplicate managed blocks and unpaired marker lines
+    # BEFORE the strict extract — sweep is a byte-level no-op on healthy text,
+    # so only anomalous files (the accumulated-upgrade state, or a hand-mangled
+    # fence, both of which used to crash install) change.
     existing, removed = sweep_managed_blocks(existing)
     if removed:
-        info(f"CLAUDE.md: swept {removed} duplicate SUPAMEM managed block(s)")
+        info(f"CLAUDE.md: swept {removed} stale SUPAMEM managed-block marker(s)")
     before, owned, after = extract_managed_block(existing)
     if owned and CLAUDE_MD_IMPORT_LINE in owned:
         return existing
@@ -179,18 +180,25 @@ def _claude_md_with_import(existing: str) -> str:
 
 
 def _heal_managed_block_file(path: Path) -> str:
-    """SM-6: read ``path`` and, when it carries duplicate managed blocks,
-    rewrite it healed — .bak.<time_ns> sibling first (mirrors the install
-    write path's backup pattern). Returns the (possibly healed) body text so
-    the caller's ``extract_managed_block`` cannot raise on it. No-op on
-    healthy files.
+    """SM-6: read ``path`` and, when it carries duplicate managed blocks or
+    unpaired marker lines, rewrite it healed — .bak.<time_ns> sibling first
+    (mirrors the install write path's backup pattern). No-op on healthy files.
+
+    Returns the (possibly healed) body text, on which the caller's
+    ``extract_managed_block`` provably cannot raise: the sweep guarantees at
+    most one complete fence pair, and one pair is exactly what extract accepts.
+    Before CR-01 this docstring asserted that invariant without holding it —
+    extract counted bare BEGIN mentions while the sweep merged only complete
+    pairs, so an asymmetric file raised straight through this "healed" return
+    and there is no ``except ValueError`` anywhere on the install path to catch
+    it.
     """
     body = path.read_text(encoding="utf-8")
     healed, removed = sweep_managed_blocks(body)
     if not removed:
         return body
     info(
-        f"{path.name}: swept {removed} duplicate SUPAMEM managed block(s) "
+        f"{path.name}: swept {removed} stale SUPAMEM managed-block marker(s) "
         f"(backup: {path.name}.bak.*)"
     )
     bak = path.with_name(path.name + f".bak.{time_ns()}")

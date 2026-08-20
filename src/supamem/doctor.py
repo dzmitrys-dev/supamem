@@ -16,7 +16,6 @@ or key into a stack trace (T-80.6-11-03).
 from __future__ import annotations
 
 import logging
-import re
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -24,6 +23,11 @@ from typing import Any
 
 from supamem import __version__
 from supamem.config import ConfigChain, ResolvedConfig, load_config
+from supamem.config_io import (
+    count_managed_blocks,
+    count_orphan_markers,
+    managed_block_versions,
+)
 from supamem.console import banner, console, err, info, ok, warn
 from supamem.init import probe_qdrant
 
@@ -36,8 +40,14 @@ def _client_targets() -> tuple[tuple[str, Path], ...]:
         ("opencode", Path.home() / "AGENTS.md"),
     )
 
-# PEP 440 versions accept alpha/beta/rc/dev suffixes; matches config_io._FENCE_RE.
-_VERSION_RE = re.compile(r"BEGIN SUPAMEM v([\w\.\+\-]+) MANAGED BLOCK")
+# The marker grammar lives in ONE place — supamem.config_io — and this module
+# imports it (``count_managed_blocks`` / ``managed_block_versions`` /
+# ``count_orphan_markers``) rather than carrying a private copy. Doctor used to
+# define its own looser regex (no `# ` prefix, no `— DO NOT EDIT` suffix, no
+# line anchor) behind a comment claiming parity with config_io's fence pattern.
+# It had none: it counted bare BEGIN *mentions*, so a single prose sentence in
+# the user's own ~/CLAUDE.md inflated the block count, flipped `any_drift`, and
+# printed "run supamem repair" for a state repair could not change (CR-03).
 
 
 def _redact(value: str, *, enabled: bool) -> str:
@@ -73,11 +83,18 @@ def version_drift_report() -> list[dict[str, Any]]:
             out.append({"client": client, "path": str(path), "present": False, "drift": False})
             continue
         body = path.read_text(encoding="utf-8")
-        # SM-4d (Phase 19.1): count BEGIN markers per target — the drift
+        # SM-4d (Phase 19.1): count managed blocks per target — the drift
         # report previously read only the FIRST block, so duplicate-block
         # accumulation (what `supamem repair` heals) was invisible here.
-        block_versions = _VERSION_RE.findall(body)
-        block_count = len(block_versions)
+        #
+        # CR-03: count COMPLETE fence pairs via config_io, the same primitive
+        # sweep_managed_blocks heals with. Doctor must never report a count
+        # that repair cannot act on. Unpaired marker lines are a separate,
+        # separately-labelled state (`malformed`) — also healed by the sweep,
+        # so it too clears on the repair doctor recommends.
+        block_versions = managed_block_versions(body)
+        block_count = count_managed_blocks(body)
+        malformed = count_orphan_markers(body) > 0
         if not block_versions:
             out.append(
                 {
@@ -86,7 +103,8 @@ def version_drift_report() -> list[dict[str, Any]]:
                     "present": True,
                     "block_version": None,
                     "block_count": block_count,
-                    "drift": False,
+                    "malformed": malformed,
+                    "drift": malformed,
                 }
             )
             continue
@@ -98,11 +116,12 @@ def version_drift_report() -> list[dict[str, Any]]:
                 "present": True,
                 "block_version": block_version,
                 "block_count": block_count,
+                "malformed": malformed,
                 "current": __version__,
                 # Duplicate fences are drift even when the first block's
                 # version matches — accumulation is exactly the state
-                # repair exists to heal.
-                "drift": block_count > 1 or block_version != __version__,
+                # repair exists to heal. So is a malformed half-fence.
+                "drift": block_count > 1 or malformed or block_version != __version__,
             }
         )
     return out
@@ -1082,6 +1101,16 @@ def run_doctor(*, redact_secrets: bool = True) -> int:
             warn(
                 f"{row['client']:<12} {row['block_count']} managed blocks "
                 f"detected — run supamem repair"
+            )
+            continue
+        if row.get("malformed"):
+            # CR-03: an unpaired BEGIN/END marker line is NOT a duplicate
+            # block. Reporting it as one sent users to a repair that left the
+            # count unchanged. Named honestly, and the sweep does clear it.
+            any_drift = True
+            warn(
+                f"{row['client']:<12} malformed managed-block fence "
+                f"({row['path']}) — run supamem repair"
             )
             continue
         if row.get("block_version") is None:

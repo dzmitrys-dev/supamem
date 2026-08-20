@@ -6,8 +6,14 @@ Public API:
 - ``wrap_managed_block`` / ``extract_managed_block`` — fence-marker primitives
   for embedding supamem-owned regions inside line-oriented user-edited files.
 - ``sweep_managed_blocks`` — heal text carrying duplicate managed blocks
-  (SM-4 accumulation) into exactly one canonical block; byte-level no-op on
-  healthy input. Keeps ``extract_managed_block`` strict (multi-BEGIN raise).
+  (SM-4 accumulation) or unpaired marker lines into at most one canonical
+  block; byte-level no-op on healthy input. Keeps ``extract_managed_block``
+  strict (raises on >1 complete block).
+- ``MANAGED_FENCE_RE`` / ``MANAGED_BEGIN_RE`` / ``MANAGED_END_RE`` plus the
+  ``count_managed_blocks`` / ``managed_block_versions`` / ``count_orphan_markers``
+  helpers — the SINGLE source of truth for the marker grammar. ``doctor`` and
+  the installers all read it from here so a "duplicate blocks" report can
+  never describe a state the healer does not recognize.
 - ``compute_diff`` — unified-diff helper for ``--dry-run`` callers.
 - ``WriteResult`` (dataclass), ``BackupNotWritten`` (exception).
 
@@ -174,17 +180,54 @@ def atomic_write_json(
 
 _BEGIN_FMT = "# BEGIN SUPAMEM v{version} MANAGED BLOCK — DO NOT EDIT"
 _END_FMT = "# END SUPAMEM v{version} MANAGED BLOCK"
+
 # PEP 440 versions can include alpha/beta/rc/dev suffixes (e.g. 0.2.5a1,
 # 1.0.0rc2, 2.1.dev0), so the marker version-token char-class must accept
 # letters, digits, dots, plus, minus, and underscore — not just `[\d\.]+`.
 # Anchor with leading `v` to keep the marker unambiguous.
-_FENCE_RE = re.compile(
-    r"# BEGIN SUPAMEM v[\w\.\+\-]+ MANAGED BLOCK — DO NOT EDIT\n"
-    r"(?P<owned>.*?)\n"
-    r"# END SUPAMEM v[\w\.\+\-]+ MANAGED BLOCK",
-    re.DOTALL,
+_VERSION_TOKEN = r"[\w\.\+\-]+"
+
+# ── ONE source of truth for "what is a managed-block marker?" (CR-01/CR-03) ──
+#
+# These three patterns are the ONLY place the marker grammar is defined. Every
+# consumer — the installers, the healer, and ``supamem doctor`` — imports from
+# here. Before 19.1 there were three independent regexes (a fence-pair one and
+# a bare-BEGIN one here, plus a third, looser one in ``doctor``) behind comments
+# asserting a parity they did not have; ``doctor`` demanded repairs that
+# ``repair`` could not perform and the installers raised on states the healer
+# could not heal. Parity is now by construction, not by comment.
+#
+# All three are LINE-ANCHORED: a marker is a marker only when it owns its whole
+# line at column 0. A file that merely *documents* the marker — backticked in a
+# sentence, indented inside a code sample — is user prose, not a fence. This
+# repository's own CLAUDE.md documents it, and used to trip every verb.
+#
+# Anchoring against `\n` alone is sufficient: this text always arrives via
+# ``Path.read_text()``, which applies universal-newline translation, so a CRLF
+# file is already `\n`-only by the time it reaches us.
+_BEGIN_LINE = rf"# BEGIN SUPAMEM v{_VERSION_TOKEN} MANAGED BLOCK — DO NOT EDIT"
+_END_LINE = rf"# END SUPAMEM v{_VERSION_TOKEN} MANAGED BLOCK"
+
+MANAGED_BEGIN_RE = re.compile(
+    rf"^# BEGIN SUPAMEM v(?P<version>{_VERSION_TOKEN}) MANAGED BLOCK — DO NOT EDIT$",
+    re.MULTILINE,
 )
-_BEGIN_RE = re.compile(r"# BEGIN SUPAMEM v[\w\.\+\-]+ MANAGED BLOCK — DO NOT EDIT")
+MANAGED_END_RE = re.compile(
+    rf"^# END SUPAMEM v(?P<version>{_VERSION_TOKEN}) MANAGED BLOCK$",
+    re.MULTILINE,
+)
+MANAGED_FENCE_RE = re.compile(
+    rf"^# BEGIN SUPAMEM v(?P<version>{_VERSION_TOKEN}) MANAGED BLOCK — DO NOT EDIT\n"
+    # `owned` may never swallow another BEGIN marker line: a fence pair is the
+    # SMALLEST well-formed region. Without this tempered guard, a stale half-
+    # fence sitting above a healthy block got absorbed into the pair, so the
+    # pair reported the *stale* version — permanent drift that no `install`
+    # could clear, because the import line was already present inside `owned`
+    # and the writer therefore short-circuited as "already correct".
+    rf"(?P<owned>(?:(?!^{_BEGIN_LINE}$).)*?)"
+    rf"\n^{_END_LINE}$",
+    re.DOTALL | re.MULTILINE,
+)
 
 
 def wrap_managed_block(content: str, version: str = __version__) -> str:
@@ -192,14 +235,70 @@ def wrap_managed_block(content: str, version: str = __version__) -> str:
     return f"{_BEGIN_FMT.format(version=version)}\n{content}\n{_END_FMT.format(version=version)}"
 
 
+def count_managed_blocks(text: str) -> int:
+    """Number of COMPLETE BEGIN/END managed-block fence pairs in ``text``.
+
+    This is the canonical "how many managed blocks does this file have?"
+    primitive. Counting complete pairs — never bare BEGIN mentions — is what
+    keeps ``extract_managed_block``'s raise and ``sweep_managed_blocks``'
+    healing talking about the same thing.
+    """
+    return sum(1 for _ in MANAGED_FENCE_RE.finditer(text))
+
+
+def managed_block_versions(text: str) -> list[str]:
+    """Fence version tokens, in document order, one per complete pair."""
+    return [m.group("version") for m in MANAGED_FENCE_RE.finditer(text)]
+
+
+def _orphan_marker_spans(text: str, pairs: list[re.Match[str]]) -> list[tuple[int, int]]:
+    """Line spans of BEGIN/END marker lines NOT part of a complete fence pair.
+
+    Each span covers the whole marker line including its trailing newline, so
+    deleting it leaves no blank residue. Returned sorted by start offset.
+    """
+    pair_spans = [(m.start(), m.end()) for m in pairs]
+    spans: list[tuple[int, int]] = []
+    for pattern in (MANAGED_BEGIN_RE, MANAGED_END_RE):
+        for match in pattern.finditer(text):
+            start = match.start()
+            if any(lo <= start < hi for lo, hi in pair_spans):
+                continue  # this marker is one half of a well-formed fence
+            end = match.end()
+            if text[end : end + 1] == "\n":
+                end += 1
+            spans.append((start, end))
+    return sorted(spans)
+
+
+def count_orphan_markers(text: str) -> int:
+    """Number of unpaired BEGIN/END marker lines — the malformed-fence state.
+
+    Distinct from ``count_managed_blocks``: a file can hold one healthy block
+    AND a leftover half-fence from a hand-edit. Callers (``supamem doctor``)
+    must report the two states separately, because they read differently to a
+    user even though ``sweep_managed_blocks`` heals both.
+    """
+    return len(_orphan_marker_spans(text, list(MANAGED_FENCE_RE.finditer(text))))
+
+
 def extract_managed_block(text: str) -> tuple[str, str, str]:
     """Split ``text`` into ``(before, owned, after)`` around the fence pair.
 
-    Raises ``ValueError`` if multiple BEGIN markers are present.
+    Raises ``ValueError`` when more than one COMPLETE fence pair is present —
+    the duplicate-accumulation state that ``sweep_managed_blocks`` heals.
+
+    The count is deliberately of complete *pairs*, not of bare BEGIN mentions
+    (CR-01). Counting mentions made the raise reachable from states the healer
+    could not normalize — a prose mention of the marker, or a hand-mangled END
+    fence — so install / uninstall / repair all died with an unhandled
+    ``ValueError`` and no recovery path. An unpaired marker is a
+    malformed-fence problem for ``sweep_managed_blocks``, never a reason to
+    abort the installer.
     """
-    if len(_BEGIN_RE.findall(text)) > 1:
-        raise ValueError("multiple BEGIN SUPAMEM markers found in text")
-    match = _FENCE_RE.search(text)
+    if count_managed_blocks(text) > 1:
+        raise ValueError("multiple SUPAMEM managed blocks found in text")
+    match = MANAGED_FENCE_RE.search(text)
     if match is None:
         return (text, "", "")
     before = text[: match.start()]
@@ -209,41 +308,64 @@ def extract_managed_block(text: str) -> tuple[str, str, str]:
 
 
 def sweep_managed_blocks(text: str, version: str = __version__) -> tuple[str, int]:
-    """Heal ``text`` so it carries exactly one SUPAMEM managed block (SM-4).
+    """Heal ``text`` so it carries at most one SUPAMEM managed block (SM-4).
 
-    Duplicate fenced blocks — accumulated across upgrades when older fence
-    regexes could not see prerelease-versioned markers — are merged: owned
-    content is deduplicated line-by-line (order-preserving) and re-fenced as
-    ONE canonical block via ``wrap_managed_block`` at ``version``, placed at
-    the FIRST block's position. Text outside the fence pairs (including lines
-    between two duplicate blocks) is preserved verbatim.
+    Two anomalies are normalized:
 
-    Returns ``(healed_text, removed_count)`` where ``removed_count`` is the
-    number of duplicate blocks swept (``len(matches) - 1``). Input with 0 or 1
-    blocks is the healthy case: returned byte-identical with count 0.
+    1. **Duplicate fenced blocks** — accumulated across upgrades when older
+       fence regexes could not see prerelease-versioned markers. Owned content
+       is deduplicated line-by-line (order-preserving) and re-fenced as ONE
+       canonical block via ``wrap_managed_block`` at ``version``, placed at the
+       FIRST block's position.
+    2. **Unpaired BEGIN/END marker lines** — left behind when a user hand-edits
+       or mangles a fence. The stray marker *line* is deleted; the surrounding
+       text is untouched. Without this, a lone half-fence was permanent: it
+       could never be paired again, so ``supamem doctor`` stayed red forever
+       with an instruction ``repair`` could not carry out (CR-01/CR-03).
 
-    ``extract_managed_block`` keeps its strict multi-BEGIN raise — this sweep
-    is the recoverable-state healing layer ABOVE that tripwire (SM-6), not a
-    replacement for it.
+    Text outside the fence pairs — including lines between two duplicate
+    blocks — is preserved verbatim.
+
+    Returns ``(healed_text, removed_count)``, where ``removed_count`` is the
+    number of anomalies healed (duplicate blocks swept plus orphan marker lines
+    dropped). Healthy input — zero or one block and no orphans — is the common
+    case and is returned byte-identical with count 0.
+
+    INVARIANT (load-bearing, pinned by
+    ``tests/test_managed_block_asymmetry.py::test_sweep_output_is_always_accepted_by_extract``):
+    the returned text always holds at most one complete fence pair, so
+    ``extract_managed_block`` can never raise on a swept result, and sweeping a
+    swept result is a byte-stable fixed point. This is what makes ``repair`` a
+    real remedy rather than a no-op.
     """
-    matches = list(_FENCE_RE.finditer(text))
-    if len(matches) <= 1:
+    matches = list(MANAGED_FENCE_RE.finditer(text))
+    orphans = _orphan_marker_spans(text, matches)
+    if len(matches) <= 1 and not orphans:
         return text, 0
-    merged: list[str] = []
-    for match in matches:
-        for line in match.group("owned").splitlines():
-            if line not in merged:
-                merged.append(line)
-    block = wrap_managed_block("\n".join(merged), version=version)
+
+    # (start, end, replacement) edits, applied left to right. Non-overlapping
+    # by construction: orphan spans exclude anything inside a pair span.
+    edits: list[tuple[int, int, str]] = []
+    if len(matches) > 1:
+        merged: list[str] = []
+        for match in matches:
+            for line in match.group("owned").splitlines():
+                if line not in merged:
+                    merged.append(line)
+        canonical = wrap_managed_block("\n".join(merged), version=version)
+        for index, match in enumerate(matches):
+            edits.append((match.start(), match.end(), canonical if index == 0 else ""))
+    edits.extend((start, end, "") for start, end in orphans)
+    edits.sort()
+
     parts: list[str] = []
-    last_end = 0
-    for index, match in enumerate(matches):
-        parts.append(text[last_end : match.start()])
-        if index == 0:
-            parts.append(block)
-        last_end = match.end()
-    parts.append(text[last_end:])
-    return "".join(parts), len(matches) - 1
+    cursor = 0
+    for start, end, replacement in edits:
+        parts.append(text[cursor:start])
+        parts.append(replacement)
+        cursor = end
+    parts.append(text[cursor:])
+    return "".join(parts), max(len(matches) - 1, 0) + len(orphans)
 
 
 # ──────────────────────────── compute_diff ─────────────────────────────────

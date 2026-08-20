@@ -54,11 +54,12 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _agents_md_with_import(existing: str) -> str:
-    # SM-4/SM-6: heal duplicate managed blocks BEFORE the strict extract —
-    # sweep is a byte-level no-op on healthy text (claude_code twin).
+    # SM-4/SM-6: heal duplicate managed blocks and unpaired marker lines
+    # BEFORE the strict extract — sweep is a byte-level no-op on healthy text
+    # (claude_code twin).
     existing, removed = sweep_managed_blocks(existing)
     if removed:
-        info(f"AGENTS.md: swept {removed} duplicate SUPAMEM managed block(s)")
+        info(f"AGENTS.md: swept {removed} stale SUPAMEM managed-block marker(s)")
     before, owned, after = extract_managed_block(existing)
     if owned and AGENTS_MD_IMPORT_LINE in owned:
         return existing
@@ -70,17 +71,21 @@ def _agents_md_with_import(existing: str) -> str:
 
 
 def _heal_managed_block_file(path: Path) -> str:
-    """SM-6: read ``path`` and, when it carries duplicate managed blocks,
-    rewrite it healed — .bak.<time_ns> sibling first. Returns the (possibly
-    healed) body text so the caller's ``extract_managed_block`` cannot raise
-    on it. No-op on healthy files. (claude_code twin.)
+    """SM-6: read ``path`` and, when it carries duplicate managed blocks or
+    unpaired marker lines, rewrite it healed — .bak.<time_ns> sibling first.
+    No-op on healthy files. (claude_code twin.)
+
+    Returns the (possibly healed) body text, on which the caller's
+    ``extract_managed_block`` provably cannot raise: the sweep guarantees at
+    most one complete fence pair. See the claude_code twin for why that
+    invariant did not hold before CR-01.
     """
     body = path.read_text(encoding="utf-8")
     healed, removed = sweep_managed_blocks(body)
     if not removed:
         return body
     info(
-        f"{path.name}: swept {removed} duplicate SUPAMEM managed block(s) "
+        f"{path.name}: swept {removed} stale SUPAMEM managed-block marker(s) "
         f"(backup: {path.name}.bak.*)"
     )
     bak = path.with_name(path.name + f".bak.{time_ns()}")
