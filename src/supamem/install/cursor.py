@@ -10,6 +10,7 @@ Targets:
 
 Atomic JSON writes with .bak.<ts>; idempotent on re-run.
 """
+
 from __future__ import annotations
 
 import json
@@ -35,6 +36,7 @@ def _mcp_supamem_entry(cwd: Path) -> dict[str, Any]:
         "args": ["mcp-server", "--transport", "stdio"],
         "env": env,
     }
+
 
 SESSION_START_HOOK: dict[str, Any] = {
     "sessionStart": [
@@ -102,9 +104,7 @@ def _hooks_with_snapshot(existing: dict[str, Any]) -> dict[str, Any]:
     if not _hooks_already_present(merged):
         merged.setdefault("sessionStart", []).extend(SESSION_START_HOOK["sessionStart"])
     if not _advisory_already_present(merged):
-        merged.setdefault("beforeSubmitPrompt", []).extend(
-            ADVISORY_HOOK["beforeSubmitPrompt"]
-        )
+        merged.setdefault("beforeSubmitPrompt", []).extend(ADVISORY_HOOK["beforeSubmitPrompt"])
     return merged
 
 
@@ -171,7 +171,9 @@ def install(*, dry_run: bool = False, scope: str = "project") -> InstallResult:
                 mdc_target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src, mdc_target)
                 written.append(mdc_target)
-            diffs.append(f"--- {mdc_target}\n+++ {mdc_target}\n@@ supamem dual-memory.mdc copy @@\n")
+            diffs.append(
+                f"--- {mdc_target}\n+++ {mdc_target}\n@@ supamem dual-memory.mdc copy @@\n"
+            )
 
     no_op = not written and not diffs
     return InstallResult(
@@ -226,12 +228,16 @@ def _strip_supamem_session_start(hooks: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def uninstall() -> int:
+def uninstall(*, dry_run: bool = False) -> int:
     """Remove supamem from BOTH project and user scopes (defensive).
 
     A user could have run ``supamem install --client cursor`` from multiple
     machines or with different scope flags over time. Strip from both so a
     single uninstall fully cleans up.
+
+    ``dry_run=True`` computes every strip against the current content but
+    writes nothing (SM-7a) — no JSON rewrite, no .bak sibling, and the
+    ``.mdc`` rules copy is NOT unlinked.
     """
     home = Path.home()
     cwd = Path.cwd()
@@ -241,10 +247,18 @@ def uninstall() -> int:
 
     for mcp_path in mcp_paths:
         if mcp_path.exists():
-            atomic_write_json(mcp_path, _strip_supamem_from_mcp(_read_json(mcp_path)))
+            atomic_write_json(
+                mcp_path,
+                _strip_supamem_from_mcp(_read_json(mcp_path)),
+                dry_run=dry_run,
+            )
     if hooks_path.exists():
-        atomic_write_json(hooks_path, _strip_supamem_session_start(_read_json(hooks_path)))
-    if mdc_target.exists():
+        atomic_write_json(
+            hooks_path,
+            _strip_supamem_session_start(_read_json(hooks_path)),
+            dry_run=dry_run,
+        )
+    if mdc_target.exists() and not dry_run:
         try:
             mdc_target.unlink()
         except OSError:

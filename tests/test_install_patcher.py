@@ -61,10 +61,18 @@ def _manifest_path(home: Path) -> Path:
 
 def test_install_invokes_patcher_and_writes_manifest(
     fake_home: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """REACH-01 canonical end-to-end: ``install()`` patches the seeded agent
     file and writes a manifest entry.
+
+    Runs REAL (no dry_run): under the SM-7a strict contract a dry-run
+    install skips the patcher entirely, so real-patch assertions must use a
+    sandboxed cwd + real install.
     """
+    cwd = tmp_path_factory.mktemp("workspace")
+    monkeypatch.chdir(cwd)
     agent_file = _seed_patchable_agent(fake_home)
     # claude-code is auto-detected via the presence of .claude.json.
     (fake_home / ".claude.json").write_text("{}", encoding="utf-8")
@@ -73,7 +81,6 @@ def test_install_invokes_patcher_and_writes_manifest(
 
     rc = install(
         client="claude-code",
-        dry_run=True,
         skip_models=True,
         skip_patch_agents=False,
     )
@@ -123,9 +130,17 @@ def test_install_with_skip_patch_agents_does_not_invoke_patcher(
 
 def test_repair_invokes_patcher(
     fake_home: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """REACH-02: ``repair()`` re-runs the patcher (catches plugin-installed
-    agents added since the last install)."""
+    agents added since the last install).
+
+    Runs REAL (no dry_run): under the SM-7a strict contract a dry-run
+    repair performs no patcher writes.
+    """
+    cwd = tmp_path_factory.mktemp("workspace")
+    monkeypatch.chdir(cwd)
     agent_file = _seed_patchable_agent(fake_home)
     # repair() detects claude-code via .claude.json existence (same heuristic
     # as install autodetect).
@@ -135,7 +150,6 @@ def test_repair_invokes_patcher(
 
     rc = repair(
         client="claude-code",
-        dry_run=True,
         skip_models=True,
         skip_patch_agents=False,
     )
@@ -181,6 +195,12 @@ def test_repair_dry_run_changes_nothing_end_to_end(
     skipped share-dir sync."""
     cwd = tmp_path_factory.mktemp("workspace")
     monkeypatch.chdir(cwd)
+    # Redirect the module-level share-dir constant (bound at import with the
+    # REAL home) so the share sync lands inside the sandbox and the snapshot
+    # comparison is meaningful.
+    monkeypatch.setattr(
+        "supamem.install.share.DEFAULT_SHARE_DIR", fake_home / ".supamem" / "share"
+    )
     agent_file = _seed_patchable_agent(fake_home)
     (fake_home / ".claude.json").write_text("{}", encoding="utf-8")
 

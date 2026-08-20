@@ -143,7 +143,13 @@ def _strip_supamem_from_mcp(raw: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def uninstall() -> int:
+def uninstall(*, dry_run: bool = False) -> int:
+    """Remove supamem from the opencode config and ./AGENTS.md.
+
+    ``dry_run=True`` computes every strip against the current content but
+    writes nothing (SM-7a) — including on the duplicated-block state (the
+    sweep heal runs in-memory only). (claude_code twin.)
+    """
     home = Path.home()
     cwd = Path.cwd()
     cfg_path = home / ".config" / "opencode" / "opencode.json"
@@ -151,15 +157,21 @@ def uninstall() -> int:
 
     if cfg_path.exists():
         cur = _read_json(cfg_path)
-        atomic_write_json(cfg_path, _strip_supamem_from_mcp(cur))
+        atomic_write_json(cfg_path, _strip_supamem_from_mcp(cur), dry_run=dry_run)
     if agents_md.exists():
-        # SM-6: duplicated managed blocks used to crash uninstall here with
-        # an unhandled ValueError — heal (with backup) before extracting.
-        body = _heal_managed_block_file(agents_md)
+        if dry_run:
+            # SM-7a: heal in-memory only — no raise, no write, no .bak.
+            body = agents_md.read_text(encoding="utf-8")
+            body, _removed = sweep_managed_blocks(body)
+        else:
+            # SM-6: duplicated managed blocks used to crash uninstall here
+            # with an unhandled ValueError — heal (with backup) first.
+            body = _heal_managed_block_file(agents_md)
         before, _owned, after = extract_managed_block(body)
         if before != body:
             new_body = (before.rstrip() + "\n" + after.lstrip()).strip() + "\n"
-            agents_md.write_text(new_body, encoding="utf-8")
+            if not dry_run:
+                agents_md.write_text(new_body, encoding="utf-8")
     return 0
 
 

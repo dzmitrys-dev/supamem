@@ -310,7 +310,7 @@ def _strip_supamem_hook(settings: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def uninstall() -> int:
+def uninstall(*, dry_run: bool = False) -> int:
     """Remove supamem from BOTH project and user scopes (defensive).
 
     Strips ``mcpServers.supamem`` from any of:
@@ -319,6 +319,11 @@ def uninstall() -> int:
 
     so a single uninstall fully cleans up regardless of which scope the user
     originally installed with.
+
+    ``dry_run=True`` computes every strip against the current content but
+    writes nothing (SM-7a) — no JSON rewrite, no .bak sibling, no managed-
+    block removal, no sweep-heal rewrite. It never raises, including on the
+    duplicated-block state healed in real runs (sweep runs in-memory only).
     """
     home = Path.home()
     cwd = Path.cwd()
@@ -329,20 +334,27 @@ def uninstall() -> int:
     for target in mcp_targets:
         if target.exists():
             cur = _read_json(target)
-            atomic_write_json(target, _strip_supamem_from_mcp(cur))
+            atomic_write_json(target, _strip_supamem_from_mcp(cur), dry_run=dry_run)
 
     if settings_json.exists():
         cur = _read_json(settings_json)
-        atomic_write_json(settings_json, _strip_supamem_hook(cur))
+        atomic_write_json(settings_json, _strip_supamem_hook(cur), dry_run=dry_run)
 
     if claude_md.exists():
-        # SM-6: duplicated managed blocks used to crash uninstall here with
-        # an unhandled ValueError — heal (with backup) before extracting.
-        body = _heal_managed_block_file(claude_md)
+        if dry_run:
+            # SM-7a: heal in-memory only — dry-run must neither raise on the
+            # duplicated-block state nor write the healed file.
+            body = claude_md.read_text(encoding="utf-8")
+            body, _removed = sweep_managed_blocks(body)
+        else:
+            # SM-6: duplicated managed blocks used to crash uninstall here
+            # with an unhandled ValueError — heal (with backup) first.
+            body = _heal_managed_block_file(claude_md)
         before, _owned, after = extract_managed_block(body)
         if before != body:
             new_body = (before.rstrip() + "\n" + after.lstrip()).strip() + "\n"
-            claude_md.write_text(new_body, encoding="utf-8")
+            if not dry_run:
+                claude_md.write_text(new_body, encoding="utf-8")
     return 0
 
 

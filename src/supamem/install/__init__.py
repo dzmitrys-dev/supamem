@@ -4,6 +4,7 @@
 then routes to the client-specific module. ``uninstall(client)`` removes only
 the managed-block region — user-edited content outside the fences is preserved.
 """
+
 from __future__ import annotations
 
 import logging
@@ -55,6 +56,7 @@ def _maybe_prepare_models(skip_models: bool) -> None:
     except RuntimeError:
         # err_console already surfaced the actionable error; do not abort.
         from supamem.console import warn as _warn  # noqa: PLC0415
+
         _warn("reranker model fetch failed — run `supamem repair` later")
     except Exception as exc:  # noqa: BLE001 — config / loader pathologies must not block install
         log.debug("model pre-fetch skipped: %r", exc)
@@ -81,6 +83,7 @@ def _maybe_patch_agents(skip_patch_agents: bool) -> None:
     except Exception as exc:  # noqa: BLE001 — patcher pathologies must not block install
         log.debug("agent patch skipped: %r", exc)
         from supamem.console import warn as _warn  # noqa: PLC0415
+
         _warn(f"subagent patcher skipped: {exc!r} — run `supamem repair` later")
 
 
@@ -117,22 +120,27 @@ def install(
         err(f"unknown scope: {scope!r} (valid: {', '.join(VALID_SCOPES)})")
         return 2
 
-    written = ensure_share_dir()
-    if written:
-        ok(f"synced {len(written)} share artifact(s)")
+    if dry_run:
+        # SM-7a (strict Q7 contract): a dry run changes NOTHING — the
+        # share-dir sync, model pre-fetch, and agent patcher all write
+        # outside the client config and are skipped entirely.
+        info("dry-run: share-dir sync skipped (model pre-fetch and agent patching skipped)")
+    else:
+        written = ensure_share_dir()
+        if written:
+            ok(f"synced {len(written)} share artifact(s)")
 
-    # Eager-fetch ML prerequisites BEFORE client dispatch (D-FETCH-01).
-    # Order: models first (slow network), patcher second (fast filesystem) —
-    # per RESEARCH.md "Wiring" rationale (Phase 08.1 D-LOCK-01..03 + D-FAIL-03).
-    _maybe_prepare_models(skip_models)
-    _maybe_patch_agents(skip_patch_agents)
+        # Eager-fetch ML prerequisites BEFORE client dispatch (D-FETCH-01).
+        # Order: models first (slow network), patcher second (fast
+        # filesystem) — per RESEARCH.md "Wiring" rationale (Phase 08.1
+        # D-LOCK-01..03 + D-FAIL-03).
+        _maybe_prepare_models(skip_models)
+        _maybe_patch_agents(skip_patch_agents)
 
     if client == "claude-code":
         from supamem.install import claude_code
 
-        result = claude_code.install(
-            dry_run=dry_run, scope=scope, enforce_search=enforce_search
-        )
+        result = claude_code.install(dry_run=dry_run, scope=scope, enforce_search=enforce_search)
     elif client == "cursor":
         from supamem.install import cursor as cursor_install
 
@@ -156,7 +164,12 @@ def install(
     return 0
 
 
-def uninstall(client: Optional[str]) -> int:
+def uninstall(client: Optional[str], *, dry_run: bool = False) -> int:
+    """Remove supamem from the named client (or auto-detect).
+
+    ``dry_run=True`` performs none of the strip writes (SM-7a): every target
+    the real uninstall would rewrite is left byte-identical.
+    """
     if client is None:
         client = _autodetect()
         if client is None:
@@ -166,15 +179,15 @@ def uninstall(client: Optional[str]) -> int:
     if client == "claude-code":
         from supamem.install import claude_code
 
-        return claude_code.uninstall()
+        return claude_code.uninstall(dry_run=dry_run)
     if client == "cursor":
         from supamem.install import cursor as cursor_install
 
-        return cursor_install.uninstall()
+        return cursor_install.uninstall(dry_run=dry_run)
     if client == "opencode":
         from supamem.install import opencode
 
-        return opencode.uninstall()
+        return opencode.uninstall(dry_run=dry_run)
     err(f"unknown client: {client!r}")
     return 2
 
@@ -233,7 +246,10 @@ def repair(
     for tgt in targets:
         info(f"repair: {tgt}")
         # Uninstall strips supamem from both project AND user scopes.
-        uninstall_rc = uninstall(tgt)
+        # SM-7a: the dry_run flag reaches the uninstall half too — without
+        # it, `repair --dry-run` performed a REAL uninstall then skipped the
+        # reinstall, leaving the machine stripped.
+        uninstall_rc = uninstall(tgt, dry_run=dry_run)
         if uninstall_rc != 0:
             rc_overall = uninstall_rc
             continue
