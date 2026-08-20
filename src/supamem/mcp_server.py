@@ -19,7 +19,7 @@ import logging
 import os
 import sys
 import time
-from typing import Any, Optional, Union
+from typing import Annotated, Any, Optional, Union
 
 # ---- Logging routed to stderr BEFORE any heavy import ---------------------
 
@@ -39,6 +39,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("supamem.mcp_server")
 
+from mcp.types import CallToolResult, TextContent  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
 from supamem.config import ResolvedConfig  # noqa: E402
@@ -327,9 +328,17 @@ def _register_dual_memory_tool(app: Any, config: ResolvedConfig) -> None:
         where: Optional[dict[str, Union[str, list[str]]]] = Field(
             None, description=where_desc
         ),
-    ) -> SearchResult:
-        return await dual_memory_search(
+    ) -> Annotated[CallToolResult, SearchResult]:
+        # L1 (Phase 19): pre-built CallToolResult — the SDK validates it against
+        # the SearchResult-derived output schema (the Annotated form keeps schema
+        # discovery for Cursor-shaped consumers) and passes it through, killing
+        # the full-JSON double-wrap of the TextContent arm.
+        result = await dual_memory_search(
             query=query, top_k=top_k, where=where, config=config
+        )
+        return CallToolResult(
+            content=[TextContent(type="text", text=result.summary_md)],
+            structured_content=result.model_dump(mode="json", by_alias=True),
         )
 
     # ── Write: dual_memory_write (canonical) ────────────────────────────────
@@ -361,7 +370,7 @@ def _register_dual_memory_tool(app: Any, config: ResolvedConfig) -> None:
             None,
             description="Optional tags (max 10, each max 32 chars).",
         ),
-    ) -> dict:
+    ) -> CallToolResult:
         from supamem.memory_writer import write_memory
 
         try:
@@ -375,15 +384,20 @@ def _register_dual_memory_tool(app: Any, config: ResolvedConfig) -> None:
             )
         except ValueError as exc:
             raise RuntimeError(f"dual_memory_write: {exc}") from None
-        return {
-            "summary": res.summary,
-            "path": res.path,
-            "topic": res.topic,
-            "slug": res.slug,
-            "indexed": res.indexed,
-            "points_added": res.points_added,
-            "error": res.error,
-        }
+        # L1 (Phase 19): single-arm return — write summary as the only
+        # TextContent, the result dict as the canonical structured arm.
+        return CallToolResult(
+            content=[TextContent(type="text", text=res.summary)],
+            structured_content={
+                "summary": res.summary,
+                "path": res.path,
+                "topic": res.topic,
+                "slug": res.slug,
+                "indexed": res.indexed,
+                "points_added": res.points_added,
+                "error": res.error,
+            },
+        )
 
     # ── Backward-compat aliases for upstream `mcp-server-qdrant` users ──────
     if aliases_enabled:
@@ -418,9 +432,15 @@ def _register_dual_memory_tool(app: Any, config: ResolvedConfig) -> None:
             where: Optional[dict[str, Union[str, list[str]]]] = Field(
                 None, description=where_desc
             ),
-        ) -> SearchResult:
-            return await dual_memory_search(
+        ) -> Annotated[CallToolResult, SearchResult]:
+            # L1 (Phase 19): same single-arm shape as the canonical read tool —
+            # the Annotated form preserves the SearchResult output schema.
+            result = await dual_memory_search(
                 query=query, top_k=top_k, where=where, config=config
+            )
+            return CallToolResult(
+                content=[TextContent(type="text", text=result.summary_md)],
+                structured_content=result.model_dump(mode="json", by_alias=True),
             )
 
         @app.tool(
@@ -437,7 +457,7 @@ def _register_dual_memory_tool(app: Any, config: ResolvedConfig) -> None:
             content: str = Field(..., description="Markdown body."),
             description: Optional[str] = Field(None, description="Optional description."),
             tags: Optional[list[str]] = Field(None, description="Optional tags."),
-        ) -> dict:
+        ) -> CallToolResult:
             from supamem.memory_writer import write_memory
 
             try:
@@ -451,15 +471,19 @@ def _register_dual_memory_tool(app: Any, config: ResolvedConfig) -> None:
                 )
             except ValueError as exc:
                 raise RuntimeError(f"qdrant_store: {exc}") from None
-            return {
-                "summary": res.summary,
-                "path": res.path,
-                "topic": res.topic,
-                "slug": res.slug,
-                "indexed": res.indexed,
-                "points_added": res.points_added,
-                "error": res.error,
-            }
+            # L1 (Phase 19): single-arm return, matching the canonical write tool.
+            return CallToolResult(
+                content=[TextContent(type="text", text=res.summary)],
+                structured_content={
+                    "summary": res.summary,
+                    "path": res.path,
+                    "topic": res.topic,
+                    "slug": res.slug,
+                    "indexed": res.indexed,
+                    "points_added": res.points_added,
+                    "error": res.error,
+                },
+            )
 
 
 def build_app(config: ResolvedConfig) -> Any:
