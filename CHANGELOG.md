@@ -2,6 +2,131 @@
 
 All notable changes to `supamem` will be documented in this file.
 
+## [0.4.0a2] — 2026-08-20 — Post-release field-report fixes: truthful doctor / config / install surfaces (Phase 19.1)
+
+Phase 19.1 is a correctness-and-truthfulness pass driven by a field
+report filed against 0.4.0a1 (findings SM-1…SM-9 plus release note
+RN-1). Every fix removes a place where supamem told the user something
+that was not true: a `✓` stamped on stale data, a `--dry-run` that
+wrote state and mispredicted its own work, a `repair` that crashed on
+the exact state it exists to heal, a `⚠` on a declared-optional extra,
+a config key silently discarded, a `repair` round-trip that downgraded
+a working config or clobbered a file another generator owns, and a
+documented install command that resolved *backwards* to a release older
+than the features the docs describe. No retrieval-stack code changed in
+Phase 19.1 — every lever is in the config / installer / doctor / docs
+layers, so recall / MRR / nDCG / latency bench metrics are
+definitionally unchanged (coderag floors N/A).
+
+### Fixed
+
+- **SM-1 — unknown keys in `[supamem.eval]` (and every other config
+  table) are no longer silently discarded.** A warn-only unknown-key
+  diff now runs at the shared `_apply_section` / `_apply_nested` choke
+  point, so every load path (`pyproject.toml`, `.supamem/config.toml`,
+  `SUPAMEM_CONFIG`) surfaces typos on **stderr** naming the table, the
+  unknown keys, and the accepted keys. Never raises — a typo must not
+  break MCP stdio startup; stdout stays byte-empty. Cited Plan 19.1-03.
+- **SM-2 — `doctor` can no longer stamp `✓` on a stale update-check
+  cache.** `doctor_report` gained `stale` + `cache_age_seconds` as the
+  single source of truth; explicit `doctor` runs attempt one bounded,
+  suppression-honored, offline-safe `refresh_stale_cache` first. `✓` is
+  now structurally unreachable from stale data — a stale cache renders
+  a neutral info marker naming the cache age and last-seen version.
+  Cited Plan 19.1-02.
+- **SM-3 — a declared-optional extra is no longer reported at fault
+  severity.** The coderag doctor panel forks on `importlib.util.find_spec`:
+  optional-absent renders `→` with an install hint, and `⚠` is reserved
+  for present-but-broken. Cited Plan 19.1-02.
+- **SM-4 — upgrades no longer accumulate duplicate managed blocks.**
+  New `config_io.sweep_managed_blocks` primitive merges duplicated
+  `BEGIN/END SUPAMEM` fences into one canonical block at the target
+  version, preserving user text verbatim and idempotent on re-run
+  (byte-identical no-op on healthy input). Wired ahead of
+  `extract_managed_block` at every managed-block call site in the
+  `claude-code` and `opencode` installers; uninstall paths write a
+  `.bak.<time_ns>` sibling before healing a user file. **SM-4d:**
+  `doctor` now counts BEGIN markers per target and reports duplicate
+  managed-block drift with repair advice. Cited Plans 19.1-01, 19.1-02.
+- **SM-6 — duplicate managed blocks no longer crash `repair` and
+  `uninstall`.** `extract_managed_block` keeps its strict multi-BEGIN
+  raise (locked), but the healing layer above it sweeps first, so the
+  recovery tool is no longer disabled by the state it exists to
+  recover from. `--dry-run` inspection works on duplicated state too.
+  Cited Plan 19.1-01.
+- **SM-7 — `--dry-run` is now honored at every write site on the repair
+  path, and its accounting is truthful.** `dry_run` is plumbed through
+  uninstall (all three clients), the agent patcher, share-dir sync, and
+  model pre-fetch; `would_write` counts derive from the same
+  `WriteResult.diff` condition the real run uses, so prediction cannot
+  diverge from reality (pinned by accounting-invariant tests on both
+  the install and repair paths). The patcher still runs its **full
+  detection** pass under dry-run and withholds only writes, so the
+  would-patch count stays truthful. Console vocabulary fixed: no `✓`
+  claims under dry-run. Cited Plan 19.1-04.
+- **SM-8 — `repair` no longer replaces a working, explicit MCP config
+  with a less robust one.** Client MCP entries (`claude-code` and
+  `cursor`) are now emitted with a `shutil.which("supamem")`-resolved
+  command (falling back to the bare name when `which` returns nothing)
+  and pin `SUPAMEM_CONFIG` alongside `SUPAMEM_PROJECT_ROOT` whenever a
+  project config exists. A repair round-trip can no longer downgrade
+  config robustness. Cited Plan 19.1-04.
+- **SM-9 — `repair` no longer writes into paths another generator
+  owns.** Both cursor write sites (the `.mdc` whole-file copy and the
+  `hooks.json` deep-merge) detect generator-managed destinations via a
+  head-marker heuristic (`generated` / `do-not-edit` / `auto-generated`
+  in the first ~10 lines) or a sibling `*.manifest.json` / `.manifest`,
+  skip the write, and warn naming the file plus both remedies. Unmarked
+  differing targets still update (the legitimate upgrade path is
+  intact) but now warn visibly — detection never keys on content
+  difference alone. Cited Plan 19.1-05.
+- **SM-5 — the documented install command no longer resolves backwards
+  to 0.2.0.** All five READMEs and `llms.txt` now teach explicitly
+  pinned commands (`uv tool install 'supamem==0.4.0a2'`,
+  `pipx install supamem==0.4.0a2`, `pip install supamem==0.4.0a2`).
+  Because the newest **stable** release (0.2.0) predates the entire
+  `0.3.x` / `0.4.x` pre-release line, an unpinned install resolved to a
+  version older than every feature the docs describe — and
+  `uv tool upgrade supamem` was a *downgrade*. An exact pre-release pin
+  is a first-party requirement carrying a pre-release identifier, so it
+  resolves with **no** `--prerelease` flag while dependencies stay
+  stable; `--prerelease allow` is deliberately **not** documented
+  because it applies to the whole resolution and was reproduced pulling
+  `pydantic 2.14.0b1` into the tool environment. A new docs-drift guard
+  locks the pin so future edits cannot silently unpin it. Cited Plan
+  19.1-06.
+
+### Added
+
+- **`--force-cursor-rules`** on `supamem install` and `supamem repair`
+  — escape hatch overriding *only* the SM-9 generated-marker skip. The
+  overwrite-warning floor always prints, so force never degrades back
+  to a silent clobber. Cited Plan 19.1-05.
+- **Flat `regress_baseline_*` aliases accepted as `[supamem.eval]`
+  keys** with chain source attribution — the flat names `doctor` prints
+  are now valid config keys. Canonical spelling wins when both forms
+  are present. Cited Plan 19.1-03.
+- **Dual-scope help text** for the subagent patcher across
+  `install` / `repair` / `init` and the `unpatch-agents` docstring:
+  both `~/.claude/agents/` and `<project>/.claude/agents/` are named as
+  patch targets (they were already both scanned; the help text lied by
+  omission). Cited Plan 19.1-04.
+
+### Release notes
+
+- **Release-day installs may hit uv's stale index cache (RN-1).** If
+  `uv tool install 'supamem==0.4.0a2'` reports that no such version
+  exists while PyPI already serves it, add `--refresh`:
+
+  ```bash
+  uv tool install 'supamem==0.4.0a2' --refresh
+  ```
+
+  This is uv index-cache behavior, not a supamem bug.
+- **`TextContent` is still the compact summary card** (0.4.0a1 behavior
+  change, restated for anyone upgrading straight from 0.2.x):
+  `structuredContent` remains the complete canonical payload.
+
 ## [0.4.0a1] — 2026-08-20 — MCP SDK 2.x migration + response token efficiency (Phase 19)
 
 Phase 19 migrates the MCP server onto the official MCP SDK v2 server
