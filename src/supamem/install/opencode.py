@@ -98,12 +98,14 @@ def install(*, dry_run: bool = False) -> InstallResult:
     written: list[Path] = []
     backups: list[Path] = []
     diffs: list[str] = []
+    would_write = 0
 
     cur = _read_json(cfg_path)
     merged = deep_merge_json(cur, MCP_OVERLAY)
     res = atomic_write_json(cfg_path, merged, dry_run=dry_run)
     if res.diff:
         diffs.append(res.diff)
+        would_write += 1
     if res.written:
         written.append(cfg_path)
     if res.backup_path:
@@ -112,6 +114,7 @@ def install(*, dry_run: bool = False) -> InstallResult:
     existing_md = agents_md.read_text(encoding="utf-8") if agents_md.exists() else ""
     new_md = _agents_md_with_import(existing_md)
     if new_md != existing_md:
+        would_write += 1
         if not dry_run:
             if agents_md.exists():
                 bak = agents_md.with_name(agents_md.name + f".bak.{time_ns()}")
@@ -130,6 +133,7 @@ def install(*, dry_run: bool = False) -> InstallResult:
         backup_files=backups,
         diff="\n".join(diffs),
         no_op=no_op,
+        would_write=would_write,
     )
 
 
@@ -146,6 +150,9 @@ def _strip_supamem_from_mcp(raw: dict[str, Any]) -> dict[str, Any]:
 def uninstall(*, dry_run: bool = False) -> int:
     """Remove supamem from the opencode config and ./AGENTS.md.
 
+    Returns the number of targets changed (real run) or that WOULD change
+    (dry run), from the same diff accounting the real writes use.
+
     ``dry_run=True`` computes every strip against the current content but
     writes nothing (SM-7a) — including on the duplicated-block state (the
     sweep heal runs in-memory only). (claude_code twin.)
@@ -154,10 +161,13 @@ def uninstall(*, dry_run: bool = False) -> int:
     cwd = Path.cwd()
     cfg_path = home / ".config" / "opencode" / "opencode.json"
     agents_md = cwd / "AGENTS.md"
+    would_change = 0
 
     if cfg_path.exists():
         cur = _read_json(cfg_path)
-        atomic_write_json(cfg_path, _strip_supamem_from_mcp(cur), dry_run=dry_run)
+        res = atomic_write_json(cfg_path, _strip_supamem_from_mcp(cur), dry_run=dry_run)
+        if res.diff:
+            would_change += 1
     if agents_md.exists():
         if dry_run:
             # SM-7a: heal in-memory only — no raise, no write, no .bak.
@@ -169,10 +179,11 @@ def uninstall(*, dry_run: bool = False) -> int:
             body = _heal_managed_block_file(agents_md)
         before, _owned, after = extract_managed_block(body)
         if before != body:
+            would_change += 1
             new_body = (before.rstrip() + "\n" + after.lstrip()).strip() + "\n"
             if not dry_run:
                 agents_md.write_text(new_body, encoding="utf-8")
-    return 0
+    return would_change
 
 
 __all__ = ["install", "uninstall"]

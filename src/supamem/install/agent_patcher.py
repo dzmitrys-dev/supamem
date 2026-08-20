@@ -42,6 +42,7 @@ Threat model (T-08.1.02-01..04):
 - Only `YAMLError` is caught in `detect_tools_state`; other exceptions
   propagate so unrelated bugs are not silently swallowed at this layer.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -206,7 +207,7 @@ def detect_tools_state(text: str) -> DetectedState:
     # markdown frontmatter delimiters are not YAML doc separators (P2).
     inner = block
     if inner.startswith("---\n"):
-        inner = inner[len("---\n"):]
+        inner = inner[len("---\n") :]
     if inner.endswith("\n---\n"):
         inner = inner[: -len("\n---\n")]
     elif inner.endswith("---\n"):
@@ -303,7 +304,7 @@ def _patch_csv_line(block: str) -> tuple[str, bool]:
             new_line += "  "
         new_line += comment
 
-    new_block = block[: match.start()] + new_line + block[match.end():]
+    new_block = block[: match.start()] + new_line + block[match.end() :]
     return new_block, had_spaces
 
 
@@ -317,7 +318,7 @@ def _patch_block_list(block: str) -> str:
     # Strip the leading and trailing fence to get the raw YAML body.
     inner = block
     if inner.startswith("---\n"):
-        inner = inner[len("---\n"):]
+        inner = inner[len("---\n") :]
     if inner.endswith("\n---\n"):
         inner = inner[: -len("\n---\n")]
     elif inner.endswith("---\n"):
@@ -363,7 +364,7 @@ def patch_yaml(text: str) -> tuple[str, Optional[ManifestFragment]]:
         new_block = _patch_block_list(original_block)
         tools_form = "block-list"
 
-    new_text = new_block + text[len(original_block):]
+    new_text = new_block + text[len(original_block) :]
     patched_sha = block_sha256(new_text)
 
     fragment: ManifestFragment = {
@@ -437,6 +438,7 @@ class PatchSummary:
     covered: list[PatchEntry] = field(default_factory=list)
     inheritance: list[PatchEntry] = field(default_factory=list)
     skipped: list[tuple[PatchEntry, str]] = field(default_factory=list)
+    would_patch: list[PatchEntry] = field(default_factory=list)
     manifest_path: Optional[Path] = None
 
 
@@ -488,14 +490,12 @@ def load_manifest() -> dict:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         err_console.print(
-            f"[supamem.warn]agent_patcher: manifest unreadable at {path}: {exc!r}; "
-            f"starting fresh"
+            f"[supamem.warn]agent_patcher: manifest unreadable at {path}: {exc!r}; starting fresh"
         )
         return _empty_manifest()
     if not isinstance(data, dict):
         err_console.print(
-            f"[supamem.warn]agent_patcher: manifest root is not an object at {path}; "
-            f"starting fresh"
+            f"[supamem.warn]agent_patcher: manifest root is not an object at {path}; starting fresh"
         )
         return _empty_manifest()
     if data.get("schema_version") != _MANIFEST_SCHEMA_VERSION:
@@ -546,9 +546,7 @@ def save_manifest(m: dict) -> None:
             f"Another supamem repair may be running. Retry shortly or delete "
             f"the stale lock if no install is active."
         )
-        raise RuntimeError(
-            f"supamem: manifest lock timeout at {path}"
-        ) from exc
+        raise RuntimeError(f"supamem: manifest lock timeout at {path}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -659,9 +657,7 @@ def scan_agent_dirs(
                     target = md.resolve()
                 except OSError:
                     target = md
-                err_console.print(
-                    f"[supamem.warn]agent_patcher: skipped symlink: {md} -> {target}"
-                )
+                err_console.print(f"[supamem.warn]agent_patcher: skipped symlink: {md} -> {target}")
                 continue
             if not md.is_file():
                 continue
@@ -732,7 +728,9 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _make_entry(path: Path, scope: Literal["global", "project"], state: DetectedState) -> PatchEntry:
+def _make_entry(
+    path: Path, scope: Literal["global", "project"], state: DetectedState
+) -> PatchEntry:
     try:
         rel = path.relative_to(path.parent.parent.parent)
     except ValueError:
@@ -740,7 +738,7 @@ def _make_entry(path: Path, scope: Literal["global", "project"], state: Detected
     return PatchEntry(path=str(path), scope=scope, state=state, relpath=str(rel))
 
 
-def patch_all(skip: bool = False) -> PatchSummary:
+def patch_all(skip: bool = False, *, dry_run: bool = False) -> PatchSummary:
     """Walk both agent scopes and patch every restrictive ``tools:`` whitelist.
 
     Idempotent (D-COVER-03): a second run produces zero new manifest entries
@@ -748,6 +746,12 @@ def patch_all(skip: bool = False) -> PatchSummary:
     skip-with-warning and never abort (D-FAIL-01..03 — mirrors
     ``_maybe_prepare_models`` swallow). Mid-scan vanish triggers one retry
     (D-FAIL-04).
+
+    ``dry_run=True`` (SM-7b) runs the FULL detection pass unchanged and
+    performs none of the writes: detected-but-unwritten entries land in
+    ``summary.would_patch`` instead of being patched, and the manifest is
+    neither written nor rewritten. The flag changes WHAT is written, never
+    WHAT is detected.
     """
     summary = PatchSummary(manifest_path=manifest_path())
     if skip:
@@ -770,9 +774,7 @@ def patch_all(skip: bool = False) -> PatchSummary:
         try:
             size = path.stat().st_size
         except OSError as exc:
-            err_console.print(
-                f"[supamem.warn]agent_patcher: skipped {path}: stat-failed: {exc!r}"
-            )
+            err_console.print(f"[supamem.warn]agent_patcher: skipped {path}: stat-failed: {exc!r}")
             entry.state = "skipped:malformed"
             summary.skipped.append((entry, f"stat-failed: {exc!r}"))
             continue
@@ -788,23 +790,17 @@ def patch_all(skip: bool = False) -> PatchSummary:
         try:
             content = _read_with_retry(path)
         except FileNotFoundError:
-            err_console.print(
-                f"[supamem.warn]agent_patcher: skipped {path}: vanished"
-            )
+            err_console.print(f"[supamem.warn]agent_patcher: skipped {path}: vanished")
             entry.state = "skipped:malformed"
             summary.skipped.append((entry, "vanished"))
             continue
         except PermissionError as exc:
-            err_console.print(
-                f"[supamem.warn]agent_patcher: skipped {path}: read-only: {exc!r}"
-            )
+            err_console.print(f"[supamem.warn]agent_patcher: skipped {path}: read-only: {exc!r}")
             entry.state = "skipped:malformed"
             summary.skipped.append((entry, "read-only"))
             continue
         except OSError as exc:
-            err_console.print(
-                f"[supamem.warn]agent_patcher: skipped {path}: io-error: {exc!r}"
-            )
+            err_console.print(f"[supamem.warn]agent_patcher: skipped {path}: io-error: {exc!r}")
             entry.state = "skipped:malformed"
             summary.skipped.append((entry, f"io-error: {exc!r}"))
             continue
@@ -812,9 +808,7 @@ def patch_all(skip: bool = False) -> PatchSummary:
         try:
             state = detect_tools_state(content)
         except Exception as exc:  # noqa: BLE001 — pure-kernel safety net (D-FAIL-03)
-            err_console.print(
-                f"[supamem.warn]agent_patcher: skipped {path}: unexpected: {exc!r}"
-            )
+            err_console.print(f"[supamem.warn]agent_patcher: skipped {path}: unexpected: {exc!r}")
             entry.state = "skipped:malformed"
             summary.skipped.append((entry, f"unexpected: {exc!r}"))
             continue
@@ -828,10 +822,8 @@ def patch_all(skip: bool = False) -> PatchSummary:
             summary.inheritance.append(entry)
             continue
         if state.startswith("skipped:"):
-            reason = state[len("skipped:"):]
-            err_console.print(
-                f"[supamem.warn]agent_patcher: skipped {path}: {reason}"
-            )
+            reason = state[len("skipped:") :]
+            err_console.print(f"[supamem.warn]agent_patcher: skipped {path}: {reason}")
             summary.skipped.append((entry, reason))
             continue
 
@@ -839,9 +831,7 @@ def patch_all(skip: bool = False) -> PatchSummary:
         try:
             new_text, fragment = patch_yaml(content)
         except Exception as exc:  # noqa: BLE001 — kernel safety net (D-FAIL-03)
-            err_console.print(
-                f"[supamem.warn]agent_patcher: skipped {path}: patch-failed: {exc!r}"
-            )
+            err_console.print(f"[supamem.warn]agent_patcher: skipped {path}: patch-failed: {exc!r}")
             summary.skipped.append((entry, f"patch-failed: {exc!r}"))
             continue
         if fragment is None:
@@ -849,18 +839,19 @@ def patch_all(skip: bool = False) -> PatchSummary:
             summary.skipped.append((entry, "patch-noop"))
             continue
 
+        if dry_run:
+            # SM-7b: detection ran in full; only the write is withheld.
+            summary.would_patch.append(entry)
+            continue
+
         try:
             _atomic_write_text(path, new_text)
         except PermissionError as exc:
-            err_console.print(
-                f"[supamem.warn]agent_patcher: skipped {path}: read-only: {exc!r}"
-            )
+            err_console.print(f"[supamem.warn]agent_patcher: skipped {path}: read-only: {exc!r}")
             summary.skipped.append((entry, "read-only"))
             continue
         except OSError as exc:
-            err_console.print(
-                f"[supamem.warn]agent_patcher: skipped {path}: io-error: {exc!r}"
-            )
+            err_console.print(f"[supamem.warn]agent_patcher: skipped {path}: io-error: {exc!r}")
             summary.skipped.append((entry, f"io-error: {exc!r}"))
             continue
 
@@ -879,15 +870,13 @@ def patch_all(skip: bool = False) -> PatchSummary:
         summary.patched.append(entry)
         any_changes = True
 
-    if any_changes:
+    if any_changes and not dry_run:
         manifest["patches"] = list(existing_by_path.values())
         manifest["supamem_version"] = _supamem_version()
         try:
             save_manifest(manifest)
         except RuntimeError as exc:
-            err_console.print(
-                f"[supamem.warn]agent_patcher: manifest save failed: {exc!r}"
-            )
+            err_console.print(f"[supamem.warn]agent_patcher: manifest save failed: {exc!r}")
 
     return summary
 
@@ -931,9 +920,7 @@ def unpatch_all() -> UnpatchSummary:
         try:
             current = path.read_text(encoding="utf-8")
         except OSError as exc:
-            err_console.print(
-                f"[supamem.warn]agent_patcher: cannot read {path}: {exc!r}; skipping"
-            )
+            err_console.print(f"[supamem.warn]agent_patcher: cannot read {path}: {exc!r}; skipping")
             summary.skipped_user_edited.append(path_str)
             retained.append(entry)
             continue
@@ -960,7 +947,7 @@ def unpatch_all() -> UnpatchSummary:
             summary.skipped_user_edited.append(path_str)
             retained.append(entry)
             continue
-        new_text = original_block + current[len(patched_block):]
+        new_text = original_block + current[len(patched_block) :]
 
         write_ok = False
         for attempt in range(2):
@@ -998,9 +985,7 @@ def unpatch_all() -> UnpatchSummary:
         try:
             save_manifest(manifest)
         except RuntimeError as exc:
-            err_console.print(
-                f"[supamem.warn]agent_patcher: manifest rewrite failed: {exc!r}"
-            )
+            err_console.print(f"[supamem.warn]agent_patcher: manifest rewrite failed: {exc!r}")
     else:
         # All entries either restored or stale — clean state, drop the manifest.
         try:

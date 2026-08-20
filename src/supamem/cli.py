@@ -1,4 +1,5 @@
 """supamem CLI — Typer app dispatching to subcommands."""
+
 from __future__ import annotations
 
 import re
@@ -86,9 +87,7 @@ def _parse_since(value: str | None, *, default_days: int) -> float | None:
     return float(n) * (86400.0 if unit == "d" else 3600.0)
 
 
-def _filter_jsonl_by_since(
-    paths: list[Path], window_seconds: float | None
-) -> list[Path]:
+def _filter_jsonl_by_since(paths: list[Path], window_seconds: float | None) -> list[Path]:
     """Drop JSONL paths whose mtime is older than the recency window (B2)."""
     if window_seconds is None:
         return list(paths)
@@ -97,10 +96,10 @@ def _filter_jsonl_by_since(
     skipped = len(paths) - len(keep)
     if skipped:
         err_console.print(
-            f"Filtered {skipped} sessions older than the --since window "
-            f"(use --since=0 to disable)."
+            f"Filtered {skipped} sessions older than the --since window (use --since=0 to disable)."
         )
     return keep
+
 
 app = typer.Typer(
     name="supamem",
@@ -161,9 +160,13 @@ class InstallScope(str, Enum):
 
 @app.command("index")
 def cmd_index(
-    target: str = typer.Option("tuned", "--target", help="Retrieval target (e.g. tuned, dense, bm25)."),
+    target: str = typer.Option(
+        "tuned", "--target", help="Retrieval target (e.g. tuned, dense, bm25)."
+    ),
     force: bool = typer.Option(False, "--force", help="Re-embed even if manifest is current."),
-    snapshot: Optional[str] = typer.Option(None, "--snapshot", help="Path to snapshot artifact (e.g. cursor)."),
+    snapshot: Optional[str] = typer.Option(
+        None, "--snapshot", help="Path to snapshot artifact (e.g. cursor)."
+    ),
     transcripts: Optional[str] = typer.Option(
         None,
         "--transcripts",
@@ -243,9 +246,13 @@ def cmd_index(
 
 @app.command("mcp-server")
 def cmd_mcp_server(
-    transport: Transport = typer.Option(Transport.stdio, "--transport", help="MCP transport: stdio or http."),
+    transport: Transport = typer.Option(
+        Transport.stdio, "--transport", help="MCP transport: stdio or http."
+    ),
     port: int = typer.Option(8765, "--port", help="HTTP port (only used when --transport http)."),
-    host: str = typer.Option("127.0.0.1", "--host", help="HTTP bind host (only used when --transport http)."),
+    host: str = typer.Option(
+        "127.0.0.1", "--host", help="HTTP bind host (only used when --transport http)."
+    ),
 ) -> None:
     """Run the dual-memory MCP server."""
     import os
@@ -306,7 +313,9 @@ def cmd_mcp_server(
 @app.command("hook")
 def cmd_hook(
     client: str = typer.Argument(..., help="Target client (claude-code, opencode, cursor)."),
-    file_path: Optional[str] = typer.Option(None, "--file-path", help="Path being edited (for edit-time hooks)."),
+    file_path: Optional[str] = typer.Option(
+        None, "--file-path", help="Path being edited (for edit-time hooks)."
+    ),
 ) -> None:
     """Per-client session/edit hooks."""
     from pathlib import Path
@@ -371,59 +380,65 @@ def cmd_stats(
 @app.command("eval")
 def cmd_evalbench(
     suite: str = typer.Option(
-        "goldens", "--suite",
+        "goldens",
+        "--suite",
         help="Bench suite: goldens | longmemeval_s | coderag.",
     ),
     full: bool = typer.Option(
-        False, "--full",
-        help=(
-            "Run full LongMemEval_S (~500 QA, ~3 GB cache). "
-            "Default: 10-question CI subset."
-        ),
+        False,
+        "--full",
+        help=("Run full LongMemEval_S (~500 QA, ~3 GB cache). Default: 10-question CI subset."),
     ),
     judge: Optional[str] = typer.Option(
-        None, "--judge",
-        help=(
-            "Judge spec: heuristic (default) or ollama:<model>. "
-            "SaaS prefixes refused (D-07)."
-        ),
+        None,
+        "--judge",
+        help=("Judge spec: heuristic (default) or ollama:<model>. SaaS prefixes refused (D-07)."),
     ),
     report: str = typer.Option(
-        "json", "--report",
+        "json",
+        "--report",
         help="Report format. Currently only 'json' is supported.",
     ),
     out: Optional[Path] = typer.Option(
-        None, "--out",
+        None,
+        "--out",
         help="Output path. Default: ~/.supamem/eval/<utc-iso>.json.",
     ),
     baseline: str = typer.Option(
-        "v0.1.5", "--baseline",
+        "v0.1.5",
+        "--baseline",
         help="Baseline version for delta computation.",
     ),
     dataset_path: Optional[Path] = typer.Option(
-        None, "--dataset-path",
+        None,
+        "--dataset-path",
         help="Local LongMemEval mirror path (skips HF fetch). D-VEND-03.",
     ),
     verbose: bool = typer.Option(
-        False, "--verbose",
+        False,
+        "--verbose",
         help="Include per_question array in the JSON report.",
     ),
     list_suites: bool = typer.Option(
-        False, "--list-suites",
+        False,
+        "--list-suites",
         help="List registered suites + default judge tier and exit.",
     ),
     # Backward-compat (v0.1.x):
     regress: bool = typer.Option(
-        False, "--regress",
+        False,
+        "--regress",
         help="Legacy v0.1.x regression mode (goldens suite, threshold gates).",
     ),
     goldens: Optional[str] = typer.Option(
-        None, "--goldens",
+        None,
+        "--goldens",
         help="Legacy v0.1.x custom goldens JSONL path.",
     ),
     # Phase 15 Plan D Task D2 — coderag peer-row flag.
     peer: Optional[str] = typer.Option(
-        None, "--peer",
+        None,
+        "--peer",
         help=(
             "Optional peer adapter for the coderag suite. Currently the "
             "only supported value is 'mem0' (requires the peers-mem0 "
@@ -436,7 +451,8 @@ def cmd_evalbench(
     # corpus through the peer adapter. Must run BEFORE the first
     # ``--peer mem0 --full`` scoring invocation.
     ingest_peer: Optional[str] = typer.Option(
-        None, "--ingest-peer",
+        None,
+        "--ingest-peer",
         help=(
             "Drop + recreate the peer's Qdrant collection and ingest the "
             "canonical coderag corpus through the peer adapter. Currently "
@@ -451,7 +467,8 @@ def cmd_evalbench(
     # byte-identical replay path; reviewer reproductions must pass the
     # flag explicitly.
     reingest_coderag: bool = typer.Option(
-        False, "--reingest-coderag",
+        False,
+        "--reingest-coderag",
         help=(
             "Drop + rebuild the supamem coderag bench collection before "
             "scoring (uses cfg.chunker via the supamem.chunker entry-point). "
@@ -459,7 +476,8 @@ def cmd_evalbench(
         ),
     ),
     autotune: bool = typer.Option(
-        False, "--autotune",
+        False,
+        "--autotune",
         help=(
             "Rule-based CodeRAG config tuner (EvolveMem-inspired, explicit "
             "invoke). Runs observe→diagnose→gate; default is dry-run with "
@@ -467,14 +485,16 @@ def cmd_evalbench(
         ),
     ),
     autotune_apply: bool = typer.Option(
-        False, "--apply",
+        False,
+        "--apply",
         help=(
             "Persist gate-passing config deltas to .supamem/config.toml "
             "(requires --autotune; disables dry-run)."
         ),
     ),
     autotune_dry_run: bool = typer.Option(
-        True, "--dry-run/--no-dry-run",
+        True,
+        "--dry-run/--no-dry-run",
         help=(
             "Propose autotune deltas without writing config (default when "
             "--autotune without --apply)."
@@ -492,12 +512,10 @@ def cmd_evalbench(
     if list_suites:
         console.print("Suites:")
         console.print(
-            "  goldens         (default judge: heuristic) — "
-            "bundled v0.1.x regression baseline"
+            "  goldens         (default judge: heuristic) — bundled v0.1.x regression baseline"
         )
         console.print(
-            "  longmemeval_s   (default judge: heuristic) — "
-            "LongMemEval_S, lazy-fetched from HF"
+            "  longmemeval_s   (default judge: heuristic) — LongMemEval_S, lazy-fetched from HF"
         )
         console.print(
             "  coderag         (default judge: heuristic) — "
@@ -507,8 +525,7 @@ def cmd_evalbench(
 
     if report not in ("json",):
         err_console.print(
-            f"[supamem.error]unknown --report format: {report!r} "
-            "(only 'json' is supported)[/]"
+            f"[supamem.error]unknown --report format: {report!r} (only 'json' is supported)[/]"
         )
         raise typer.Exit(2)
 
@@ -517,35 +534,39 @@ def cmd_evalbench(
 
     cfg, _chain = load_config()
     if autotune_apply and not autotune:
-        err_console.print(
-            "[supamem.error]--apply requires --autotune[/supamem.error]"
-        )
+        err_console.print("[supamem.error]--apply requires --autotune[/supamem.error]")
         raise typer.Exit(2)
     effective_dry_run = False if autotune_apply else autotune_dry_run
-    raise typer.Exit(run_bench(
-        suite=suite,
-        full=full,
-        judge=judge,
-        out=out,
-        baseline_version=baseline,
-        dataset_path=dataset_path,
-        verbose=verbose,
-        regress=regress,
-        goldens_path=goldens,
-        config=cfg,
-        peer=peer,
-        ingest_peer=ingest_peer,
-        reingest_coderag=reingest_coderag,
-        autotune=autotune,
-        autotune_dry_run=effective_dry_run,
-        autotune_apply=autotune_apply,
-    ))
+    raise typer.Exit(
+        run_bench(
+            suite=suite,
+            full=full,
+            judge=judge,
+            out=out,
+            baseline_version=baseline,
+            dataset_path=dataset_path,
+            verbose=verbose,
+            regress=regress,
+            goldens_path=goldens,
+            config=cfg,
+            peer=peer,
+            ingest_peer=ingest_peer,
+            reingest_coderag=reingest_coderag,
+            autotune=autotune,
+            autotune_dry_run=effective_dry_run,
+            autotune_apply=autotune_apply,
+        )
+    )
 
 
 @app.command("install")
 def cmd_install(
-    client: Optional[Client] = typer.Option(None, "--client", help="Target client (claude-code, cursor, opencode)."),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Show planned config patches without applying."),
+    client: Optional[Client] = typer.Option(
+        None, "--client", help="Target client (claude-code, cursor, opencode)."
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show planned config patches without applying."
+    ),
     scope: InstallScope = typer.Option(
         InstallScope.project,
         "--scope",
@@ -568,8 +589,8 @@ def cmd_install(
         False,
         "--skip-patch-agents / --no-skip-patch-agents",
         help=(
-            "Skip auto-patching ~/.claude/agents/ tools whitelists for "
-            "supamem MCP reachability (D-LOCK-06)."
+            "Skip auto-patching ~/.claude/agents/ and <project>/.claude/agents/ "
+            "tools whitelists for supamem MCP reachability (D-LOCK-06)."
         ),
     ),
     enforce_search: bool = typer.Option(
@@ -600,7 +621,9 @@ def cmd_install(
 
 @app.command("uninstall")
 def cmd_uninstall(
-    client: Optional[Client] = typer.Option(None, "--client", help="Target client (claude-code, cursor, opencode)."),
+    client: Optional[Client] = typer.Option(
+        None, "--client", help="Target client (claude-code, cursor, opencode)."
+    ),
 ) -> None:
     """Reverse `supamem install` on a client."""
     from supamem.install import uninstall as do_uninstall
@@ -613,8 +636,9 @@ def cmd_unpatch_agents() -> None:
     """Restore agent files patched by supamem install/repair (D-UNDO-01).
 
     Run this BEFORE `pip uninstall supamem` to cleanly remove supamem's
-    additions to ~/.claude/agents/ tools whitelists. Files edited since
-    they were patched are left alone with a warning.
+    additions to the ~/.claude/agents/ and <project>/.claude/agents/ tools
+    whitelists. Files edited since they were patched are left alone with a
+    warning.
     """
     from supamem.console import info, ok, warn  # noqa: PLC0415
     from supamem.install.agent_patcher import (  # noqa: PLC0415
@@ -660,8 +684,8 @@ def cmd_repair(
         False,
         "--skip-patch-agents / --no-skip-patch-agents",
         help=(
-            "Skip auto-patching ~/.claude/agents/ tools whitelists for "
-            "supamem MCP reachability (D-LOCK-06)."
+            "Skip auto-patching ~/.claude/agents/ and <project>/.claude/agents/ "
+            "tools whitelists for supamem MCP reachability (D-LOCK-06)."
         ),
     ),
 ) -> None:
@@ -675,8 +699,9 @@ def cmd_repair(
     the global files so they can't shadow per-workspace installs in OTHER
     repos.
 
-    Idempotent: running on a healthy install is a no-op (nothing to write,
-    nothing to strip).
+    Idempotent on content: a healthy install ends up with the same files,
+    but the strip-and-rebuild rewrites them — pass `--dry-run` to see the
+    exact rewrite count without touching anything.
     """
     from supamem.install import repair as do_repair
 
@@ -707,7 +732,11 @@ def cmd_doctor(
 def cmd_init(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompts."),
     force: bool = typer.Option(False, "--force", help="Overwrite existing config / collection."),
-    qdrant_url: Optional[str] = typer.Option(None, "--qdrant-url", help="Qdrant URL (defaults to QDRANT_URL env or http://localhost:6333)."),
+    qdrant_url: Optional[str] = typer.Option(
+        None,
+        "--qdrant-url",
+        help="Qdrant URL (defaults to QDRANT_URL env or http://localhost:6333).",
+    ),
     skip_models: bool = typer.Option(
         False,
         "--skip-models / --no-skip-models",
@@ -717,8 +746,8 @@ def cmd_init(
         False,
         "--skip-patch-agents / --no-skip-patch-agents",
         help=(
-            "Skip auto-patching ~/.claude/agents/ tools whitelists for "
-            "supamem MCP reachability (D-LOCK-06)."
+            "Skip auto-patching ~/.claude/agents/ and <project>/.claude/agents/ "
+            "tools whitelists for supamem MCP reachability (D-LOCK-06)."
         ),
     ),
 ) -> None:
@@ -727,11 +756,16 @@ def cmd_init(
 
     from supamem.init import run_init
 
-    raise typer.Exit(run_init(
-        cwd=Path.cwd(), yes=yes, qdrant_url=qdrant_url, force=force,
-        skip_models=skip_models,
-        skip_patch_agents=skip_patch_agents,
-    ))
+    raise typer.Exit(
+        run_init(
+            cwd=Path.cwd(),
+            yes=yes,
+            qdrant_url=qdrant_url,
+            force=force,
+            skip_models=skip_models,
+            skip_patch_agents=skip_patch_agents,
+        )
+    )
 
 
 class MigratePath(str, Enum):
@@ -743,7 +777,9 @@ class MigratePath(str, Enum):
 @app.command("migrate")
 def cmd_migrate(
     source: str = typer.Option(..., "--source", help="Existing collection name to migrate from."),
-    target: Optional[str] = typer.Option(None, "--target", help="Target collection (defaults to supamem-<cwd-slug>)."),
+    target: Optional[str] = typer.Option(
+        None, "--target", help="Target collection (defaults to supamem-<cwd-slug>)."
+    ),
     path: MigratePath = typer.Option(MigratePath.coexist, "--path", help="Migration strategy."),
     yes: bool = typer.Option(False, "--yes", help="Confirm destructive migration paths."),
 ) -> None:

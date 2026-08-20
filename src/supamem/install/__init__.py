@@ -62,13 +62,17 @@ def _maybe_prepare_models(skip_models: bool) -> None:
         log.debug("model pre-fetch skipped: %r", exc)
 
 
-def _maybe_patch_agents(skip_patch_agents: bool) -> None:
+def _maybe_patch_agents(skip_patch_agents: bool, *, dry_run: bool = False) -> None:
     """Idempotently patch ``~/.claude/agents/`` + ``<project>/.claude/agents/`` whitelists.
 
     Per D-LOCK-01..03 + D-FAIL-03, mirrors ``_maybe_prepare_models`` swallow shape:
     failures are non-fatal — install always exits 0. Ordering invariant: this MUST
     be called AFTER ``_maybe_prepare_models`` (slow network first; fast filesystem
     second per RESEARCH.md "Wiring" rationale).
+
+    ``dry_run=True`` (SM-7b/c): the FULL detection pass runs (so the would-patch
+    count is truthful) but no file and no manifest is written, and no ✓ line is
+    emitted — dry-run reserves ``ok`` for work actually performed.
     """
     if skip_patch_agents:
         info("--skip-patch-agents: skipping subagent reachability patch")
@@ -76,10 +80,21 @@ def _maybe_patch_agents(skip_patch_agents: bool) -> None:
     try:
         from supamem.install.agent_patcher import patch_all  # noqa: PLC0415
 
-        summary = patch_all(skip=False)
+        summary = patch_all(skip=False, dry_run=dry_run)
+        if dry_run:
+            if summary.would_patch:
+                info(
+                    f"would patch {len(summary.would_patch)} subagent file(s) "
+                    f"for supamem reachability"
+                )
+            if summary.covered:
+                info(f"{len(summary.covered)} subagent file(s) already reachable")
+            return
         n = len(summary.patched)
         if n > 0:
             ok(f"patched {n} subagent file(s) for supamem reachability")
+        elif summary.covered:
+            info(f"{len(summary.covered)} subagent file(s) already reachable")
     except Exception as exc:  # noqa: BLE001 — patcher pathologies must not block install
         log.debug("agent patch skipped: %r", exc)
         from supamem.console import warn as _warn  # noqa: PLC0415
@@ -122,9 +137,11 @@ def install(
 
     if dry_run:
         # SM-7a (strict Q7 contract): a dry run changes NOTHING — the
-        # share-dir sync, model pre-fetch, and agent patcher all write
-        # outside the client config and are skipped entirely.
-        info("dry-run: share-dir sync skipped (model pre-fetch and agent patching skipped)")
+        # share-dir sync and the model pre-fetch write outside the client
+        # config and are skipped entirely. The agent patcher runs its FULL
+        # detection pass (SM-7b) so the would-patch count is truthful, but
+        # performs no writes.
+        info("dry-run: share-dir sync and model pre-fetch skipped")
     else:
         written = ensure_share_dir()
         if written:
@@ -135,7 +152,7 @@ def install(
         # filesystem) — per RESEARCH.md "Wiring" rationale (Phase 08.1
         # D-LOCK-01..03 + D-FAIL-03).
         _maybe_prepare_models(skip_models)
-        _maybe_patch_agents(skip_patch_agents)
+    _maybe_patch_agents(skip_patch_agents, dry_run=dry_run)
 
     if client == "claude-code":
         from supamem.install import claude_code
@@ -158,10 +175,30 @@ def install(
     if result.no_op:
         info(f"{client}: already installed (no-op)")
     elif dry_run:
-        info(f"{client}: dry-run — would write {len(result.written_files)} file(s)")
+        # SM-7c: read the count from the SAME diff accounting the real run
+        # uses to decide writes — never from written_files (always empty
+        # under dry-run), so the prediction cannot diverge.
+        info(f"{client}: dry-run — would write {result.would_write} file(s)")
     else:
         ok(f"{client}: installed ({len(result.written_files)} file(s) written)")
     return 0
+
+
+def _client_uninstall_module(client: str):
+    """Resolve the per-client installer module (lazy, cycle-free)."""
+    if client == "claude-code":
+        from supamem.install import claude_code
+
+        return claude_code
+    if client == "cursor":
+        from supamem.install import cursor as cursor_install
+
+        return cursor_install
+    if client == "opencode":
+        from supamem.install import opencode
+
+        return opencode
+    return None
 
 
 def uninstall(client: Optional[str], *, dry_run: bool = False) -> int:
@@ -176,20 +213,14 @@ def uninstall(client: Optional[str], *, dry_run: bool = False) -> int:
             err("could not auto-detect a single client; pass --client X")
             return 2
 
-    if client == "claude-code":
-        from supamem.install import claude_code
-
-        return claude_code.uninstall(dry_run=dry_run)
-    if client == "cursor":
-        from supamem.install import cursor as cursor_install
-
-        return cursor_install.uninstall(dry_run=dry_run)
-    if client == "opencode":
-        from supamem.install import opencode
-
-        return opencode.uninstall(dry_run=dry_run)
-    err(f"unknown client: {client!r}")
-    return 2
+    mod = _client_uninstall_module(client)
+    if mod is None:
+        err(f"unknown client: {client!r}")
+        return 2
+    # Client uninstall returns the (would-)change count, not an rc — the CLI
+    # contract stays "0 on success" regardless of how many files changed.
+    mod.uninstall(dry_run=dry_run)
+    return 0
 
 
 def repair(
@@ -213,9 +244,9 @@ def repair(
     2. Re-run ``install(scope="project")`` from the current cwd so the
        per-workspace files exist with ``SUPAMEM_PROJECT_ROOT`` injected.
 
-    On a healthy install this is a near no-op: stripping a missing entry is
-    a no-op, and re-installing on top of an already-correct project scope
-    file reports ``no_op=True``.
+    NOTE: this is NOT a no-op on a healthy install — the strip-then-rebuild
+    rewrites every file that carries supamem content. Pass ``--dry-run`` to
+    see the exact rewrite count without touching anything.
 
     Pass ``client=None`` to repair every detected install. Auto-detect uses
     the same heuristic as ``install()``.
@@ -242,9 +273,45 @@ def repair(
             return 2
         targets = [client]
 
+    if dry_run:
+        # Mirrors install()'s dry-run skip-note (the dispatcher install path
+        # is bypassed below so the strip+reinstall counts merge into one
+        # truthful line per client).
+        info("dry-run: share-dir sync and model pre-fetch skipped")
+
     rc_overall = 0
     for tgt in targets:
         info(f"repair: {tgt}")
+        if dry_run:
+            # SM-7c: predict what the real strip-and-rebuild rewrites, from
+            # the SAME diff accounting both halves use. The uninstall half's
+            # would-change count IS the reinstall half's write count on the
+            # stripped state (deep-merge re-adds exactly what was stripped),
+            # plus any fresh content install would add vs the current state.
+            strip_mod = _client_uninstall_module(tgt)
+            strip_would = strip_mod.uninstall(dry_run=True) if strip_mod else 0
+            if tgt == "claude-code":
+                from supamem.install import claude_code as _cc
+
+                reinstall_would = _cc.install(
+                    dry_run=True, scope="project", enforce_search=enforce_search
+                ).would_write
+            elif tgt == "cursor":
+                from supamem.install import cursor as _cur
+
+                reinstall_would = _cur.install(dry_run=True, scope="project").would_write
+            elif tgt == "opencode":
+                from supamem.install import opencode as _oc
+
+                reinstall_would = _oc.install(dry_run=True).would_write
+            else:  # pragma: no cover — targets are validated above
+                reinstall_would = 0
+            info(
+                f"{tgt}: dry-run — would rewrite "
+                f"{strip_would + reinstall_would} file(s) (strip + reinstall)"
+            )
+            _maybe_patch_agents(skip_patch_agents, dry_run=True)
+            continue
         # Uninstall strips supamem from both project AND user scopes.
         # SM-7a: the dry_run flag reaches the uninstall half too — without
         # it, `repair --dry-run` performed a REAL uninstall then skipped the

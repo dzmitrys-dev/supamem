@@ -138,6 +138,7 @@ def install(*, dry_run: bool = False, scope: str = "project") -> InstallResult:
     written: list[Path] = []
     backups: list[Path] = []
     diffs: list[str] = []
+    would_write = 0
 
     cur_mcp = _read_json(mcp_path)
     merged_mcp = deep_merge_json(
@@ -147,6 +148,7 @@ def install(*, dry_run: bool = False, scope: str = "project") -> InstallResult:
     res_mcp = atomic_write_json(mcp_path, merged_mcp, dry_run=dry_run)
     if res_mcp.diff:
         diffs.append(res_mcp.diff)
+        would_write += 1
     if res_mcp.written:
         written.append(mcp_path)
     if res_mcp.backup_path:
@@ -157,6 +159,7 @@ def install(*, dry_run: bool = False, scope: str = "project") -> InstallResult:
     res_hooks = atomic_write_json(hooks_path, merged_hooks, dry_run=dry_run)
     if res_hooks.diff:
         diffs.append(res_hooks.diff)
+        would_write += 1
     if res_hooks.written:
         written.append(hooks_path)
     if res_hooks.backup_path:
@@ -167,6 +170,7 @@ def install(*, dry_run: bool = False, scope: str = "project") -> InstallResult:
         new_mdc = src.read_bytes()
         cur_mdc = mdc_target.read_bytes() if mdc_target.exists() else b""
         if cur_mdc != new_mdc:
+            would_write += 1
             if not dry_run:
                 mdc_target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src, mdc_target)
@@ -181,6 +185,7 @@ def install(*, dry_run: bool = False, scope: str = "project") -> InstallResult:
         backup_files=backups,
         diff="\n".join(diffs),
         no_op=no_op,
+        would_write=would_write,
     )
 
 
@@ -235,6 +240,9 @@ def uninstall(*, dry_run: bool = False) -> int:
     machines or with different scope flags over time. Strip from both so a
     single uninstall fully cleans up.
 
+    Returns the number of targets changed (real run) or that WOULD change
+    (dry run), from the same diff accounting the real writes use.
+
     ``dry_run=True`` computes every strip against the current content but
     writes nothing (SM-7a) — no JSON rewrite, no .bak sibling, and the
     ``.mdc`` rules copy is NOT unlinked.
@@ -244,26 +252,33 @@ def uninstall(*, dry_run: bool = False) -> int:
     mcp_paths = [cwd / ".cursor" / "mcp.json", home / ".cursor" / "mcp.json"]
     hooks_path = cwd / ".cursor" / "hooks.json"
     mdc_target = cwd / ".cursor" / "rules" / "dual-memory.mdc"
+    would_change = 0
 
     for mcp_path in mcp_paths:
         if mcp_path.exists():
-            atomic_write_json(
+            res = atomic_write_json(
                 mcp_path,
                 _strip_supamem_from_mcp(_read_json(mcp_path)),
                 dry_run=dry_run,
             )
+            if res.diff:
+                would_change += 1
     if hooks_path.exists():
-        atomic_write_json(
+        res = atomic_write_json(
             hooks_path,
             _strip_supamem_session_start(_read_json(hooks_path)),
             dry_run=dry_run,
         )
-    if mdc_target.exists() and not dry_run:
-        try:
-            mdc_target.unlink()
-        except OSError:
-            pass
-    return 0
+        if res.diff:
+            would_change += 1
+    if mdc_target.exists():
+        would_change += 1  # the real run removes the file
+        if not dry_run:
+            try:
+                mdc_target.unlink()
+            except OSError:
+                pass
+    return would_change
 
 
 __all__ = ["install", "uninstall"]

@@ -417,10 +417,12 @@ def test_unpatch_agents_restores_after_install_repair_loop(tmp_path) -> None:
         "HF_HUB_OFFLINE": "1",
         "TRANSFORMERS_OFFLINE": "1",
     }
+    # Real install at user scope (SM-7 strict contract: --dry-run no longer
+    # patches agent files); user scope keeps every write inside sandboxed HOME.
     r1 = _run(
         "install",
         "--client", "claude-code",
-        "--dry-run",
+        "--scope", "user",
         "--skip-models",
         env=env,
     )
@@ -454,10 +456,12 @@ def test_unpatch_agents_warns_on_user_edited_file(tmp_path) -> None:
         "HF_HUB_OFFLINE": "1",
         "TRANSFORMERS_OFFLINE": "1",
     }
+    # Real install at user scope (SM-7 strict contract: --dry-run no longer
+    # patches agent files); user scope keeps every write inside sandboxed HOME.
     _run(
         "install",
         "--client", "claude-code",
-        "--dry-run",
+        "--scope", "user",
         "--skip-models",
         env=env,
     )

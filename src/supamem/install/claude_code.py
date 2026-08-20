@@ -230,12 +230,14 @@ def install(
     written: list[Path] = []
     backups: list[Path] = []
     diffs: list[str] = []
+    would_write = 0
 
     cur = _read_json(mcp_target)
     merged = deep_merge_json(cur, _mcp_overlay(cwd))
     res = atomic_write_json(mcp_target, merged, dry_run=dry_run)
     if res.diff:
         diffs.append(res.diff)
+        would_write += 1
     if res.written:
         written.append(mcp_target)
     if res.backup_path:
@@ -246,6 +248,7 @@ def install(
     res_s = atomic_write_json(settings_json, merged_s, dry_run=dry_run)
     if res_s.diff:
         diffs.append(res_s.diff)
+        would_write += 1
     if res_s.written:
         written.append(settings_json)
     if res_s.backup_path:
@@ -254,6 +257,7 @@ def install(
     existing_md = claude_md.read_text(encoding="utf-8") if claude_md.exists() else ""
     new_md = _claude_md_with_import(existing_md)
     if new_md != existing_md:
+        would_write += 1
         if not dry_run:
             if claude_md.exists():
                 bak = claude_md.with_name(claude_md.name + f".bak.{time_ns()}")
@@ -272,6 +276,7 @@ def install(
         backup_files=backups,
         diff="\n".join(diffs),
         no_op=no_op,
+        would_write=would_write,
     )
 
 
@@ -320,6 +325,9 @@ def uninstall(*, dry_run: bool = False) -> int:
     so a single uninstall fully cleans up regardless of which scope the user
     originally installed with.
 
+    Returns the number of targets changed (real run) or that WOULD change
+    (dry run), derived from the same diff accounting the real writes use.
+
     ``dry_run=True`` computes every strip against the current content but
     writes nothing (SM-7a) — no JSON rewrite, no .bak sibling, no managed-
     block removal, no sweep-heal rewrite. It never raises, including on the
@@ -330,15 +338,20 @@ def uninstall(*, dry_run: bool = False) -> int:
     mcp_targets = [cwd / ".mcp.json", home / ".claude.json"]
     settings_json = home / ".claude" / "settings.json"
     claude_md = home / "CLAUDE.md"
+    would_change = 0
 
     for target in mcp_targets:
         if target.exists():
             cur = _read_json(target)
-            atomic_write_json(target, _strip_supamem_from_mcp(cur), dry_run=dry_run)
+            res = atomic_write_json(target, _strip_supamem_from_mcp(cur), dry_run=dry_run)
+            if res.diff:
+                would_change += 1
 
     if settings_json.exists():
         cur = _read_json(settings_json)
-        atomic_write_json(settings_json, _strip_supamem_hook(cur), dry_run=dry_run)
+        res = atomic_write_json(settings_json, _strip_supamem_hook(cur), dry_run=dry_run)
+        if res.diff:
+            would_change += 1
 
     if claude_md.exists():
         if dry_run:
@@ -352,10 +365,11 @@ def uninstall(*, dry_run: bool = False) -> int:
             body = _heal_managed_block_file(claude_md)
         before, _owned, after = extract_managed_block(body)
         if before != body:
+            would_change += 1
             new_body = (before.rstrip() + "\n" + after.lstrip()).strip() + "\n"
             if not dry_run:
                 claude_md.write_text(new_body, encoding="utf-8")
-    return 0
+    return would_change
 
 
 __all__ = ["install", "uninstall"]
