@@ -110,6 +110,7 @@ def install(
     enforce_search: bool = False,
     skip_models: bool = False,
     skip_patch_agents: bool = False,
+    force_cursor_rules: bool = False,
 ) -> int:
     """Install supamem into the named client (or auto-detect).
 
@@ -163,7 +164,10 @@ def install(
 
         # Cursor's hooks API has no fail-closed pre-edit event today — gate
         # is Claude-Code-only. enforce_search is silently ignored for Cursor.
-        result = cursor_install.install(dry_run=dry_run, scope=scope)
+        # force_cursor_rules (SM-9c) overrides the generated-marker skip.
+        result = cursor_install.install(
+            dry_run=dry_run, scope=scope, force_cursor_rules=force_cursor_rules
+        )
     elif client == "opencode":
         from supamem.install import opencode
 
@@ -230,6 +234,7 @@ def repair(
     enforce_search: bool = False,
     skip_models: bool = False,
     skip_patch_agents: bool = False,
+    force_cursor_rules: bool = False,
 ) -> int:
     """Re-install at project scope and strip stale GLOBAL supamem entries.
 
@@ -299,7 +304,11 @@ def repair(
             elif tgt == "cursor":
                 from supamem.install import cursor as _cur
 
-                reinstall_would = _cur.install(dry_run=True, scope="project").would_write
+                reinstall_would = _cur.install(
+                    dry_run=True,
+                    scope="project",
+                    force_cursor_rules=force_cursor_rules,
+                ).would_write
             elif tgt == "opencode":
                 from supamem.install import opencode as _oc
 
@@ -330,6 +339,7 @@ def repair(
             enforce_search=enforce_search,
             skip_models=skip_models,
             skip_patch_agents=skip_patch_agents,
+            force_cursor_rules=force_cursor_rules,
         )
         if install_rc != 0:
             rc_overall = install_rc

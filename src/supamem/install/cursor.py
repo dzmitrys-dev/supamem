@@ -161,7 +161,9 @@ def _looks_generated(target: Path) -> bool:
     return any(s.name.endswith(_SIBLING_MANIFEST_SUFFIXES) for s in siblings)
 
 
-def install(*, dry_run: bool = False, scope: str = "project") -> InstallResult:
+def install(
+    *, dry_run: bool = False, scope: str = "project", force_cursor_rules: bool = False
+) -> InstallResult:
     """Install supamem MCP entry + hooks for Cursor.
 
     ``scope`` controls where the MCP entry is written:
@@ -176,6 +178,10 @@ def install(*, dry_run: bool = False, scope: str = "project") -> InstallResult:
     Hooks (``.cursor/hooks.json``) and the rules ``.mdc`` are always written
     project-scoped — they describe per-workspace behavior regardless of where
     the MCP entry lives.
+
+    ``force_cursor_rules`` (SM-9c) overrides ONLY the generated-marker skip
+    (``_looks_generated``): generator-managed destinations are written like
+    unmarked ones — the overwrite-warning floor still prints.
     """
     home = Path.home()
     cwd = Path.cwd()
@@ -215,7 +221,7 @@ def install(*, dry_run: bool = False, scope: str = "project") -> InstallResult:
     hooks_would_change = hooks_path.exists() and bool(
         atomic_write_json(hooks_path, merged_hooks, dry_run=True).diff
     )
-    if hooks_would_change and _looks_generated(hooks_path):
+    if hooks_would_change and _looks_generated(hooks_path) and not force_cursor_rules:
         # SM-9a: generator-managed destination — skip the merge entirely
         # (no write, no would-write count, no diff).
         warn(
@@ -241,7 +247,7 @@ def install(*, dry_run: bool = False, scope: str = "project") -> InstallResult:
         new_mdc = src.read_bytes()
         cur_mdc = mdc_target.read_bytes() if mdc_target.exists() else b""
         if cur_mdc != new_mdc:
-            if mdc_target.exists() and _looks_generated(mdc_target):
+            if mdc_target.exists() and _looks_generated(mdc_target) and not force_cursor_rules:
                 # SM-9a: generator-managed destination — skip the copy
                 # entirely (no write, no would-write count, no diff).
                 warn(

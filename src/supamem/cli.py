@@ -593,6 +593,16 @@ def cmd_install(
             "tools whitelists for supamem MCP reachability (D-LOCK-06)."
         ),
     ),
+    force_cursor_rules: bool = typer.Option(
+        False,
+        "--force-cursor-rules / --no-force-cursor-rules",
+        help=(
+            "Overwrite generator-managed Cursor rules/hooks (SM-9) even when "
+            "they carry a generated marker — the skip exists so host-repo "
+            "generators are not clobbered; only pass this if supamem should "
+            "own the files."
+        ),
+    ),
     enforce_search: bool = typer.Option(
         False,
         "--enforce-search",
@@ -615,6 +625,7 @@ def cmd_install(
             enforce_search=enforce_search,
             skip_models=skip_models,
             skip_patch_agents=skip_patch_agents,
+            force_cursor_rules=force_cursor_rules,
         )
     )
 
@@ -688,6 +699,16 @@ def cmd_repair(
             "tools whitelists for supamem MCP reachability (D-LOCK-06)."
         ),
     ),
+    force_cursor_rules: bool = typer.Option(
+        False,
+        "--force-cursor-rules / --no-force-cursor-rules",
+        help=(
+            "Overwrite generator-managed Cursor rules/hooks (SM-9) even when "
+            "they carry a generated marker — the skip exists so host-repo "
+            "generators are not clobbered; only pass this if supamem should "
+            "own the files."
+        ),
+    ),
 ) -> None:
     """Re-run install in project scope and strip stale legacy global entries.
 
@@ -712,6 +733,7 @@ def cmd_repair(
             dry_run=dry_run,
             skip_models=skip_models,
             skip_patch_agents=skip_patch_agents,
+            force_cursor_rules=force_cursor_rules,
         )
     )
 
