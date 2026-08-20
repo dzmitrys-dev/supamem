@@ -121,7 +121,7 @@ env-var 名、ファイルパス)を捉えます。Dense は BM25 が見逃す *
 
 ```bash
 # 1. インストール(uv が最速)
-uv tool install supamem
+uv tool install 'supamem==0.4.0a2'
 
 # 2. Qdrant を起動(初回のみ、~30s)
 docker run -d -p 6333:6333 -p 6334:6334 -v $HOME/.qdrant:/qdrant/storage qdrant/qdrant:latest
@@ -249,14 +249,16 @@ Docker がない?[Qdrant Cloud](https://cloud.qdrant.io/) でマネージドク�
 
 ```bash
 # 推奨:uv(最速、隔離)
-uv tool install supamem
+uv tool install 'supamem==0.4.0a2'
 
 # 代替:pipx(これも隔離)
-pipx install supamem
+pipx install supamem==0.4.0a2
 
 # プレーン pip(venv 内で)
-pip install supamem
+pip install supamem==0.4.0a2
 ```
+
+> **バージョン固定は必須です。** `0.4.0a2` はプレリリースであり、最新の*安定版*(`0.2.0`)は `0.3.x` / `0.4.x` 系列全体より古いため、固定なしの `install supamem` は本ドキュメントが説明する機能よりも古いバージョンへ**逆方向に**解決されます。厳密なプレリリース固定は追加フラグなしで解決でき、依存関係は安定版のままです。`--prerelease allow` は**使用しないでください**(解決全体に適用され、プレリリース依存を引き込みます)。
 
 確認:
 

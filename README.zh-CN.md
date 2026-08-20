@@ -120,7 +120,7 @@ Anthropic API 标价(2026 年 3 月):
 
 ```bash
 # 1. 安装(uv 是最快路径)
-uv tool install supamem
+uv tool install 'supamem==0.4.0a2'
 
 # 2. 启动 Qdrant(一次性,~30 秒)
 docker run -d -p 6333:6333 -p 6334:6334 -v $HOME/.qdrant:/qdrant/storage qdrant/qdrant:latest
@@ -248,14 +248,16 @@ services:
 
 ```bash
 # 推荐:uv(最快、隔离)
-uv tool install supamem
+uv tool install 'supamem==0.4.0a2'
 
 # 备选:pipx(也隔离)
-pipx install supamem
+pipx install supamem==0.4.0a2
 
 # 普通 pip(在 venv 中)
-pip install supamem
+pip install supamem==0.4.0a2
 ```
+
+> **必须固定版本。** `0.4.0a2` 是预发布版本,而最新的*稳定*版(`0.2.0`)早于整个 `0.3.x` / `0.4.x` 系列 —— 因此不带版本号的 `install supamem` 会**向后**解析到比本文档所述功能更旧的版本。精确的预发布版本固定无需任何额外标志即可解析,同时依赖仍停留在稳定版;请**不要**使用 `--prerelease allow`(它作用于整个解析过程,会拉入预发布依赖)。
 
 验证:
 

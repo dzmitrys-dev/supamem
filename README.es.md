@@ -126,7 +126,7 @@ CRM personal, no para retrieval consciente del código.
 
 ```bash
 # 1. Instalar (uv es la ruta más rápida)
-uv tool install supamem
+uv tool install 'supamem==0.4.0a2'
 
 # 2. Iniciar Qdrant (una vez, ~30s)
 docker run -d -p 6333:6333 -p 6334:6334 -v $HOME/.qdrant:/qdrant/storage qdrant/qdrant:latest
@@ -255,14 +255,16 @@ y apunta `supamem` a la URL vía `supamem init`.
 
 ```bash
 # Recomendado: uv (más rápido, aislado)
-uv tool install supamem
+uv tool install 'supamem==0.4.0a2'
 
 # Alternativa: pipx (también aislado)
-pipx install supamem
+pipx install supamem==0.4.0a2
 
 # pip plano (en un venv)
-pip install supamem
+pip install supamem==0.4.0a2
 ```
+
+> **El pin de versión es obligatorio.** `0.4.0a2` es una pre-release, y la versión *estable* más reciente (`0.2.0`) es anterior a toda la línea `0.3.x` / `0.4.x`, por lo que un `install supamem` sin pin resuelve **hacia atrás**, a una versión más antigua que las funciones documentadas aquí. Un pin exacto de pre-release resuelve sin flags adicionales y mantiene las dependencias en versiones estables; **no** uses `--prerelease allow` (se aplica a toda la resolución y arrastra dependencias pre-release).
 
 Verificar:
 

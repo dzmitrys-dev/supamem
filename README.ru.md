@@ -126,7 +126,7 @@ insights / rules (≈ как у SoftChat). YMMV — но *соотношение
 
 ```bash
 # 1. Установка (uv — самый быстрый путь)
-uv tool install supamem
+uv tool install 'supamem==0.4.0a2'
 
 # 2. Запустить Qdrant (один раз, ~30с)
 docker run -d -p 6333:6333 -p 6334:6334 -v $HOME/.qdrant:/qdrant/storage qdrant/qdrant:latest
@@ -254,14 +254,16 @@ services:
 
 ```bash
 # Рекомендуется: uv (быстрее всего, изолированно)
-uv tool install supamem
+uv tool install 'supamem==0.4.0a2'
 
 # Альтернатива: pipx (тоже изолированно)
-pipx install supamem
+pipx install supamem==0.4.0a2
 
 # Обычный pip (в venv)
-pip install supamem
+pip install supamem==0.4.0a2
 ```
+
+> **Пин версии обязателен.** `0.4.0a2` — это пре-релиз, а самый новый *стабильный* выпуск (`0.2.0`) вышел раньше всей линии `0.3.x` / `0.4.x`, поэтому `install supamem` без пина разрешается **назад**, в версию старее описанных здесь возможностей. Точный пин пре-релиза разрешается без дополнительных флагов, а зависимости остаются стабильными; **не** используйте `--prerelease allow` (он применяется ко всему разрешению и затягивает пре-релизные зависимости).
 
 Проверить:
 
