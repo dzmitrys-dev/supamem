@@ -19,6 +19,7 @@ import re
 import shutil
 from importlib import resources
 from pathlib import Path
+from time import time_ns
 from typing import Any
 
 from supamem.config_io import atomic_write_json, deep_merge_json
@@ -161,6 +162,28 @@ def _looks_generated(target: Path) -> bool:
     return any(s.name.endswith(_SIBLING_MANIFEST_SUFFIXES) for s in siblings)
 
 
+def _backup_mdc(target: Path) -> Path | None:
+    """Snapshot ``target`` to ``<name>.bak.<time_ns>`` before we clobber it.
+
+    WR-03: every other install target already gets a ``.bak.<ns>`` — the JSON
+    files via ``atomic_write_json``, ``CLAUDE.md``/``AGENTS.md`` explicitly. The
+    ``.mdc`` got none, on either the overwrite (``shutil.copy2``) or the removal
+    (``unlink``) path, so an unmarked-but-hand-edited rules file was
+    unrecoverable after a single warning line. Returns the backup path, or
+    ``None`` when there was nothing to back up / the snapshot failed (a failed
+    snapshot must not abort the install — but see the caller: we do not clobber
+    what we could not save).
+    """
+    if not target.exists():
+        return None
+    bak = target.with_name(target.name + f".bak.{time_ns()}")
+    try:
+        bak.write_bytes(target.read_bytes())
+    except OSError:
+        return None
+    return bak
+
+
 def install(
     *, dry_run: bool = False, scope: str = "project", force_cursor_rules: bool = False
 ) -> InstallResult:
@@ -256,14 +279,25 @@ def install(
                     f"--force-cursor-rules to let supamem own it"
                 )
             else:
-                if mdc_target.exists() and not dry_run:
-                    # SM-9b floor: unmarked differing target — visible overwrite.
-                    warn(
-                        f"supamem: overwriting existing {mdc_target} — replacing "
-                        f"outdated dual-memory rules with the packaged copy"
-                    )
                 would_write += 1
                 if not dry_run:
+                    # WR-03: snapshot BEFORE copy2 clobbers it, so the floor
+                    # warning below can make the same "(backup retained)"
+                    # promise every sibling target already makes.
+                    mdc_bak = _backup_mdc(mdc_target)
+                    if mdc_target.exists():
+                        # SM-9b floor: unmarked differing target — visible overwrite.
+                        detail = (
+                            f" (backup retained: {mdc_bak.name})"
+                            if mdc_bak is not None
+                            else " (WARNING: backup could not be written)"
+                        )
+                        warn(
+                            f"supamem: overwriting existing {mdc_target} — replacing "
+                            f"outdated dual-memory rules with the packaged copy{detail}"
+                        )
+                    if mdc_bak is not None:
+                        backups.append(mdc_bak)
                     mdc_target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(src, mdc_target)
                     written.append(mdc_target)
@@ -325,7 +359,7 @@ def _strip_supamem_session_start(hooks: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def uninstall(*, dry_run: bool = False) -> int:
+def uninstall(*, dry_run: bool = False, force_cursor_rules: bool = False) -> int:
     """Remove supamem from BOTH project and user scopes (defensive).
 
     A user could have run ``supamem install --client cursor`` from multiple
@@ -338,6 +372,14 @@ def uninstall(*, dry_run: bool = False) -> int:
     ``dry_run=True`` computes every strip against the current content but
     writes nothing (SM-7a) — no JSON rewrite, no .bak sibling, and the
     ``.mdc`` rules copy is NOT unlinked.
+
+    ``force_cursor_rules`` (CR-02) mirrors ``install()``'s flag on the removal
+    side: a generator-managed ``.mdc`` is left in place unless it is set.
+    Without this the removal path had no guard at all, and because ``repair``
+    is uninstall-then-install it destroyed exactly the file ``install``
+    refuses to overwrite — the reinstall half then saw a non-existent target,
+    which short-circuits ``_looks_generated``, and wrote the packaged copy
+    over it. ``repair --dry-run`` meanwhile printed "leaving it untouched".
     """
     home = Path.home()
     cwd = Path.cwd()
@@ -364,12 +406,24 @@ def uninstall(*, dry_run: bool = False) -> int:
         if res.diff:
             would_change += 1
     if mdc_target.exists():
-        would_change += 1  # the real run removes the file
-        if not dry_run:
-            try:
-                mdc_target.unlink()
-            except OSError:
-                pass
+        if _looks_generated(mdc_target) and not force_cursor_rules:
+            # CR-02: same guard install() applies, on the removal side. Not
+            # counted as a change — the dry-run prediction and the real run
+            # must agree, and this file is not ours to delete.
+            warn(
+                f"supamem: {mdc_target} appears generator-managed — leaving it "
+                f"in place; pass --force-cursor-rules to remove it"
+            )
+        else:
+            would_change += 1  # the real run removes the file
+            if not dry_run:
+                # WR-03: snapshot before unlink — this was an unrecoverable
+                # delete for a hand-edited but unmarked rules file.
+                _backup_mdc(mdc_target)
+                try:
+                    mdc_target.unlink()
+                except OSError:
+                    pass
     return would_change
 
 

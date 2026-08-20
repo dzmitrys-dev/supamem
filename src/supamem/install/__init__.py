@@ -205,11 +205,19 @@ def _client_uninstall_module(client: str):
     return None
 
 
-def uninstall(client: Optional[str], *, dry_run: bool = False) -> int:
+def uninstall(
+    client: Optional[str], *, dry_run: bool = False, force_cursor_rules: bool = False
+) -> int:
     """Remove supamem from the named client (or auto-detect).
 
     ``dry_run=True`` performs none of the strip writes (SM-7a): every target
     the real uninstall would rewrite is left byte-identical.
+
+    ``force_cursor_rules`` reaches the cursor client only (CR-02): without it,
+    a generator-managed ``.cursor/rules/dual-memory.mdc`` is preserved rather
+    than deleted. It must be threaded through here because ``repair`` is
+    uninstall-then-install, so the strip half is what destroyed the guarded
+    file.
     """
     if client is None:
         client = _autodetect()
@@ -223,7 +231,10 @@ def uninstall(client: Optional[str], *, dry_run: bool = False) -> int:
         return 2
     # Client uninstall returns the (would-)change count, not an rc — the CLI
     # contract stays "0 on success" regardless of how many files changed.
-    mod.uninstall(dry_run=dry_run)
+    if client == "cursor":
+        mod.uninstall(dry_run=dry_run, force_cursor_rules=force_cursor_rules)
+    else:
+        mod.uninstall(dry_run=dry_run)
     return 0
 
 
@@ -294,7 +305,17 @@ def repair(
             # stripped state (deep-merge re-adds exactly what was stripped),
             # plus any fresh content install would add vs the current state.
             strip_mod = _client_uninstall_module(tgt)
-            strip_would = strip_mod.uninstall(dry_run=True) if strip_mod else 0
+            if strip_mod is None:
+                strip_would = 0
+            elif tgt == "cursor":
+                # CR-02: the guard must be in force for the PREDICTION too,
+                # or the dry run under-reports and its "leaving it untouched"
+                # promise contradicts what the real strip does.
+                strip_would = strip_mod.uninstall(
+                    dry_run=True, force_cursor_rules=force_cursor_rules
+                )
+            else:
+                strip_would = strip_mod.uninstall(dry_run=True)
             if tgt == "claude-code":
                 from supamem.install import claude_code as _cc
 
@@ -325,7 +346,7 @@ def repair(
         # SM-7a: the dry_run flag reaches the uninstall half too — without
         # it, `repair --dry-run` performed a REAL uninstall then skipped the
         # reinstall, leaving the machine stripped.
-        uninstall_rc = uninstall(tgt, dry_run=dry_run)
+        uninstall_rc = uninstall(tgt, dry_run=dry_run, force_cursor_rules=force_cursor_rules)
         if uninstall_rc != 0:
             rc_overall = uninstall_rc
             continue
