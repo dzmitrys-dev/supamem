@@ -9,6 +9,7 @@ Targets:
 
 Atomic JSON writes with .bak.<ts>; idempotent on re-run.
 """
+
 from __future__ import annotations
 
 import json
@@ -21,8 +22,10 @@ from supamem.config_io import (
     atomic_write_json,
     deep_merge_json,
     extract_managed_block,
+    sweep_managed_blocks,
     wrap_managed_block,
 )
+from supamem.console import info
 from supamem.install._types import InstallResult
 
 log = logging.getLogger("supamem.install.opencode")
@@ -51,6 +54,11 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _agents_md_with_import(existing: str) -> str:
+    # SM-4/SM-6: heal duplicate managed blocks BEFORE the strict extract —
+    # sweep is a byte-level no-op on healthy text (claude_code twin).
+    existing, removed = sweep_managed_blocks(existing)
+    if removed:
+        info(f"AGENTS.md: swept {removed} duplicate SUPAMEM managed block(s)")
     before, owned, after = extract_managed_block(existing)
     if owned and AGENTS_MD_IMPORT_LINE in owned:
         return existing
@@ -59,6 +67,26 @@ def _agents_md_with_import(existing: str) -> str:
         return f"{before}{block}{after}"
     glue = "\n" if existing and not existing.endswith("\n") else ""
     return f"{existing}{glue}\n{block}\n"
+
+
+def _heal_managed_block_file(path: Path) -> str:
+    """SM-6: read ``path`` and, when it carries duplicate managed blocks,
+    rewrite it healed — .bak.<time_ns> sibling first. Returns the (possibly
+    healed) body text so the caller's ``extract_managed_block`` cannot raise
+    on it. No-op on healthy files. (claude_code twin.)
+    """
+    body = path.read_text(encoding="utf-8")
+    healed, removed = sweep_managed_blocks(body)
+    if not removed:
+        return body
+    info(
+        f"{path.name}: swept {removed} duplicate SUPAMEM managed block(s) "
+        f"(backup: {path.name}.bak.*)"
+    )
+    bak = path.with_name(path.name + f".bak.{time_ns()}")
+    bak.write_text(body, encoding="utf-8")
+    path.write_text(healed, encoding="utf-8")
+    return healed
 
 
 def install(*, dry_run: bool = False) -> InstallResult:
@@ -125,7 +153,9 @@ def uninstall() -> int:
         cur = _read_json(cfg_path)
         atomic_write_json(cfg_path, _strip_supamem_from_mcp(cur))
     if agents_md.exists():
-        body = agents_md.read_text(encoding="utf-8")
+        # SM-6: duplicated managed blocks used to crash uninstall here with
+        # an unhandled ValueError — heal (with backup) before extracting.
+        body = _heal_managed_block_file(agents_md)
         before, _owned, after = extract_managed_block(body)
         if before != body:
             new_body = (before.rstrip() + "\n" + after.lstrip()).strip() + "\n"
