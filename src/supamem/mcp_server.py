@@ -497,11 +497,36 @@ def _register_dual_memory_tool(app: Any, config: ResolvedConfig) -> None:
             )
 
 
+def _cache_hints_for(cfg: ResolvedConfig) -> dict[str, Any] | None:
+    """SEP-2549 per-method cache-hint map for the server constructor (L2).
+
+    Probed against installed mcp 2.x: cache hints are a PER-METHOD
+    constructor map (``MCPServer(cache_hints={method: CacheHint(...)})``);
+    ``CacheableMethod`` covers list/read/discovery methods only —
+    ``tools/call`` is NOT cacheable, and the ``@tool()`` decorator has no
+    per-tool hint parameter. supamem serves no prompts/resources, so
+    ``tools/list`` is the one usable stampable surface: a TTL there lets
+    2026-era clients cache the tool registry (deterministic registration
+    order keeps that cache valid — d5). Write-tool exclusion is airtight by
+    construction: no tools/call result (read or write) is ever stamped, so
+    a cached result can never mask write-then-read visibility.
+
+    Default ``mcp_cache_ttl_ms = 0`` → ``None`` (hints off). Scope stays
+    ``private`` (the CacheHint default): cached listings must not leak
+    across authorization contexts.
+    """
+    if cfg.mcp_cache_ttl_ms <= 0:
+        return None
+    from mcp.server.caching import CacheHint  # noqa: PLC0415 (import-weight convention)
+
+    return {"tools/list": CacheHint(ttl_ms=cfg.mcp_cache_ttl_ms)}
+
+
 def build_app(config: ResolvedConfig) -> Any:
     """Construct an MCPServer app with the dual_memory_search tool registered."""
     from mcp.server.mcpserver import MCPServer
 
-    app = MCPServer("supamem")
+    app = MCPServer("supamem", cache_hints=_cache_hints_for(config))
     _register_dual_memory_tool(app, config)
     return app
 
@@ -522,7 +547,7 @@ def run_http(
     from mcp.server.mcpserver import MCPServer
 
     log.info("starting supamem MCP server (streamable-http) on %s:%d", host, port)
-    app = MCPServer("supamem")
+    app = MCPServer("supamem", cache_hints=_cache_hints_for(config))
     _register_dual_memory_tool(app, config)
     app.run(transport="streamable-http", host=host, port=port)
 

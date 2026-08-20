@@ -149,6 +149,13 @@ class ResolvedConfig:
     # v0.2.0 scope lock); default "detailed" keeps the byte-identical
     # CAPS-02 shape. Boot-time gate in load_config rejects other values.
     mcp_response_format: str = "detailed"
+    # ── Phase 19 L2 — SEP-2549 cache-hint TTL (milliseconds) ──────────────
+    # 0 = off (default). When > 0, the MCP server stamps a CacheHint with
+    # this TTL on the one cacheable method supamem serves (tools/list —
+    # per-method constructor map, installed mcp 2.x shape). tools/call is
+    # not a cacheable method, so no tool result (read or write) is ever
+    # stamped. Boot-time gate rejects negative values.
+    mcp_cache_ttl_ms: int = 0
 
 
 @dataclass
@@ -199,8 +206,9 @@ class ConfigChain:
     adaptive_depth_k_max: Source = "default"
     dedup_enabled: Source = "default"
     dedup_cosine_threshold: Source = "default"
-    # Phase 19 L3 — MCP response format ([supamem.mcp] table).
+    # Phase 19 L3/L2 — MCP response format + cache-hint TTL ([supamem.mcp]).
     mcp_response_format: Source = "default"
+    mcp_cache_ttl_ms: Source = "default"
 
 
 _LEGACY_ENV: dict[str, str] = {
@@ -307,13 +315,11 @@ _NESTED_TABLES: list[tuple[str, dict[str, str]]] = [
     ),
     # ── Phase 19 L3/L2 — [supamem.mcp] (single-level table; coexists with
     # the two-level [supamem.mcp.caps] entry above — separate TOML tables).
-    # cache_ttl_ms lands as a mapped key in plan 19-03 Task 3; until then a
-    # cache_ttl_ms line in user TOML falls through harmlessly (_apply_nested
-    # reads only field-mapped keys).
     (
         "mcp",
         {
             "response_format": "mcp_response_format",
+            "cache_ttl_ms": "mcp_cache_ttl_ms",
         },
     ),
 ]
@@ -570,6 +576,13 @@ def load_config(cwd: Path | None = None) -> tuple[ResolvedConfig, ConfigChain]:
         err_console.print(
             f"[supamem.err]config: mcp.response_format="
             f"{cfg.mcp_response_format!r} must be one of: concise, detailed"
+        )
+        raise SystemExit(2)
+    # Phase 19 L2 — cache_ttl_ms must be non-negative (0 = off).
+    if cfg.mcp_cache_ttl_ms < 0:
+        err_console.print(
+            f"[supamem.err]config: mcp.cache_ttl_ms="
+            f"{cfg.mcp_cache_ttl_ms} must be >= 0 (0 disables cache hints)"
         )
         raise SystemExit(2)
 
