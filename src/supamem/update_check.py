@@ -222,8 +222,15 @@ def get_pending_notification(current_version: str) -> str | None:
 
 
 def doctor_report(current_version: str) -> dict[str, Any]:
-    """Snapshot of update-check state for ``supamem doctor``."""
+    """Snapshot of update-check state for ``supamem doctor``.
+
+    SM-2 (Phase 19.1): ``stale`` and ``cache_age_seconds`` make the cache's
+    age a first-class field computed where the cache is read — the single
+    source of truth for doctor's render AND the session-start banner (the
+    banner ignores both keys; it acts on ``update_available`` only).
+    """
     cache = _read_cache()
+    now = time.time()
     suppressed_by = [
         v for v in ("SUPAMEM_NO_UPDATE_CHECK", "NO_UPDATE_NOTIFIER", "CI")
         if os.environ.get(v, "").strip()
@@ -231,6 +238,15 @@ def doctor_report(current_version: str) -> dict[str, Any]:
     update_available = False
     if cache and cache.latest_version:
         update_available = _is_newer(current_version, cache.latest_version)
+    cache_age_seconds = (now - cache.last_check_ts) if cache else None
+    # Absence of knowledge is not freshness: no cache, age ≥ TTL, or an
+    # active rate-limit backoff window all mean the data cannot support a
+    # "on latest" claim.
+    stale = (
+        cache is None
+        or cache_age_seconds >= DEFAULT_TTL_SECONDS
+        or bool(cache.backoff_until_ts and now < cache.backoff_until_ts)
+    )
     return {
         "current_version": current_version,
         "cached_latest_version": cache.latest_version if cache else None,
@@ -239,7 +255,26 @@ def doctor_report(current_version: str) -> dict[str, Any]:
         "cache_path": str(_cache_path()),
         "suppressed_by_env": suppressed_by,
         "stderr_is_tty": _safe_isatty(),
+        "stale": stale,
+        "cache_age_seconds": cache_age_seconds,
     }
+
+
+def refresh_stale_cache(current_version: str) -> None:
+    """Bounded synchronous cache refresh for explicit ``doctor`` runs (SM-2).
+
+    No-op when suppressed (CI / opt-out envs / non-TTY stderr). Delegates to
+    ``_run_probe`` so the existing ``NETWORK_TIMEOUT_SECONDS`` bound, ETag
+    handling, and rate-limit backoff apply unchanged — no new network code.
+    The TTL guard inside ``_run_probe`` naturally makes this a no-op on an
+    already-fresh cache; callers invoke it only when the cache is stale.
+
+    Never raises: on any failure the caller falls back to the neutral stale
+    marker (offline-safe).
+    """
+    if _is_suppressed():
+        return
+    _run_probe(current_version)
 
 
 def _safe_isatty() -> bool:
