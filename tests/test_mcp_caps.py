@@ -12,6 +12,7 @@ use ``capsys``.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import pytest
 from mcp.server.mcpserver import Context
@@ -273,3 +274,134 @@ def test_cap_rejection_no_stdout_pollution(
         f"stdout pollution on cap-rejection path violates JSON-RPC purity: "
         f"{captured.out!r}"
     )
+
+
+# ── 11-15. Phase 19 L3/L4 — response_format + source/file_path dedup ───────
+
+
+@pytest.mark.asyncio
+async def test_response_format_default_detailed_caps02_intact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default detailed: ResolvedConfig default + preview populated and capped."""
+    from supamem.config import ResolvedConfig
+
+    assert ResolvedConfig().mcp_response_format == "detailed"
+
+    _mock_backend_with_long_chunks(monkeypatch, n_hits=2, text_len=300)
+    cfg = _cfg_with_caps(max_preview_chars=50)
+    result = await dual_memory_search(query="hi", top_k=2, config=cfg)
+    assert len(result.chunks) == 2
+    for chunk in result.chunks:
+        assert chunk.preview, "detailed mode must populate preview (CAPS-02)"
+        assert len(chunk.preview) <= 50
+
+
+@pytest.mark.asyncio
+async def test_response_format_concise_empties_preview_text_intact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Concise opt-in: every preview == "" while Chunk.text stays fully intact.
+
+    v0.2.0 scope lock: payloads remain syntactically intact — only the
+    display preview may be emptied (never the text).
+    """
+    _mock_backend_with_long_chunks(monkeypatch, n_hits=2, text_len=300)
+    cfg = _cfg_with_caps(max_preview_chars=50, response_format="concise")
+    result = await dual_memory_search(query="hi", top_k=2, config=cfg)
+    assert len(result.chunks) == 2
+    for chunk in result.chunks:
+        assert chunk.preview == "", (
+            f"concise mode must empty the display preview, got {chunk.preview!r}"
+        )
+        assert chunk.text == "x" * 300, "full text must remain intact (scope lock)"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response_format", ["detailed", "concise"])
+async def test_file_path_null_when_duplicating_source(
+    monkeypatch: pytest.MonkeyPatch,
+    response_format: str,
+) -> None:
+    """L4 (both modes): file_path is None iff it duplicates source."""
+    from unittest.mock import MagicMock
+
+    import supamem.mcp_server as mod
+    from supamem.retrieval.types import RetrievedChunk
+
+    fake = MagicMock()
+    fake.query.return_value = [
+        RetrievedChunk(
+            id="1",
+            text="a" * 100,
+            score=0.9,
+            source_path="docs/x.md",
+            file_path="docs/x.md",
+        ),
+        RetrievedChunk(
+            id="2",
+            text="b" * 100,
+            score=0.8,
+            source_path="docs/y.md",
+            file_path="other/z.md",
+        ),
+    ]
+    monkeypatch.setattr(mod, "_get_backend", lambda cfg: fake)
+
+    cfg = _cfg_with_caps(response_format=response_format)
+    result = await dual_memory_search(query="hi", top_k=2, config=cfg)
+    dup, distinct = result.chunks[0], result.chunks[1]
+    assert dup.source == "docs/x.md", "source keeps the path on dedup"
+    assert dup.file_path is None, (
+        f"file_path must be None when == source (L4), got {dup.file_path!r}"
+    )
+    assert distinct.source == "docs/y.md"
+    assert distinct.file_path == "other/z.md", "distinct paths keep both fields"
+
+
+def test_load_config_rejects_unknown_response_format(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """response_format outside {concise, detailed} exits 2 with an err message."""
+    from supamem.config import load_config
+
+    monkeypatch.delenv("SUPAMEM_CONFIG", raising=False)
+    cfg_dir = tmp_path / ".supamem"
+    cfg_dir.mkdir()
+    (cfg_dir / "config.toml").write_text(
+        '[supamem.mcp]\nresponse_format = "verbose"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(SystemExit) as exc:
+        load_config(tmp_path)
+    assert exc.value.code == 2
+    captured = capsys.readouterr()
+    assert "response_format" in captured.err
+    assert "concise" in captured.err and "detailed" in captured.err, (
+        f"error must name the allowed values, got: {captured.err!r}"
+    )
+
+
+def test_mcp_table_maps_through_config_discovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """[supamem.mcp] response_format maps onto the flat field via discovery.
+
+    cache_ttl_ms rides the same TOML table pre-Task-3 (unmapped keys fall
+    through harmlessly — _apply_nested reads only field-mapped keys).
+    """
+    from supamem.config import load_config
+
+    monkeypatch.delenv("SUPAMEM_CONFIG", raising=False)
+    cfg_dir = tmp_path / ".supamem"
+    cfg_dir.mkdir()
+    (cfg_dir / "config.toml").write_text(
+        '[supamem.mcp]\nresponse_format = "concise"\ncache_ttl_ms = 300\n',
+        encoding="utf-8",
+    )
+    cfg, chain = load_config(tmp_path)
+    assert cfg.mcp_response_format == "concise"
+    assert chain.mcp_response_format == "supamem_toml"
