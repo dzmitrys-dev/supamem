@@ -94,3 +94,45 @@ def test_extract_still_raises_on_raw_two_block_fixture() -> None:
     """
     with pytest.raises(ValueError, match="multiple SUPAMEM managed blocks"):
         extract_managed_block(_two_block_fixture())
+
+
+# ──────────────────────── WR-06: block-level dedup ─────────────────────────
+
+
+def test_sweep_preserves_repeated_lines_inside_the_managed_region() -> None:
+    """WR-06: owned content was deduplicated LINE-by-line across blocks, so any
+    legitimately repeated line vanished — blank lines (collapsing a multi-
+    paragraph managed region into one paragraph), markdown ``---`` separators,
+    repeated indented list items.
+
+    The docstring promised text was "preserved verbatim"; that only ever held
+    for text OUTSIDE the fences. Dedup is now per-block, so a block's internal
+    structure survives intact.
+    """
+    owned = "para one\n\nsecond para\n\n---\n\n- item\n- item\n"
+    old = wrap_managed_block(owned, version="0.2.0")
+    new = wrap_managed_block("something else\n", version="0.3.0a7")
+    healed, removed = sweep_managed_blocks(f"{PREFIX}{old}\n{new}{SUFFIX}", version="0.4.0a2")
+
+    assert removed == 1
+    assert owned in healed, f"the first block's internal structure must survive: {healed!r}"
+    assert healed.count("- item") == 2, "repeated list items must both survive"
+    assert "---" in healed, "markdown separators must survive"
+    assert "something else" in healed, "the second block's distinct content is kept"
+
+
+def test_sweep_dedups_identical_blocks_not_identical_lines() -> None:
+    """Two byte-identical blocks collapse to one copy; a block that merely
+    SHARES a line with another keeps its own copy of that line."""
+    shared = "@~/.supamem/share/rules/dual-memory.md"
+    a = wrap_managed_block(f"{shared}\nunique to a", version="0.2.0")
+    b = wrap_managed_block(f"{shared}\nunique to b", version="0.3.0a7")
+    healed, _ = sweep_managed_blocks(f"{a}\n{b}", version="0.4.0a2")
+    assert healed.count(shared) == 2, "distinct blocks each keep their shared line"
+    assert "unique to a" in healed
+    assert "unique to b" in healed
+
+    dup = wrap_managed_block(shared, version="0.2.0")
+    dup2 = wrap_managed_block(shared, version="0.3.0a7")
+    healed2, _ = sweep_managed_blocks(f"{dup}\n{dup2}", version="0.4.0a2")
+    assert healed2.count(shared) == 1, "byte-identical owned content collapses"

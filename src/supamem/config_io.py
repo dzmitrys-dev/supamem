@@ -313,10 +313,13 @@ def sweep_managed_blocks(text: str, version: str = __version__) -> tuple[str, in
     Two anomalies are normalized:
 
     1. **Duplicate fenced blocks** — accumulated across upgrades when older
-       fence regexes could not see prerelease-versioned markers. Owned content
-       is deduplicated line-by-line (order-preserving) and re-fenced as ONE
-       canonical block via ``wrap_managed_block`` at ``version``, placed at the
-       FIRST block's position.
+       fence regexes could not see prerelease-versioned markers. Whole blocks
+       are deduplicated (order-preserving, first occurrence wins) and the
+       survivors concatenated into ONE canonical block via
+       ``wrap_managed_block`` at ``version``, placed at the FIRST block's
+       position. Dedup compares each block's ENTIRE owned string, so a block's
+       internal structure — blank lines, ``---`` separators, repeated list
+       items — is preserved (WR-06).
     2. **Unpaired BEGIN/END marker lines** — left behind when a user hand-edits
        or mangles a fence. The stray marker *line* is deleted; the surrounding
        text is untouched. Without this, a lone half-fence was permanent: it
@@ -347,11 +350,20 @@ def sweep_managed_blocks(text: str, version: str = __version__) -> tuple[str, in
     # by construction: orphan spans exclude anything inside a pair span.
     edits: list[tuple[int, int, str]] = []
     if len(matches) > 1:
+        # WR-06: deduplicate whole BLOCKS, not individual lines. Line-level
+        # dedup silently destroyed any legitimately repeated line inside the
+        # managed region — blank lines (collapsing a multi-paragraph region
+        # into one paragraph), markdown `---` separators, repeated list items,
+        # and any line two otherwise-distinct blocks happened to share. Today
+        # the region holds a single @import line so the blast radius was nil,
+        # but this is a general-purpose primitive and the loss was silent.
+        seen: set[str] = set()
         merged: list[str] = []
         for match in matches:
-            for line in match.group("owned").splitlines():
-                if line not in merged:
-                    merged.append(line)
+            owned = match.group("owned")
+            if owned not in seen:
+                seen.add(owned)
+                merged.append(owned)
         canonical = wrap_managed_block("\n".join(merged), version=version)
         for index, match in enumerate(matches):
             edits.append((match.start(), match.end(), canonical if index == 0 else ""))
