@@ -247,3 +247,34 @@ def test_translations_have_synced_marker() -> None:
         "synced-with marker missing on line 3 of one or more translations:\n  "
         + "\n  ".join(misses)
     )
+
+
+def test_dunder_version_matches_pyproject() -> None:
+    """``supamem.__version__`` MUST equal the version pyproject ships.
+
+    Discovered during the 19.1 review-fix pass, not in REVIEW.md: pyproject was
+    bumped to 0.4.0a2 for this phase while ``src/supamem/__init__.py`` stayed at
+    the hardcoded 0.4.0a1 from the previous release, and NO guard tied the two
+    together.
+
+    The drift is user-visible on the release path, not cosmetic:
+
+    * ``supamem --version`` and the ``doctor`` banner under-report.
+    * ``wrap_managed_block`` stamps the stale version into every user's
+      CLAUDE.md / AGENTS.md fence.
+    * ``update_check`` compares ``__version__`` against the newest GitHub tag,
+      so after v0.4.0a2 is tagged EVERY user already on 0.4.0a2 is told
+      "update available: 0.4.0a1 -> 0.4.0a2" — permanently, on every
+      invocation.
+
+    PyPI versions are immutable, so this has to be caught before the tag.
+    """
+    from supamem import __version__
+
+    shipped = _shipped_version()
+    assert __version__ == shipped, (
+        f"version drift: supamem.__version__ == {__version__!r} but "
+        f"pyproject.toml ships {shipped!r}. Bump src/supamem/__init__.py "
+        f"together with pyproject.toml — a wheel that misreports its own "
+        f"version nags every user with a phantom update forever."
+    )
