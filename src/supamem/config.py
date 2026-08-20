@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import os
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, Literal
 
@@ -353,7 +353,11 @@ def _child_table_keys(sub_key: str) -> set[str]:
 
 
 def _warn_unknown_config_keys(
-    table: str, unknown: set[str], accepted: list[str], note: str = ""
+    table: str,
+    unknown: set[str],
+    accepted: list[str],
+    note: str = "",
+    seen: set[str] | None = None,
 ) -> None:
     """Warn-only unknown-config-key report (Phase 19.1 SM-1a, T-19.1-07/08).
 
@@ -384,6 +388,19 @@ def _warn_unknown_config_keys(
     )
     if note:
         msg += f" {note}"
+    # WR-05: SM-8 makes every installed MCP entry set
+    # SUPAMEM_CONFIG=<cwd>/.supamem/config.toml, so load_config processes that
+    # SAME file at rung 2 and again at rung 1a — emitting every unknown-key
+    # warning twice, on the MCP stdio path, for exactly the configuration the
+    # installer produces. Dedup on the rendered message (not the file path, so
+    # a symlinked or differently-spelled route to the same file also collapses)
+    # keeps apply semantics and chain attribution byte-identical while dropping
+    # the duplicate line. `seen` is per-load_config, so a later invocation warns
+    # again.
+    if seen is not None:
+        if msg in seen:
+            return
+        seen.add(msg)
     err_console.print(f"[supamem.warn]⚠[/supamem.warn] {escape(msg)}")
 
 
@@ -399,6 +416,7 @@ def _apply_section(
     chain: ConfigChain,
     section: dict[str, Any],
     source: Source,
+    seen_warnings: set[str] | None = None,
 ) -> None:
     """Apply flat field overrides from a [supamem] / [tool.supamem] section.
 
@@ -451,15 +469,20 @@ def _apply_section(
         if not hasattr(cfg, key) and key not in _SCALAR_ALIASES and key not in skip_first_segments
     }
     if unknown_flat:
+        # WR-08: the accepted list used to be the nested-table first segments,
+        # so a user fixing a typo read "accepted: cache, classifier, eval, ..."
+        # and reasonably concluded `cache = "..."` was a valid flat key. It is
+        # not — those are TABLE names, and a scalar at any of them is silently
+        # discarded by the `key in skip_first_segments: continue` branch above.
+        # List the real flat field names, and label the tables as tables. (The
+        # old wording also said "accepted" twice with two different meanings.)
+        accepted_flat = sorted({f.name for f in fields(cfg)} | set(_SCALAR_ALIASES))
         _warn_unknown_config_keys(
             "supamem",
             unknown_flat,
-            sorted(skip_first_segments),
-            note=(
-                "— accepted flat keys are ResolvedConfig field names "
-                "(see 'supamem doctor' config chain) or the nested tables "
-                "listed"
-            ),
+            accepted_flat,
+            note=f"(nested tables: {', '.join(sorted(skip_first_segments))})",
+            seen=seen_warnings,
         )
 
 
@@ -468,6 +491,7 @@ def _apply_nested(
     chain: ConfigChain,
     section: dict[str, Any],
     source: Source,
+    seen_warnings: set[str] | None = None,
 ) -> None:
     """Apply nested [supamem.hook], [supamem.eval], [supamem.cache], [supamem.mcp.caps] tables.
 
@@ -515,7 +539,13 @@ def _apply_nested(
         unknown = set(sub) - known
         if unknown:
             note = "(flat regress_baseline_* aliases also accepted)" if sub_key == "eval" else ""
-            _warn_unknown_config_keys(f"supamem.{sub_key}", unknown, sorted(field_map), note=note)
+            _warn_unknown_config_keys(
+                f"supamem.{sub_key}",
+                unknown,
+                sorted(field_map),
+                note=note,
+                seen=seen_warnings,
+            )
 
 
 def find_project_root(start: Path | None = None) -> Path | None:
@@ -568,6 +598,15 @@ def load_config(cwd: Path | None = None) -> tuple[ResolvedConfig, ConfigChain]:
     cwd = cwd or Path.cwd()
     cfg = ResolvedConfig()
     chain = ConfigChain()
+    # WR-05: per-call scope for unknown-key warning dedup. SM-8 makes the
+    # installed MCP entry pin SUPAMEM_CONFIG=<cwd>/.supamem/config.toml, so the
+    # SAME file is processed at rung 2 and again at rung 1a — every unknown-key
+    # warning fired twice, on every MCP server start, for exactly the
+    # configuration the 19.1 installer writes. Deduping the rendered message
+    # here (rather than skipping rung 1a) keeps apply semantics AND the
+    # ConfigChain source attribution byte-identical; only the duplicate line
+    # goes away. Scoped per call, so a later load_config still warns.
+    seen_warnings: set[str] = set()
 
     # ── 4. Auto-detect (lowest applied rung) ──────────────────────────────
     if (cwd / ".claude" / "insights").exists():
@@ -579,16 +618,16 @@ def load_config(cwd: Path | None = None) -> tuple[ResolvedConfig, ConfigChain]:
     if pyproject.is_file():
         data = _load_toml(pyproject)
         section = data.get("tool", {}).get("supamem", {}) or {}
-        _apply_section(cfg, chain, section, "pyproject")
-        _apply_nested(cfg, chain, section, "pyproject")
+        _apply_section(cfg, chain, section, "pyproject", seen_warnings)
+        _apply_nested(cfg, chain, section, "pyproject", seen_warnings)
 
     # ── 2. .supamem/config.toml ───────────────────────────────────────────
     supamem_toml = cwd / ".supamem" / "config.toml"
     if supamem_toml.is_file():
         data = _load_toml(supamem_toml)
         section = data.get("supamem", {}) or {}
-        _apply_section(cfg, chain, section, "supamem_toml")
-        _apply_nested(cfg, chain, section, "supamem_toml")
+        _apply_section(cfg, chain, section, "supamem_toml", seen_warnings)
+        _apply_nested(cfg, chain, section, "supamem_toml", seen_warnings)
 
     # ── 1a. SUPAMEM_CONFIG explicit path ──────────────────────────────────
     explicit = os.environ.get("SUPAMEM_CONFIG", "").strip()
@@ -598,8 +637,8 @@ def load_config(cwd: Path | None = None) -> tuple[ResolvedConfig, ConfigChain]:
             raise FileNotFoundError(f"supamem: SUPAMEM_CONFIG points to missing file: {ep}")
         data = _load_toml(ep)
         section = data.get("supamem", {}) or {}
-        _apply_section(cfg, chain, section, "env")
-        _apply_nested(cfg, chain, section, "env")
+        _apply_section(cfg, chain, section, "env", seen_warnings)
+        _apply_nested(cfg, chain, section, "env", seen_warnings)
 
     # ── 1b. Legacy single-key env vars (highest precedence) ───────────────
     for env_name, field_name in _LEGACY_ENV.items():
