@@ -12,6 +12,7 @@ re-running detects identical content and reports ``no_op=True``. Uninstall
 removes only managed-block content / shape-matched supamem keys; user content
 outside the fences and other MCP server entries are preserved.
 """
+
 from __future__ import annotations
 
 import json
@@ -24,13 +25,16 @@ from supamem.config_io import (
     atomic_write_json,
     deep_merge_json,
     extract_managed_block,
+    sweep_managed_blocks,
     wrap_managed_block,
 )
+from supamem.console import info
 from supamem.install._types import InstallResult
 
 log = logging.getLogger("supamem.install.claude_code")
 
 CLAUDE_MD_IMPORT_LINE = "@~/.supamem/share/rules/dual-memory.md"
+
 
 def _mcp_supamem_entry(cwd: Path) -> dict[str, Any]:
     """Claude Code MCP stanza — inject SUPAMEM_PROJECT_ROOT when bootstrapped in-repo.
@@ -55,6 +59,7 @@ def _mcp_supamem_entry(cwd: Path) -> dict[str, Any]:
 
 def _mcp_overlay(cwd: Path) -> dict[str, Any]:
     return {"mcpServers": {"supamem": _mcp_supamem_entry(cwd)}}
+
 
 GATE_EDIT_HOOK_ENTRY: dict[str, Any] = {
     "matcher": "Edit|Write|MultiEdit",
@@ -138,26 +143,26 @@ def _settings_with_hook(
     hooks_root = merged.setdefault("hooks", {})
 
     if not _hook_present(merged, "PreToolUse", "supamem hook claude-code"):
-        hooks_root.setdefault("PreToolUse", []).extend(
-            HOOKS_OVERLAY["hooks"]["PreToolUse"]
-        )
+        hooks_root.setdefault("PreToolUse", []).extend(HOOKS_OVERLAY["hooks"]["PreToolUse"])
 
-    if enforce_search and not _hook_present(
-        merged, "PreToolUse", "supamem hook claude-code-gate"
-    ):
+    if enforce_search and not _hook_present(merged, "PreToolUse", "supamem hook claude-code-gate"):
         hooks_root.setdefault("PreToolUse", []).append(GATE_EDIT_HOOK_ENTRY)
 
     # SessionStart banner (v0.1.5+). Skip if any supamem session-start entry
     # already exists (covers users who installed v0.1.4 by hand earlier).
     if not _hook_present(merged, "SessionStart", "supamem hook session-start"):
-        hooks_root.setdefault("SessionStart", []).extend(
-            HOOKS_OVERLAY["hooks"]["SessionStart"]
-        )
+        hooks_root.setdefault("SessionStart", []).extend(HOOKS_OVERLAY["hooks"]["SessionStart"])
 
     return merged
 
 
 def _claude_md_with_import(existing: str) -> str:
+    # SM-4/SM-6: heal duplicate managed blocks BEFORE the strict extract —
+    # sweep is a byte-level no-op on healthy text, so only duplicated files
+    # (the accumulated-upgrade state that used to crash install) change.
+    existing, removed = sweep_managed_blocks(existing)
+    if removed:
+        info(f"CLAUDE.md: swept {removed} duplicate SUPAMEM managed block(s)")
     before, owned, after = extract_managed_block(existing)
     if owned and CLAUDE_MD_IMPORT_LINE in owned:
         return existing
@@ -166,6 +171,27 @@ def _claude_md_with_import(existing: str) -> str:
         return f"{before}{block}{after}"
     glue = "\n" if existing and not existing.endswith("\n") else ""
     return f"{existing}{glue}\n{block}\n"
+
+
+def _heal_managed_block_file(path: Path) -> str:
+    """SM-6: read ``path`` and, when it carries duplicate managed blocks,
+    rewrite it healed — .bak.<time_ns> sibling first (mirrors the install
+    write path's backup pattern). Returns the (possibly healed) body text so
+    the caller's ``extract_managed_block`` cannot raise on it. No-op on
+    healthy files.
+    """
+    body = path.read_text(encoding="utf-8")
+    healed, removed = sweep_managed_blocks(body)
+    if not removed:
+        return body
+    info(
+        f"{path.name}: swept {removed} duplicate SUPAMEM managed block(s) "
+        f"(backup: {path.name}.bak.*)"
+    )
+    bak = path.with_name(path.name + f".bak.{time_ns()}")
+    bak.write_text(body, encoding="utf-8")
+    path.write_text(healed, encoding="utf-8")
+    return healed
 
 
 def install(
@@ -267,7 +293,8 @@ def _strip_supamem_hook(settings: dict[str, Any]) -> dict[str, Any]:
     cleaned: list[Any] = []
     for entry in pre:
         kept_hooks = [
-            h for h in entry.get("hooks", []) or []
+            h
+            for h in entry.get("hooks", []) or []
             if "supamem hook claude-code" not in str(h.get("command", ""))
         ]
         if kept_hooks:
@@ -309,7 +336,9 @@ def uninstall() -> int:
         atomic_write_json(settings_json, _strip_supamem_hook(cur))
 
     if claude_md.exists():
-        body = claude_md.read_text(encoding="utf-8")
+        # SM-6: duplicated managed blocks used to crash uninstall here with
+        # an unhandled ValueError — heal (with backup) before extracting.
+        body = _heal_managed_block_file(claude_md)
         before, _owned, after = extract_managed_block(body)
         if before != body:
             new_body = (before.rstrip() + "\n" + after.lstrip()).strip() + "\n"
