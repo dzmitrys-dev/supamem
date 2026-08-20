@@ -134,3 +134,56 @@ def test_cursor_uninstall_strips_both_scopes(home: Path, project: Path) -> None:
     user_raw = json.loads((home / ".cursor" / "mcp.json").read_text(encoding="utf-8"))
     assert "supamem" not in user_raw.get("mcpServers", {})
     assert "other-user" in user_raw["mcpServers"]
+
+
+def test_cursor_uninstall_dry_run_changes_nothing(home: Path, project: Path) -> None:
+    """SM-7a: fully-installed cursor fixture → uninstall(dry_run=True) leaves
+    every target byte-identical — including the .mdc (no unlink under dry-run)
+    and the user-scope mcp.json the strip loop must not touch."""
+    from supamem.install.cursor import install, uninstall
+
+    install()  # project scope: mcp.json + hooks.json + rules/dual-memory.mdc
+
+    # Seed a legacy user-scope supamem entry so the strip loop has real work
+    # it must NOT perform under dry-run.
+    (home / ".cursor").mkdir(exist_ok=True)
+    (home / ".cursor" / "mcp.json").write_text(
+        json.dumps(
+            {"mcpServers": {"other-user": {"command": "y"}, "supamem": {"command": "stale"}}}
+        ),
+        encoding="utf-8",
+    )
+
+    targets = [
+        project / ".cursor" / "mcp.json",
+        project / ".cursor" / "hooks.json",
+        project / ".cursor" / "rules" / "dual-memory.mdc",
+        home / ".cursor" / "mcp.json",
+    ]
+    before = {str(p): p.read_bytes() for p in targets}
+
+    uninstall(dry_run=True)
+
+    for p in targets:
+        assert p.read_bytes() == before[str(p)], f"dry-run uninstall modified {p}"
+    # The .mdc must NOT be unlinked under dry-run.
+    assert (project / ".cursor" / "rules" / "dual-memory.mdc").exists()
+    assert not list((project / ".cursor").rglob("*.bak.*"))
+    assert not list((project / ".cursor").rglob("*.tmp.*"))
+    assert not list((home / ".cursor").glob("*.bak.*"))
+
+
+def test_cursor_uninstall_real_still_strips_after_dry_run(
+    home: Path, project: Path
+) -> None:
+    """SM-7a Test 5: real uninstall still strips both scopes after a dry-run
+    pass on the same fixture."""
+    from supamem.install.cursor import install, uninstall
+
+    install()
+    uninstall(dry_run=True)
+    uninstall()  # real
+
+    project_raw = json.loads((project / ".cursor" / "mcp.json").read_text(encoding="utf-8"))
+    assert "supamem" not in project_raw.get("mcpServers", {})
+    assert not (project / ".cursor" / "rules" / "dual-memory.mdc").exists()

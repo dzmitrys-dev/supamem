@@ -155,3 +155,54 @@ def test_opencode_install_healthy_file_is_byte_identical_noop(
 
     assert target.read_text(encoding="utf-8") == healthy
     assert not list(project.glob("AGENTS.md.bak.*"))
+
+
+def test_opencode_uninstall_dry_run_changes_nothing(home: Path, project: Path) -> None:
+    """SM-7a: fully-installed opencode fixture → uninstall(dry_run=True)
+    leaves ~/.config/opencode/opencode.json and ./AGENTS.md byte-identical."""
+    from supamem.install.opencode import install, uninstall
+
+    install()
+
+    targets = [home / ".config" / "opencode" / "opencode.json", project / "AGENTS.md"]
+    before = {str(p): p.read_bytes() for p in targets}
+
+    uninstall(dry_run=True)
+
+    for p in targets:
+        assert p.read_bytes() == before[str(p)], f"dry-run uninstall modified {p}"
+    assert not list(project.glob("AGENTS.md.bak.*"))
+    assert not list(project.glob("*.tmp.*"))
+
+
+def test_opencode_uninstall_dry_run_duplicated_blocks_no_raise_no_write(
+    home: Path, project: Path
+) -> None:
+    """SM-7a: dry-run must not raise on the duplicated-block state healed by
+    plan 19.1-01 — and must not write the healed file or a .bak sibling."""
+    from supamem.install.opencode import uninstall
+
+    duplicated = _duplicated_agents_md()
+    (project / "AGENTS.md").write_text(duplicated, encoding="utf-8")
+
+    uninstall(dry_run=True)  # must NOT raise ValueError
+
+    assert (project / "AGENTS.md").read_text(encoding="utf-8") == duplicated
+    assert not list(project.glob("AGENTS.md.bak.*"))
+
+
+def test_opencode_uninstall_real_still_strips_after_dry_run(
+    home: Path, project: Path
+) -> None:
+    """SM-7a Test 5: real uninstall still strips after a dry-run pass."""
+    from supamem.install.opencode import install, uninstall
+
+    install()
+    uninstall(dry_run=True)
+    uninstall()  # real
+
+    cfg_path = home / ".config" / "opencode" / "opencode.json"
+    raw = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert "supamem" not in raw.get("mcpServers", {})
+    body = (project / "AGENTS.md").read_text(encoding="utf-8")
+    assert "BEGIN SUPAMEM" not in body

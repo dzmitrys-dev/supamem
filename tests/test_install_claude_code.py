@@ -254,3 +254,75 @@ def test_sweep_rewrite_creates_bak_sibling(home: Path, project: Path) -> None:
     baks = list(home.glob("CLAUDE.md.bak.*"))
     assert baks, "expected a .bak.<time_ns> sibling for the sweep rewrite"
     assert any(bak.read_text(encoding="utf-8") == duplicated for bak in baks)
+
+
+# ---------------------------------------------------------------------------
+# SM-7a: uninstall(dry_run=True) changes NOTHING
+# ---------------------------------------------------------------------------
+
+
+def _snapshot(paths: list[Path]) -> dict[str, bytes | None]:
+    return {str(p): (p.read_bytes() if p.exists() else None) for p in paths}
+
+
+def test_uninstall_dry_run_changes_nothing(home: Path, project: Path) -> None:
+    """SM-7a: fully-installed fixture → uninstall(dry_run=True) leaves every
+    target byte-identical and creates no .bak / .tmp siblings."""
+    from supamem.install.claude_code import install, uninstall
+
+    install()  # real install → full installed state
+
+    targets = [
+        project / ".mcp.json",
+        home / ".claude.json",
+        home / ".claude" / "settings.json",
+        home / "CLAUDE.md",
+    ]
+    # Seed a legacy user-scope supamem entry so the strip loop has real work
+    # it must NOT perform under dry-run.
+    (home / ".claude.json").write_text(
+        json.dumps(
+            {"mcpServers": {"other": {"command": "y"}, "supamem": {"command": "stale"}}}
+        ),
+        encoding="utf-8",
+    )
+    before = _snapshot(targets)
+
+    uninstall(dry_run=True)
+
+    assert _snapshot(targets) == before, "dry-run uninstall must not modify any target"
+    for base in (project, home, home / ".claude"):
+        assert not list(base.glob("*.bak.*")), f"unexpected .bak sibling in {base}"
+        assert not list(base.glob("*.tmp.*")), f"unexpected .tmp sibling in {base}"
+
+
+def test_uninstall_dry_run_duplicated_blocks_no_raise_no_write(
+    home: Path, project: Path
+) -> None:
+    """SM-7a: dry-run must not raise on the duplicated-block state healed by
+    plan 19.1-01 — and must not write the healed file or a .bak sibling."""
+    from supamem.install.claude_code import uninstall
+
+    duplicated = _duplicated_claude_md()
+    (home / "CLAUDE.md").write_text(duplicated, encoding="utf-8")
+
+    uninstall(dry_run=True)  # must NOT raise ValueError
+
+    assert (home / "CLAUDE.md").read_text(encoding="utf-8") == duplicated
+    assert not list(home.glob("CLAUDE.md.bak.*"))
+
+
+def test_uninstall_real_still_strips_after_dry_run(home: Path, project: Path) -> None:
+    """SM-7a Test 5: a real uninstall on the same fixture still strips —
+    the dry-run pass did not consume or alter installer state."""
+    from supamem.install.claude_code import install, uninstall
+
+    install()
+    uninstall(dry_run=True)  # no-op pass
+    uninstall()  # real pass
+
+    project_raw = json.loads((project / ".mcp.json").read_text(encoding="utf-8"))
+    assert "supamem" not in project_raw.get("mcpServers", {})
+    body = (home / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "BEGIN SUPAMEM" not in body
+    assert "dual-memory.md" not in body

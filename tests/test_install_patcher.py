@@ -149,3 +149,74 @@ def test_repair_invokes_patcher(
     paths = [e["path"] for e in manifest["patches"]]
     assert str(agent_file) in paths
     assert "mcp__supamem__*" in agent_file.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# SM-7a/7b: repair --dry-run changes NOTHING (strict contract, research Q7)
+# ---------------------------------------------------------------------------
+
+
+def _tree_snapshot(root: Path) -> dict[str, tuple[bytes, int]]:
+    """Snapshot every file under ``root`` as (bytes, mtime_ns)."""
+    out: dict[str, tuple[bytes, int]] = {}
+    if not root.exists():
+        return out
+    for p in sorted(root.rglob("*")):
+        if p.is_file():
+            st = p.stat()
+            out[str(p)] = (p.read_bytes(), st.st_mtime_ns)
+    return out
+
+
+def test_repair_dry_run_changes_nothing_end_to_end(
+    fake_home: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """SM-7b e2e (strict Q7 contract): ``repair(client, dry_run=True)`` on a
+    fully-installed fixture changes NOTHING — every client target
+    byte-identical, share dir untouched, patch manifest content+mtime
+    unchanged, no model-fetch side effects, and the skip-note names the
+    skipped share-dir sync."""
+    cwd = tmp_path_factory.mktemp("workspace")
+    monkeypatch.chdir(cwd)
+    agent_file = _seed_patchable_agent(fake_home)
+    (fake_home / ".claude.json").write_text("{}", encoding="utf-8")
+
+    from supamem.install import install, repair
+
+    # Fully-installed fixture: a REAL install writes client files, patches
+    # the agent, and writes the patch manifest.
+    assert install(client="claude-code", skip_models=True) == 0
+    assert "mcp__supamem__*" in agent_file.read_text(encoding="utf-8")
+
+    targets = [
+        cwd / ".mcp.json",
+        fake_home / ".claude.json",
+        fake_home / ".claude" / "settings.json",
+        fake_home / "CLAUDE.md",
+        agent_file,
+    ]
+    manifest = _manifest_path(fake_home)
+    assert manifest.is_file()
+    before = {str(p): p.read_bytes() for p in targets}
+    manifest_before = (manifest.read_bytes(), manifest.stat().st_mtime_ns)
+    share_before = _tree_snapshot(fake_home / ".supamem")
+    assert share_before, "fixture sanity: real install must have synced the share dir"
+
+    capsys.readouterr()  # clear install output
+    rc = repair(client="claude-code", dry_run=True, skip_models=True)
+    assert rc == 0, f"dry-run repair exited non-zero: {rc}"
+
+    for p in targets:
+        assert p.read_bytes() == before[str(p)], f"dry-run repair modified {p}"
+    assert (manifest.read_bytes(), manifest.stat().st_mtime_ns) == manifest_before, (
+        "dry-run repair must not rewrite the patch manifest"
+    )
+    assert _tree_snapshot(fake_home / ".supamem") == share_before, (
+        "dry-run repair must not touch the share dir"
+    )
+    assert not list(cwd.glob("*.tmp.*"))
+    out = capsys.readouterr().out
+    assert "share-dir sync" in out, "dry-run must note the skipped share-dir sync"
