@@ -13,11 +13,11 @@ authors = [{ name = "dzmitrys-dev" }]
 dependencies = [
   "typer>=0.15,<0.26",
   "rich>=13.7",
-  "mcp>=1.13",
+  "mcp>=2,<3",
   "qdrant-client>=1.13",
   "ruamel.yaml>=0.18,<0.20",
   "fastembed>=0.5",
-  "pydantic>=2.5",
+  "pydantic>=2.12",
   "tomli-w>=1.0",
   "langchain-text-splitters>=0.3",
   "platformdirs>=4.2",

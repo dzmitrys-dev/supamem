@@ -14,7 +14,8 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.mcpserver import Context
+from mcp.server.mcpserver.exceptions import ToolError
 
 # Module-level helpers (NOT fixtures — they take args).
 from tests.conftest import _cfg_with_caps, _mock_backend_with_long_chunks
@@ -40,7 +41,7 @@ async def test_query_over_max_chars_rejects_via_validation_error() -> None:
     app = build_app(cfg)
     with pytest.raises(ToolError) as exc_info:
         await app._tool_manager.call_tool(
-            "dual_memory_search", {"query": "x" * 100, "top_k": 5}
+            "dual_memory_search", {"query": "x" * 100, "top_k": 5}, Context()
         )
     msg = str(exc_info.value).lower()
     assert "string_too_long" in msg or "at most 10" in msg, (
@@ -257,7 +258,7 @@ def test_cap_rejection_no_stdout_pollution(
     with pytest.raises(ToolError) as exc_info:
         asyncio.run(
             app._tool_manager.call_tool(
-                "dual_memory_search", {"query": "x" * 100, "top_k": 5}
+                "dual_memory_search", {"query": "x" * 100, "top_k": 5}, Context()
             )
         )
     # The rejection MUST come from the Pydantic max_length validator, not

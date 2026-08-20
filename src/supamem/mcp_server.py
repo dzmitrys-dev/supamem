@@ -1,13 +1,16 @@
-"""FastMCP server exposing ``dual_memory_search`` over stdio + Streamable HTTP.
+"""MCPServer exposing ``dual_memory_search`` over stdio + Streamable HTTP.
 
-Verified FastMCP API (mcp >= 1.13):
-    FastMCP(name, *, host="127.0.0.1", port=8000, ...)
-    FastMCP.run(transport: Literal["stdio","sse","streamable-http"]="stdio",
-                mount_path: str | None = None) -> None
+Verified MCP SDK v2 API (mcp >= 2, < 3):
+    MCPServer(name, ...)                     — identity only; no transport kwargs
+    MCPServer.run(transport: Literal["stdio","sse","streamable-http"]="stdio",
+                  **kwargs) -> None          — host/port ride here for HTTP transports
+                                             (e.g. run(transport="streamable-http",
+                                             host=..., port=...))
 
 Stdout discipline: this module MUST NOT emit anything on stdout at import or
 runtime — stdio is the MCP framing channel. All logs go to stderr (or to
-``MCP_LOG_FILE`` if set).
+``MCP_LOG_FILE`` if set). Defense in depth: SDK v2 additionally diverts
+fd 1 to stderr while serving.
 """
 from __future__ import annotations
 
@@ -269,7 +272,7 @@ _TOOL_DESCRIPTION = (
 
 
 def _register_dual_memory_tool(app: Any, config: ResolvedConfig) -> None:
-    """Register dual_memory_search + dual_memory_write (and aliases) on a FastMCP app.
+    """Register dual_memory_search + dual_memory_write (and aliases) on an MCPServer app.
 
     - title (spec ≥ 2025-03-26) — Cursor / Claude.ai web render this.
     - description — concise; renders in tool-picker UIs.
@@ -277,7 +280,7 @@ def _register_dual_memory_tool(app: Any, config: ResolvedConfig) -> None:
       backward compat with the upstream ``mcp-server-qdrant`` tool names.
       Disable with ``SUPAMEM_QDRANT_ALIASES=0``.
     """
-    from mcp.server.fastmcp.tools import Tool as _FastMCPTool  # noqa: F401  (typecheck only)
+    from mcp.server.mcpserver.tools import Tool as _FastMCPTool  # noqa: F401  (typecheck only)
 
     aliases_enabled = os.environ.get("SUPAMEM_QDRANT_ALIASES", "1").strip() not in ("0", "false", "")
 
@@ -460,10 +463,10 @@ def _register_dual_memory_tool(app: Any, config: ResolvedConfig) -> None:
 
 
 def build_app(config: ResolvedConfig) -> Any:
-    """Construct a FastMCP app with the dual_memory_search tool registered."""
-    from mcp.server.fastmcp import FastMCP
+    """Construct an MCPServer app with the dual_memory_search tool registered."""
+    from mcp.server.mcpserver import MCPServer
 
-    app = FastMCP("supamem", host="127.0.0.1", port=8765)
+    app = MCPServer("supamem")
     _register_dual_memory_tool(app, config)
     return app
 
@@ -481,12 +484,12 @@ def run_http(
     host: str = "127.0.0.1",
 ) -> None:
     """Streamable HTTP per Nov 2025 MCP spec (D-45)."""
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer
 
     log.info("starting supamem MCP server (streamable-http) on %s:%d", host, port)
-    app = FastMCP("supamem", host=host, port=port)
+    app = MCPServer("supamem")
     _register_dual_memory_tool(app, config)
-    app.run(transport="streamable-http")
+    app.run(transport="streamable-http", host=host, port=port)
 
 
 __all__ = [

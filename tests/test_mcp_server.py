@@ -176,39 +176,40 @@ def test_log_handlers_route_to_stderr_when_no_file(
 
 
 def test_run_stdio_calls_fastmcp_run(monkeypatch: pytest.MonkeyPatch) -> None:
-    """run_stdio must invoke FastMCP.run with transport='stdio'."""
+    """run_stdio must invoke MCPServer.run with transport='stdio'."""
     import supamem.mcp_server as mod
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer
 
     captured: dict[str, Any] = {}
 
-    def fake_run(self: FastMCP, *args: Any, **kwargs: Any) -> None:  # noqa: ARG001
+    def fake_run(self: MCPServer, *args: Any, **kwargs: Any) -> None:  # noqa: ARG001
         captured["args"] = args
         captured["kwargs"] = kwargs
         captured["transport"] = (
             kwargs.get("transport") if kwargs else (args[0] if args else None)
         )
 
-    monkeypatch.setattr(FastMCP, "run", fake_run)
+    monkeypatch.setattr(MCPServer, "run", fake_run)
     mod.run_stdio(_cfg())
     assert captured.get("transport") == "stdio"
 
 
 def test_run_http_uses_streamable_http_transport(monkeypatch: pytest.MonkeyPatch) -> None:
-    """run_http must invoke FastMCP.run with transport='streamable-http' (D-45)."""
+    """run_http must invoke MCPServer.run with transport='streamable-http' (D-45)."""
     import supamem.mcp_server as mod
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer
 
     captured: dict[str, Any] = {}
 
-    def fake_run(self: FastMCP, *args: Any, **kwargs: Any) -> None:  # noqa: ARG001
+    def fake_run(self: MCPServer, *args: Any, **kwargs: Any) -> None:  # noqa: ARG001
         captured["transport"] = (
             kwargs.get("transport") if kwargs else (args[0] if args else None)
         )
-        captured["host"] = self.settings.host
-        captured["port"] = self.settings.port
+        captured["host"] = kwargs.get("host")
+        captured["port"] = kwargs.get("port")
 
-    monkeypatch.setattr(FastMCP, "run", fake_run)
+    monkeypatch.setattr(MCPServer, "run", fake_run)
     mod.run_http(_cfg(), port=8765, host="127.0.0.1")
     assert captured.get("transport") == "streamable-http"
+    assert captured.get("host") == "127.0.0.1"
     assert captured.get("port") == 8765
