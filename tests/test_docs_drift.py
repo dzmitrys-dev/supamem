@@ -5,7 +5,9 @@ Two contracts:
 1. ``llms.txt`` mentions every public env var, config key, and MCP-surface
    change (AGENTS.md mandate). Phase 5 added the ``[supamem.mcp.caps]``
    keys; Phase 8 adds the ``supamem.reranker`` entry-point group, the
-   ``--skip-models`` flag, and the ``SUPAMEM_CACHE_DIR`` env var.
+   ``--skip-models`` flag, and the ``SUPAMEM_CACHE_DIR`` env var;
+   Phase 19 adds the MCP SDK 2.x (``MCPServer``) note and the
+   ``[supamem.mcp]`` ``response_format`` / ``cache_ttl_ms`` config keys.
 
 2. ``README.md`` + the 4 translations stay in lockstep — the
    ``synced-with: README.md @ <sha>`` marker on line 2 of each
@@ -74,6 +76,22 @@ def test_llms_txt_mentions_phase8_surface() -> None:
     ):
         assert needle in content, (
             f"llms.txt must reference '{needle}' (Phase 8 public surface — "
+            f"AGENTS.md llms.txt mandate)"
+        )
+
+
+def test_llms_txt_mentions_phase19_surface() -> None:
+    """Phase 19 — MCP SDK 2.x + response-format/cache public surface MUST
+    be advertised."""
+    content = (REPO_ROOT / "llms.txt").read_text(encoding="utf-8")
+
+    for needle in (
+        "response_format",
+        "cache_ttl_ms",
+        "MCPServer",
+    ):
+        assert needle in content, (
+            f"llms.txt must reference '{needle}' (Phase 19 public surface — "
             f"AGENTS.md llms.txt mandate)"
         )
 
