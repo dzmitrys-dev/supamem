@@ -45,7 +45,13 @@ def test_install_writes_project_mcp_json_by_default(home: Path, project: Path) -
     raw = json.loads(project_mcp.read_text(encoding="utf-8"))
     assert "mcpServers" in raw
     assert "supamem" in raw["mcpServers"]
-    assert raw["mcpServers"]["supamem"]["command"] == "supamem"
+    # SM-8: which-resolved absolute command (bare-name fallback) — assert
+    # which-equivalence, never a hardcoded absolute path.
+    import shutil as _shutil
+
+    assert raw["mcpServers"]["supamem"]["command"] == (
+        _shutil.which("supamem") or "supamem"
+    )
     assert "mcp-server" in raw["mcpServers"]["supamem"]["args"]
     # Global file must NOT be touched.
     assert not (home / ".claude.json").exists()

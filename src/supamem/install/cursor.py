@@ -27,12 +27,25 @@ log = logging.getLogger("supamem.install.cursor")
 
 
 def _mcp_supamem_entry(cwd: Path) -> dict[str, Any]:
-    """Cursor MCP stanza — inject SUPAMEM_PROJECT_ROOT when bootstrapped in-repo."""
+    """Cursor MCP stanza — robust form (SM-8, Option A).
+
+    Emits the ``shutil.which``-resolved absolute command (bare-name fallback
+    when unresolvable) so PATH quirks in the host's spawn environment cannot
+    silently break the server, and pins BOTH ``SUPAMEM_PROJECT_ROOT`` and
+    ``SUPAMEM_CONFIG`` when bootstrapped in a repo with
+    ``.supamem/config.toml`` — the config pin prevents accidental-parent
+    discovery from resolving the WRONG workspace config on multi-project
+    machines. Re-running install/repair re-resolves the path (staleness on
+    tool-dir migration fails LOUD, vs the bare-name silent-wrong-collection
+    failure; documented tradeoff per research Pitfall 8).
+    """
     env: dict[str, str] = {"DM_MCP_SOURCE": "mcp_cursor"}
-    if (cwd / ".supamem" / "config.toml").is_file():
+    cfg = cwd / ".supamem" / "config.toml"
+    if cfg.is_file():
         env["SUPAMEM_PROJECT_ROOT"] = str(cwd.resolve())
+        env["SUPAMEM_CONFIG"] = str(cfg.resolve())
     return {
-        "command": "supamem",
+        "command": shutil.which("supamem") or "supamem",
         "args": ["mcp-server", "--transport", "stdio"],
         "env": env,
     }

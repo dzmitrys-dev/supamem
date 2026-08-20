@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 from pathlib import Path
 from time import time_ns
 from typing import Any
@@ -37,21 +38,25 @@ CLAUDE_MD_IMPORT_LINE = "@~/.supamem/share/rules/dual-memory.md"
 
 
 def _mcp_supamem_entry(cwd: Path) -> dict[str, Any]:
-    """Claude Code MCP stanza — inject SUPAMEM_PROJECT_ROOT when bootstrapped in-repo.
+    """Claude Code MCP stanza — robust form (SM-8, Option A; cursor twin).
 
-    Mirrors ``cursor._mcp_supamem_entry``: when the user runs
-    ``supamem install --client claude-code`` from a directory containing
-    ``.supamem/config.toml``, the absolute workspace path is wired into the
-    MCP server entry's ``env`` block so Claude Code's MCP subprocess resolves
-    the workspace's collection regardless of cwd. Without this, the global
-    ``~/.claude.json`` mcpServers entry has no way to point at *this* project
-    on a multi-project machine — every install overwrites the prior one.
+    Mirrors ``cursor._mcp_supamem_entry``: ``shutil.which``-resolved absolute
+    command (bare-name fallback when unresolvable) plus the
+    ``SUPAMEM_PROJECT_ROOT`` / ``SUPAMEM_CONFIG`` pair when bootstrapped in
+    a directory containing ``.supamem/config.toml``, so the global
+    ``~/.claude.json`` mcpServers entry resolves THIS project's workspace
+    and its config regardless of cwd or PATH quirks. Without the root pin,
+    every install overwrites the prior one on a multi-project machine; the
+    config pin prevents accidental-parent discovery resolving the wrong
+    workspace config.
     """
     env: dict[str, str] = {"DM_MCP_SOURCE": "mcp_claude_code"}
-    if (cwd / ".supamem" / "config.toml").is_file():
+    cfg = cwd / ".supamem" / "config.toml"
+    if cfg.is_file():
         env["SUPAMEM_PROJECT_ROOT"] = str(cwd.resolve())
+        env["SUPAMEM_CONFIG"] = str(cfg.resolve())
     return {
-        "command": "supamem",
+        "command": shutil.which("supamem") or "supamem",
         "args": ["mcp-server", "--transport", "stdio"],
         "env": env,
     }
