@@ -228,6 +228,12 @@ def doctor_report(current_version: str) -> dict[str, Any]:
     age a first-class field computed where the cache is read — the single
     source of truth for doctor's render AND the session-start banner (the
     banner ignores both keys; it acts on ``update_available`` only).
+
+    WR-11: ``stale_reason`` says WHICH of the three staleness causes applies —
+    ``"no-cache"``, ``"rate-limited"``, ``"expired"``, or ``None`` when fresh —
+    so the render never has to infer a cause from the age it happens to have.
+    ``backoff_until_ts`` is exposed alongside it so the render can name the
+    time the rate-limit window ends.
     """
     cache = _read_cache()
     now = time.time()
@@ -242,11 +248,23 @@ def doctor_report(current_version: str) -> dict[str, Any]:
     # Absence of knowledge is not freshness: no cache, age ≥ TTL, or an
     # active rate-limit backoff window all mean the data cannot support a
     # "on latest" claim.
-    stale = (
-        cache is None
-        or cache_age_seconds >= DEFAULT_TTL_SECONDS
-        or bool(cache.backoff_until_ts and now < cache.backoff_until_ts)
-    )
+    #
+    # WR-11: report WHICH of the three it is. Doctor's render only knew how to
+    # talk about age, with an `or 1` fallback that fabricated a number — so a
+    # two-minute-old cache inside a 6-hour GitHub backoff was announced as
+    # "cache stale (1 day old)", hiding the actual cause for the whole window
+    # (refresh_stale_cache correctly no-ops during backoff, so the wrong
+    # message persisted). The reason belongs here, where the cache is read.
+    rate_limited = bool(cache and cache.backoff_until_ts and now < cache.backoff_until_ts)
+    if cache is None:
+        stale_reason: str | None = "no-cache"
+    elif rate_limited:
+        stale_reason = "rate-limited"
+    elif cache_age_seconds is not None and cache_age_seconds >= DEFAULT_TTL_SECONDS:
+        stale_reason = "expired"
+    else:
+        stale_reason = None
+    stale = stale_reason is not None
     return {
         "current_version": current_version,
         "cached_latest_version": cache.latest_version if cache else None,
@@ -256,6 +274,8 @@ def doctor_report(current_version: str) -> dict[str, Any]:
         "suppressed_by_env": suppressed_by,
         "stderr_is_tty": _safe_isatty(),
         "stale": stale,
+        "stale_reason": stale_reason,
+        "backoff_until_ts": cache.backoff_until_ts if cache else None,
         "cache_age_seconds": cache_age_seconds,
     }
 

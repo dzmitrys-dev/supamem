@@ -50,6 +50,47 @@ def _client_targets() -> tuple[tuple[str, Path], ...]:
 # printed "run supamem repair" for a state repair could not change (CR-03).
 
 
+def _spec_present(name: str) -> bool | None:
+    """Is module ``name`` importable? ``None`` when the probe itself failed.
+
+    WR-12: ``importlib.util.find_spec`` is not a total function. It raises
+    ``ValueError`` when the named module is already in ``sys.modules`` with
+    ``__spec__ is None`` (a real state for namespace shims, some editable
+    installs, and test monkeypatching) and can raise ``ImportError`` from a
+    broken parent ``__init__``. Every other probe in ``_render_coderag_panel``
+    is guarded; these two were not, and the panel is called unguarded from
+    ``run_doctor`` — so "present but weird" aborted the entire doctor run,
+    including every section after it. SM-3's whole point was to tell "absent"
+    apart from "present but broken"; crashing is the wrong third answer.
+    """
+    import importlib.util  # noqa: PLC0415
+
+    try:
+        return importlib.util.find_spec(name) is not None
+    except Exception:  # noqa: BLE001 — a broken module is not a doctor crash
+        return None
+
+
+def _format_cache_age(seconds: float | None) -> str:
+    """Human age for the update-check cache, clamped at zero (WR-11).
+
+    Sub-day ages get hour granularity instead of being rounded to a fabricated
+    "1 day", and a future timestamp from clock skew reads "just now" rather
+    than "-1 days old".
+    """
+    secs = max(0.0, float(seconds or 0.0))
+    days = int(secs // 86400)
+    if days >= 1:
+        return f"{days} day{'s' if days != 1 else ''} old"
+    hours = int(secs // 3600)
+    if hours >= 1:
+        return f"{hours} hour{'s' if hours != 1 else ''} old"
+    minutes = int(secs // 60)
+    if minutes >= 1:
+        return f"{minutes} minute{'s' if minutes != 1 else ''} old"
+    return "just now"
+
+
 def _redact(value: str, *, enabled: bool) -> str:
     if not enabled:
         return value
@@ -507,7 +548,6 @@ def _render_coderag_panel() -> None:
         operator visibility (Plan 15-D Task D1 INV-A2).
     """
     from importlib import resources as _resources  # noqa: PLC0415
-    import importlib.util  # noqa: PLC0415
     import json as _json  # noqa: PLC0415
 
     from platformdirs import user_cache_dir  # noqa: PLC0415
@@ -519,7 +559,10 @@ def _render_coderag_panel() -> None:
     # SM-3 (Phase 19.1): find_spec distinguishes "optional extra absent"
     # (info — expected on a base install) from "present but broken" (warn —
     # actionable), mirroring the RAGAS availability fork above.
-    if importlib.util.find_spec("pytrec_eval") is None:
+    pytrec_present = _spec_present("pytrec_eval")
+    if pytrec_present is None:
+        warn("pytrec_eval      probe failed — module present but unimportable")
+    elif pytrec_present is False:
         # \\[ — Rich markup escape so the literal "[eval]" renders.
         info("pytrec_eval      = not installed (pip install supamem\\[eval])")
     else:
@@ -533,7 +576,10 @@ def _render_coderag_panel() -> None:
             warn(f"coderag ingest module probe failed: {type(exc).__name__}: {exc}")
 
     # 2. mem0 peer collection (Plan 15-D D1 INV-A2: distinct collection).
-    if importlib.util.find_spec("mem0") is None:
+    mem0_present = _spec_present("mem0")
+    if mem0_present is None:
+        warn("mem0             probe failed — module present but unimportable")
+    elif mem0_present is False:
         info("mem0             = not installed (pip install supamem\\[peers-mem0])")
     else:
         try:
@@ -1156,12 +1202,29 @@ def run_doctor(*, redact_secrets: bool = True) -> int:
         # from stale data).
         ok(f"on latest cached version v{cached} (last check: {last_human})")
     elif cached:
-        age_days = int((uc.get("cache_age_seconds") or 0) // 86400) or 1
-        plural = "s" if age_days != 1 else ""
-        info(
-            f"cache stale ({age_days} day{plural} old) — cannot confirm "
-            f"latest; last seen v{cached}"
-        )
+        # WR-11: `stale` has three distinct causes and this branch only knew
+        # how to talk about age — with an `or 1` fallback that FABRICATED the
+        # number. During a 6h GitHub backoff a two-minute-old cache was
+        # announced as "cache stale (1 day old)", hiding the real cause; and
+        # negative cache_age_seconds from clock skew rendered "-1 days old".
+        # Branch on the reason the cache reader computed instead.
+        reason = uc.get("stale_reason")
+        if reason == "rate-limited":
+            until = uc.get("backoff_until_ts")
+            until_human = (
+                time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(until))
+                if until
+                else "shortly"
+            )
+            info(
+                f"rate-limited by GitHub until {until_human} — cannot confirm "
+                f"latest; last seen v{cached}"
+            )
+        else:
+            info(
+                f"cache stale ({_format_cache_age(uc.get('cache_age_seconds'))}) "
+                f"— cannot confirm latest; last seen v{cached}"
+            )
     else:
         info(f"no probe yet — runs in background on next invocation (cache: {uc['cache_path']})")
     if uc.get("suppressed_by_env"):
