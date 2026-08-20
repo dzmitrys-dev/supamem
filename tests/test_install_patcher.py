@@ -8,6 +8,7 @@ manifest state.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -240,3 +241,132 @@ def test_repair_dry_run_changes_nothing_end_to_end(
     assert not list(cwd.glob("*.tmp.*"))
     out = capsys.readouterr().out
     assert "share-dir sync" in out, "dry-run must note the skipped share-dir sync"
+
+
+# ---------------------------------------------------------------------------
+# SM-7c: truthful accounting + phrasing (dry-run predicts the real run)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def project(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> Path:
+    """Sandbox cwd so project-scope install writes never escape tmp."""
+    cwd = tmp_path_factory.mktemp("workspace")
+    monkeypatch.chdir(cwd)
+    return cwd
+
+
+def _parse_count(out: str, pattern: str) -> int:
+    m = re.search(pattern, out)
+    assert m, f"pattern {pattern!r} not found in output:\n{out}"
+    return int(m.group(1))
+
+
+def _seed_claude_fixture(fake_home: Path) -> None:
+    _seed_patchable_agent(fake_home)
+    (fake_home / ".claude.json").write_text("{}", encoding="utf-8")
+
+
+def test_dry_run_count_equals_real_run_writes_install(
+    fake_home: Path,
+    project: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """SM-7c accounting invariant (install path): the dry-run would-write
+    count derives from the same diff accounting the real run uses — on an
+    identical fixture, dry-run count == files the real run writes, and the
+    patcher's would-patch count == the real run's patched count."""
+    from supamem.install import install
+
+    _seed_claude_fixture(fake_home)
+
+    capsys.readouterr()
+    assert install(client="claude-code", dry_run=True, skip_models=True) == 0
+    dry_out = capsys.readouterr().out
+    would_write = _parse_count(dry_out, r"would write (\d+) file\(s\)")
+    would_patch = _parse_count(dry_out, r"would patch (\d+) subagent file\(s\)")
+    # Dry-run wrote nothing.
+    assert not _manifest_path(fake_home).exists()
+    for p in (project / ".mcp.json", fake_home / ".claude" / "settings.json"):
+        assert not p.exists()
+
+    capsys.readouterr()
+    assert install(client="claude-code", skip_models=True) == 0
+    real_out = capsys.readouterr().out
+    wrote = _parse_count(real_out, r"installed \((\d+) file\(s\) written\)")
+    patched = _parse_count(real_out, r"patched (\d+) subagent file\(s\)")
+
+    assert would_write == wrote, (
+        f"dry-run predicted {would_write} writes, real run wrote {wrote}"
+    )
+    assert would_patch == patched
+
+
+def test_dry_run_count_equals_real_run_writes_repair(
+    fake_home: Path,
+    project: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """SM-7c accounting invariant (repair path): the dry-run strip-and-
+    reinstall prediction equals the real repair's reinstall write count on
+    an identical healthy fixture."""
+    from supamem.install import install, repair
+
+    _seed_claude_fixture(fake_home)
+    assert install(client="claude-code", skip_models=True) == 0  # healthy fixture
+
+    capsys.readouterr()
+    assert repair(client="claude-code", dry_run=True, skip_models=True) == 0
+    dry_out = capsys.readouterr().out
+    would_rewrite = _parse_count(dry_out, r"would rewrite (\d+) file\(s\)")
+
+    capsys.readouterr()
+    assert repair(client="claude-code", skip_models=True) == 0
+    real_out = capsys.readouterr().out
+    wrote = _parse_count(real_out, r"installed \((\d+) file\(s\) written\)")
+
+    assert would_rewrite == wrote, (
+        f"dry-run repair predicted {would_rewrite} rewrites, real repair reinstalled {wrote}"
+    )
+
+
+def test_dry_run_phrasing_never_claims_performed_work(
+    fake_home: Path,
+    project: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """SM-7c phrasing: dry-run output contains NO ✓-glyph past-tense work
+    claims; detected patchable files render as 'would patch'."""
+    from supamem.install import install
+
+    _seed_claude_fixture(fake_home)
+
+    capsys.readouterr()
+    install(client="claude-code", dry_run=True, skip_models=True)
+    dry_out = capsys.readouterr().out
+
+    assert "✓" not in dry_out, f"dry-run output must not claim performed work:\n{dry_out}"
+    assert "would patch 1 subagent file(s)" in dry_out
+
+
+def test_real_run_idempotent_second_pass_renders_info_not_ok(
+    fake_home: Path,
+    project: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """SM-7c phrasing: a second REAL install with zero new patch work
+    renders covered files as info ('already reachable'), never a
+    ✓-patched claim."""
+    from supamem.install import install
+
+    _seed_claude_fixture(fake_home)
+
+    install(client="claude-code", skip_models=True)
+    capsys.readouterr()
+    install(client="claude-code", skip_models=True)
+    second_out = capsys.readouterr().out
+
+    assert "✓ patched" not in second_out
+    assert "1 subagent file(s) already reachable" in second_out

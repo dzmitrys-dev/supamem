@@ -215,6 +215,64 @@ def test_patch_all_idempotent_second_run(home: Path) -> None:
     assert mtimes_before == mtimes_after, "idempotent run must not rewrite files"
 
 
+# ---------------------------------------------------------------------------
+# patch_all(dry_run=…) — SM-7b: full detection pass, zero writes
+# ---------------------------------------------------------------------------
+
+
+def test_patch_all_dry_run_detects_without_writing(home: Path) -> None:
+    """SM-7b: ``patch_all(dry_run=True)`` runs the FULL detection pass —
+    would-patch count equals the patchable files — but writes no agent file
+    and no manifest. Detection semantics are unchanged by the flag."""
+    mod = _reload_patcher()
+    global_dir = home / ".claude" / "agents"
+    paths = _populate(
+        global_dir,
+        ["csv-patchable.md", "block-list-patchable.md", "csv-covered.md"],
+    )
+    originals = {p.name: p.read_bytes() for p in paths}
+    mtimes = {p.name: p.stat().st_mtime_ns for p in paths}
+
+    dry = mod.patch_all(skip=False, dry_run=True)
+
+    # Same detection outcome as a real run (Pitfall 7): 2 patchable, 1 covered.
+    assert len(dry.would_patch) == 2
+    assert len(dry.covered) == 1
+    assert dry.patched == []
+    # Zero writes: files byte+mtime identical, manifest absent.
+    for p in paths:
+        assert p.read_bytes() == originals[p.name]
+        assert p.stat().st_mtime_ns == mtimes[p.name]
+    assert not mod.manifest_path().exists()
+
+    # The subsequent REAL run on the identical fixture patches exactly the
+    # would-patch set (dry-run did not consume or alter detection state).
+    real = mod.patch_all(skip=False)
+    assert {e.path for e in real.patched} == {e.path for e in dry.would_patch}
+    assert len(real.patched) == 2
+
+
+def test_patch_all_dry_run_leaves_existing_manifest_unchanged(home: Path) -> None:
+    """SM-7b: an existing manifest's content AND mtime survive a dry-run that
+    detects new patchable files (nothing is persisted under the no-op flag)."""
+    mod = _reload_patcher()
+    global_dir = home / ".claude" / "agents"
+    _populate(global_dir, ["csv-patchable.md"])
+    mod.patch_all(skip=False)  # real run → manifest written
+    manifest_p = mod.manifest_path()
+    assert manifest_p.is_file()
+    before = (manifest_p.read_bytes(), manifest_p.stat().st_mtime_ns)
+
+    # A new patchable file appears after the last real run.
+    _populate(global_dir, ["block-list-patchable.md"])
+    summary = mod.patch_all(skip=False, dry_run=True)
+
+    assert len(summary.would_patch) == 1
+    assert (manifest_p.read_bytes(), manifest_p.stat().st_mtime_ns) == before, (
+        "dry-run must not rewrite the patch manifest"
+    )
+
+
 def test_patch_all_handles_vanished_file_with_one_retry(
     home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

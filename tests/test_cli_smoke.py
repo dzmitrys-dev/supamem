@@ -624,3 +624,14 @@ def test_doctor_never_claims_latest_from_stale_cache(tmp_path) -> None:
     assert "✓ on latest cached version" not in out, out
     assert "cache stale" in out, out
     assert "cannot confirm latest" in out, out
+
+
+def test_skip_patch_agents_help_names_both_agent_scopes() -> None:
+    """SM-7d: --skip-patch-agents help (install/repair/init) and the
+    unpatch-agents docstring name BOTH agent scopes — the patcher scans
+    ~/.claude/agents/ AND <project>/.claude/agents/."""
+    needle = "~/.claude/agents/ and <project>/.claude/agents/"
+    for sub in ("install", "repair", "init", "unpatch-agents"):
+        r = _run(sub, "--help")
+        assert r.returncode == 0, f"stderr: {r.stderr}"
+        assert needle in r.stdout, f"{sub} --help missing dual-scope text:\n{r.stdout}"
