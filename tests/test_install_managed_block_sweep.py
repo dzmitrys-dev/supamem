@@ -9,7 +9,13 @@ on healthy input.
 """
 from __future__ import annotations
 
-from supamem.config_io import sweep_managed_blocks, wrap_managed_block
+import pytest
+
+from supamem.config_io import (
+    extract_managed_block,
+    sweep_managed_blocks,
+    wrap_managed_block,
+)
 
 IMPORT_LINE = "@~/.supamem/share/rules/dual-memory.md"
 PREFIX = "# My personal instructions\n\nUse concise answers.\n"
@@ -51,3 +57,32 @@ def test_sweep_zero_blocks_is_byte_level_noop() -> None:
     healed, removed = sweep_managed_blocks(text, version="0.4.0a2")
     assert removed == 0
     assert healed == text
+
+
+def test_sweep_is_idempotent() -> None:
+    """SM-4b: sweep(sweep(text)) is a fixed point — second call returns the
+    same output and count 0."""
+    text = _two_block_fixture()
+    once, removed_1 = sweep_managed_blocks(text, version="0.4.0a2")
+    twice, removed_2 = sweep_managed_blocks(once, version="0.4.0a2")
+    assert removed_1 == 1
+    assert removed_2 == 0
+    assert twice == once
+
+
+def test_sweep_preserves_lines_between_duplicate_fences() -> None:
+    """Non-block lines BETWEEN the two duplicate fences survive verbatim."""
+    between = "keep line one\nkeep line two\n"
+    old = wrap_managed_block(IMPORT_LINE, version="0.2.0")
+    new = wrap_managed_block(IMPORT_LINE, version="0.3.0a7")
+    text = f"{PREFIX}{old}\n{between}\n{new}{SUFFIX}"
+    healed, removed = sweep_managed_blocks(text, version="0.4.0a2")
+    assert removed == 1
+    assert between in healed
+
+
+def test_extract_still_raises_on_raw_two_block_fixture() -> None:
+    """Belt-and-braces alongside tests/test_config_io.py:122 — the strict
+    tripwire remains reachable on the unhealed field-report replica."""
+    with pytest.raises(ValueError, match="multiple BEGIN SUPAMEM markers"):
+        extract_managed_block(_two_block_fixture())
