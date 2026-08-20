@@ -2,6 +2,72 @@
 
 All notable changes to `supamem` will be documented in this file.
 
+## [0.4.0a1] — 2026-08-20 — MCP SDK 2.x migration + response token efficiency (Phase 19)
+
+Phase 19 migrates the MCP server onto the official MCP SDK v2 server
+class and halves measured tool-response tokens via single-arm
+`CallToolResult` returns, with two new `[supamem.mcp]` config keys
+(`response_format`, `cache_ttl_ms`) and an offline MCP-response token
+instrument backing every number below. No retrieval-stack code changed
+in Phase 19 — all levers are serialization/config-layer, so recall /
+MRR / nDCG / latency bench metrics are definitionally unchanged
+(coderag floors N/A: `git diff aedd10f..HEAD -- src/supamem/retrieval
+src/supamem/eval/runner.py` is empty).
+
+### Changed
+
+- **Migration to the official MCP SDK v2 server class (`MCPServer`).**
+  The dependency pin moves from the unbounded `mcp>=1.13` (which broke
+  fresh installs by resolving mcp 2.x against v1-only import paths) to
+  `mcp>=2,<3` (resolved: mcp 2.0.0; transitives httpx2 2.12.0,
+  opentelemetry-api 1.44.0, mcp-types 2.0.0). Constructors are
+  identity-only (`MCPServer("supamem")`); transport kwargs (`host`,
+  `port`) move to `run(transport="streamable-http", ...)`. The pydantic
+  floor is raised `>=2.5` → `>=2.12` (resolved 2.13.3). 2025-era
+  clients keep working — v2 serves every earlier protocol revision.
+  Cited Plans 19-01.
+- **Behavior change — tool `TextContent` now carries the compact
+  Markdown summary card** (🧠 search summary / write confirmation)
+  instead of the full pretty-printed JSON the v1 SDK appended to every
+  tool result. `structuredContent` remains the complete canonical
+  payload (unchanged shape) — hosts or programmatic consumers relying
+  on the old full-JSON `TextContent` arm must read `structuredContent`
+  (RESEARCH Open Question 5 disclosure). Applies to all four
+  registered tools (`dual_memory_search`, `dual_memory_write`,
+  `qdrant_find`, `qdrant_store`). Cited Plan 19-03.
+- **Measured response-token delta (Phase 19 instrument,
+  `supamem.eval.mcp_response_tokens` — fixed 10-query workload over
+  top_k=5 responses, 3 runs, deterministic corpus, p50 est. tokens):**
+  total 3418 → 1712 (0.501×) by default; 1456 (0.426×) with
+  `response_format = "concise"`; text arm 1728 → 22 (0.013×);
+  structured arm byte-identical at 1690 (default mode). Baseline from
+  19-BASELINE.json (pre-lever double-arm shape, sanity-banded per
+  RESEARCH §2.2). Cited Plans 19-02, 19-03.
+
+### Added
+
+- **`[supamem.mcp] response_format = "concise" | "detailed"`** (default
+  `"detailed"` — byte-identical responses; `"concise"` empties the
+  display-only `preview` fields while every `Chunk.text` remains fully
+  intact). Fail-closed `load_config` enum gate; ConfigChain mirror;
+  shipped defaults block in `share/default.toml`. Cited Plan 19-03.
+- **`[supamem.mcp] cache_ttl_ms`** (default `0` = off; negative values
+  exit 2 at config load). When > 0, `tools/list` responses carry
+  SEP-2549 cache hints (honored by 2026-era clients) via the SDK's
+  per-method constructor map — `tools/call` results are never cached
+  (the installed mcp 2.0.0 exposes no per-result stamping surface), so
+  write-then-read visibility is always preserved. Cited Plan 19-03.
+- **MCP-response token instrument** (`supamem.eval.mcp_response_tokens`
+  module + `python -m` CLI): measures the serialized `CallToolResult`
+  wire shape (both content arms) through the same SDK tool-manager
+  layer hosts use, with a locked percentile contract (p50 = median,
+  p95 = nearest-rank) and an injectable offline backend. Cited Plan
+  19-02.
+- **Unconditional `file_path` dedup on search results** — `file_path`
+  is set to `null` when it duplicates `source` (the path survives in
+  `source`); applies in both response_format modes (~2.6% smaller
+  payloads). Cited Plan 19-03.
+
 ## [0.3.0a7] — 2026-05-11 — AST chunker + HyDE retrieval (opt-in plugins) + ADR §9 uplift (Phase 17)
 
 Phase 17 ships two **opt-in** retrieval-stack plugins (AST chunker for
