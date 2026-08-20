@@ -483,6 +483,20 @@ def _apply_nested(
             if src_key in sub:
                 setattr(cfg, dst_field, sub[src_key])
                 setattr(chain, dst_field, source)
+        if sub_key == "eval":
+            # Phase 19.1 SM-1b — the flat ``regress_baseline_*`` names doctor
+            # prints apply to their canonical fields (mirrors the explicit
+            # ``_SCALAR_ALIASES`` mechanism; scoped to the eval table only —
+            # no general nested-alias machinery). Canonical spelling wins
+            # when both forms are present. Runs BEFORE the unknown-key diff
+            # so alias keys count as known.
+            for alias_key, canonical_key in _EVAL_ALIASES.items():
+                dst_field = field_map.get(canonical_key)
+                if dst_field is None:
+                    continue
+                if alias_key in sub and canonical_key not in sub:
+                    setattr(cfg, dst_field, sub[alias_key])
+                    setattr(chain, dst_field, source)
         known = set(field_map) | _child_table_keys(sub_key)
         if sub_key == "eval":
             known |= set(_EVAL_ALIASES)
