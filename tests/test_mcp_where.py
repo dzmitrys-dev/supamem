@@ -96,9 +96,13 @@ async def test_alias_threads_where_to_backend(
     fake_backend: MagicMock,
 ) -> None:
     """qdrant_find alias delegates to dual_memory_search with where intact."""
+    from mcp.server.mcpserver import Context
+
     app = build_app(_cfg())
     await app._tool_manager.call_tool(  # type: ignore[attr-defined]
-        "qdrant_find", {"query": "x", "top_k": 5, "where": {"room": "backend"}}
+        "qdrant_find",
+        {"query": "x", "top_k": 5, "where": {"room": "backend"}},
+        Context(),
     )
     kwargs = fake_backend.query.call_args.kwargs
     assert kwargs.get("where") == {"room": "backend"}
