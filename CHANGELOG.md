@@ -96,6 +96,64 @@ definitionally unchanged (coderag floors N/A).
   locks the pin so future edits cannot silently unpin it. Cited Plan
   19.1-06.
 
+### Fixed (post-review hardening)
+
+A deep code review of the Phase 19.1 changes ran before this tag was
+cut. Two of its findings are defects **live in the published 0.4.0a1**;
+the rest were regressions introduced by the SM fixes above and caught
+before release.
+
+- **A file that merely *documents* supamem no longer bricks `install`,
+  `uninstall`, and `repair` (live in 0.4.0a1).** `extract_managed_block`
+  aborted on the count of unpaired `BEGIN SUPAMEM` markers while
+  `sweep_managed_blocks` healed only complete `BEGIN/END` pairs, and
+  neither pattern was line-anchored. One prose sentence quoting the
+  marker plus one real installed block therefore raised
+  `ValueError: multiple BEGIN SUPAMEM markers found in text` on all
+  three verbs, and the documented remedy (`supamem repair`) reported
+  zero duplicates to heal. Marker detection is now one shared grammar
+  in which a `BEGIN/END` pair is the smallest well-formed region.
+- **`repair --client cursor` no longer destroys a generator-managed
+  `.cursor/rules/*.mdc` (live in 0.4.0a1).** `install` correctly
+  refused to overwrite a file another generator owns, but the
+  `uninstall` half of `repair` unlinked it unconditionally — no guard,
+  no backup, no warning — after which the reinstall wrote the packaged
+  copy over it. The generated-marker guard now covers the removal side
+  as well, and the write path takes a `.bak` twin like every sibling
+  target.
+- **`doctor` no longer reports phantom duplicate managed blocks.** Its
+  block counter matched bare marker *mentions* rather than fences
+  (despite a comment claiming parity with `config_io`), so a prose
+  mention drove `drift`, exit 1, and a "run supamem repair" hint that
+  could not clear it. It now uses the shared `count_managed_blocks`.
+- **A config typo can no longer break CLI or MCP startup.** Unknown
+  key *names* were interpolated into Rich markup unescaped, so a key
+  such as `"[/bold]"` raised `MarkupError` out of `load_config()` — the
+  one thing SM-1 promised could never happen — and `"[bold]typo"`
+  rendered with the offending name swallowed. User-supplied keys are
+  now escaped, and the warning fires once per load rather than twice.
+- **`__version__` now matches the version `pyproject.toml` ships.** It
+  was left at `0.4.0a1`, with nothing tying the two together. Because
+  the update check compares `__version__` against the newest release
+  tag, every user already running 0.4.0a2 would have been told an
+  update was available, permanently. A parity guard now locks them.
+- Also fixed: `repair`/`uninstall` no longer rewrite and back up
+  third-party JSON config purely to normalize whitespace;
+  `--dry-run` says "would sweep" instead of claiming "swept"; the
+  duplicate-block sweep dedups whole blocks rather than lines;
+  `doctor`'s optional-extra probe and cache-age reporting no longer
+  crash or fabricate an age; the SM-4d duplicate check inspects the
+  `AGENTS.md` the opencode installer actually writes; and the SM-5
+  install-pin guard also catches upgrade-form commands.
+
+### Changed
+
+- **`sweep_managed_blocks` removes orphaned `BEGIN`/`END` marker lines**
+  left behind by an interrupted upgrade. Surrounding user text is
+  preserved, and the managed-block file paths take a `.bak` twin before
+  healing — but supamem now deletes its own stray fence markers from a
+  file you own, which it previously left in place.
+
 ### Added
 
 - **`--force-cursor-rules`** on `supamem install` and `supamem repair`
