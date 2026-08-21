@@ -439,7 +439,7 @@ def _render_eval_bench_panel() -> None:
         if RAGAS_AVAILABLE:
             ok("ragas           = installed")
         else:
-            info("ragas           = not installed (pip install supamem[eval])")
+            info("ragas           = not installed (pip install supamem\\[eval])")
     except Exception as exc:  # noqa: BLE001
         warn(f"ragas probe failed: {type(exc).__name__}: {exc}")
 

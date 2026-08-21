@@ -158,3 +158,32 @@ def test_coderag_panel_present_but_broken_keeps_warn(
     for ln in lines:
         if "coderag ingest module probe failed" in ln:
             assert "⚠" in ln, f"broken-install line must stay a warn: {ln!r}"
+
+
+def test_eval_bench_panel_ragas_absent_hint_renders_extra_name(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Phase 19.1 goal clause ("doctor output becomes truthful"): the RAGAS
+    install hint must render the literal extra name.
+
+    A bare ``[eval]`` is swallowed by Rich as an unknown markup tag, leaving
+    ``pip install supamem`` — an UNPINNED install, which resolves backwards to
+    an old stable (the exact SM-5 failure this phase exists to remove). The
+    two SM-3 sibling hints were escaped in 19.1-02; this one was deferred
+    because no test asserted its literal. This is that test.
+    """
+    import supamem.doctor as mod
+    import supamem.eval.ragas_adapter as ragas_mod
+
+    monkeypatch.setattr(ragas_mod, "RAGAS_AVAILABLE", False)
+    mod._render_eval_bench_panel()
+    flat, lines = _flat_lines(capsys)
+
+    assert "ragas" in flat, flat
+    assert "not installed (pip install supamem[eval])" in flat, flat
+    assert "not installed (pip install supamem)" not in flat, (
+        f"Rich swallowed the [eval] extra — hint now advises an unpinned install: {flat!r}"
+    )
+    for ln in lines:
+        if "ragas" in ln and "not installed" in ln:
+            assert "⚠" not in ln, f"optional-absent line must not be a warn: {ln!r}"
