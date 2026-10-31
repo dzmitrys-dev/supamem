@@ -24,7 +24,7 @@ def test_doctor_redacts_api_key_by_default(
 
     import supamem.doctor as mod
 
-    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: False)
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, api_key="", timeout=2.0: False)
 
     rc = mod.run_doctor()
     out = capsys.readouterr().out + capsys.readouterr().err
@@ -39,7 +39,7 @@ def test_doctor_exits_1_on_qdrant_unreachable(
 ) -> None:
     import supamem.doctor as mod
 
-    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: False)
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, api_key="", timeout=2.0: False)
     rc = mod.run_doctor()
     assert rc == 1
 
@@ -51,7 +51,7 @@ def test_doctor_exits_1_on_version_drift(
     """A managed-block fence with an old version triggers drift + exit 1."""
     import supamem.doctor as mod
 
-    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: True)
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, api_key="", timeout=2.0: True)
     # Skip the qdrant client path (collection check) cleanly.
     monkeypatch.setattr(
         mod, "_collection_health", lambda client, name: {"present": True, "sparse": True}
@@ -91,7 +91,7 @@ def test_doctor_prints_each_config_field_with_source(
 ) -> None:
     import supamem.doctor as mod
 
-    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: False)
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, api_key="", timeout=2.0: False)
     mod.run_doctor()
     out = capsys.readouterr().out
     assert "[source: default]" in out
@@ -107,7 +107,7 @@ def test_doctor_shows_transcript_config(
     """Plan 06-04 Task 01: ``supamem doctor`` surfaces all 6 transcript keys (D-31)."""
     import supamem.doctor as mod
 
-    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: False)
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, api_key="", timeout=2.0: False)
     mod.run_doctor()
     out = capsys.readouterr().out
     assert "Transcript config" in out
@@ -134,7 +134,7 @@ def test_doctor_shows_classifier_rooms_and_hash(
     """``supamem doctor`` surfaces [classifier.rooms] config + classifier_hash (D-16)."""
     import supamem.doctor as mod
 
-    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: False)
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, api_key="", timeout=2.0: False)
     mod.run_doctor()
     out = capsys.readouterr().out
     assert "Classifier rooms" in out
@@ -155,7 +155,7 @@ def test_doctor_shows_room_histogram_with_null_bucket(
 
     # Probe says reachable so the histogram path runs; client construction
     # below raises so the count() try/except path falls back to 0.
-    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: True)
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, api_key="", timeout=2.0: True)
     monkeypatch.setattr(
         mod, "_collection_health", lambda client, name: {"present": True, "sparse": True}
     )
@@ -196,7 +196,7 @@ def test_doctor_no_drift_no_qdrant_means_exit_1(
     """Even if no clients are installed, Qdrant unreachable still triggers exit 1."""
     import supamem.doctor as mod
 
-    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: False)
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, api_key="", timeout=2.0: False)
     rc = mod.run_doctor()
     assert rc == 1
 
@@ -240,7 +240,7 @@ def test_doctor_reranker_panel_healthy(
     monkeypatch.setenv("SUPAMEM_CACHE_DIR", str(cache))
     _seed_healthy_manifest(cache, "mixedbread-ai/mxbai-rerank-base-v2")
 
-    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: False)
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, api_key="", timeout=2.0: False)
     rc = mod.run_doctor()
     out = capsys.readouterr().out
 
@@ -276,7 +276,7 @@ def test_doctor_reranker_panel_partial_download(
     (snap / "model.safetensors").unlink()
 
     # Pin Qdrant up + collection present so drift attribution is unambiguous.
-    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: True)
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, api_key="", timeout=2.0: True)
     monkeypatch.setattr(
         mod, "_collection_health",
         lambda client, name: {"present": True, "sparse": True},
@@ -366,7 +366,7 @@ def test_doctor_reranker_p50_p95_verifiable(
             }
         }))
 
-    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: False)
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, api_key="", timeout=2.0: False)
     mod.run_doctor()
     out = capsys.readouterr().out
 
@@ -466,7 +466,7 @@ def test_doctor_subagent_reachability_panel_present(
 
     cache = tmp_path / "cache"
     monkeypatch.setenv("SUPAMEM_CACHE_DIR", str(cache))
-    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: False)
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, api_key="", timeout=2.0: False)
 
     # Seed 4 fixtures: 1 patched (covered + manifest entry), 1 covered-only,
     # 1 inheritance, 1 malformed.
@@ -518,7 +518,7 @@ def test_doctor_subagent_reachability_no_manifest_shows_repair_hint(
     cache = tmp_path / "cache"
     cache.mkdir()
     monkeypatch.setenv("SUPAMEM_CACHE_DIR", str(cache))
-    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: False)
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, api_key="", timeout=2.0: False)
 
     _seed_agent(home, "csv-patchable.md", CSV_PATCHABLE_AGENT)
 
@@ -549,7 +549,7 @@ def test_doctor_subagent_reachability_does_not_change_exit_code(
     cache = tmp_path / "cache"
     cache.mkdir()
     monkeypatch.setenv("SUPAMEM_CACHE_DIR", str(cache))
-    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: False)
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, api_key="", timeout=2.0: False)
 
     # Baseline: empty home, no agents.
     rc_baseline = mod.run_doctor()
@@ -576,7 +576,7 @@ def test_doctor_renders_unpatch_reminder_when_manifest_present(
 
     cache = tmp_path / "cache"
     monkeypatch.setenv("SUPAMEM_CACHE_DIR", str(cache))
-    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: False)
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, api_key="", timeout=2.0: False)
 
     p = _seed_agent(home, "covered.md", CSV_COVERED_AGENT)
     _seed_manifest(
@@ -620,7 +620,7 @@ def test_doctor_handles_empty_global_dir(
     cache = tmp_path / "cache"
     cache.mkdir()
     monkeypatch.setenv("SUPAMEM_CACHE_DIR", str(cache))
-    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: False)
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, api_key="", timeout=2.0: False)
 
     rc = mod.run_doctor()
     out = capsys.readouterr().out
@@ -652,7 +652,7 @@ def test_doctor_temporal_panel_renders_when_qdrant_unreachable(
     """
     import supamem.doctor as mod
 
-    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: False)
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, api_key="", timeout=2.0: False)
     rc = mod.run_doctor()
     out = capsys.readouterr().out
 
@@ -703,7 +703,7 @@ def test_doctor_temporal_panel_read_only_never_flips_rc(
     cache.mkdir()
     monkeypatch.setenv("SUPAMEM_CACHE_DIR", str(cache))
 
-    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: True)
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, api_key="", timeout=2.0: True)
     monkeypatch.setattr(
         mod,
         "_collection_health",
@@ -765,7 +765,7 @@ def test_doctor_temporal_panel_handles_count_exception(
     cache.mkdir()
     monkeypatch.setenv("SUPAMEM_CACHE_DIR", str(cache))
 
-    monkeypatch.setattr(mod, "probe_qdrant", lambda url, timeout=2.0: True)
+    monkeypatch.setattr(mod, "probe_qdrant", lambda url, api_key="", timeout=2.0: True)
     monkeypatch.setattr(
         mod,
         "_collection_health",
