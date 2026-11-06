@@ -27,6 +27,11 @@ Found by the cl-harness session-2 research (measured on a live install of 0.3.0a
   writes the platformdirs cache (one resolver, `stats.counter.default_cache_dir`, used by every reader), migrating the
   legacy `audit.jsonl`/`aggregates.json` once (the indexer's `manifest.json` stays). New env var `SUPAMEM_AUDIT_DIR`
   overrides the audit location; the test suite now isolates it (an autouse fixture) so no test writes the user's log.
+- **The edit hook injected other projects' memory.** Without a project-configured collection the hook queried the
+  global default collection (another repo's memory) after loading the embedders and reranker (~9 s per edit). It now
+  stays silent before loading anything. In a configured project it over-fetches 10 and injects only the top 5 chunks
+  whose source lies inside the project root (a real collection held chunks indexed from `/private/tmp` checkouts),
+  and prints the rerank score as a score, not a percentage (it showed "307%").
 
 ## [0.4.0a2] — 2026-08-20 — Post-release field-report fixes: truthful doctor / config / install surfaces (Phase 19.1)
 

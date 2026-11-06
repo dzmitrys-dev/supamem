@@ -277,3 +277,45 @@ def test_audit_dir_override_never_adopts_the_legacy_log(monkeypatch: pytest.Monk
     counter.bump("search", "mcp", tokens=1, latency_ms=1.0)
     assert (legacy / "audit.jsonl").exists()
     assert len((tmp_path / "explicit" / "audit.jsonl").read_text().splitlines()) == 1
+
+
+# ---- 6. query correctness: only this project's memory, honest scores, no work without a project config -------
+
+
+def test_edit_hook_keeps_only_hits_inside_the_project(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    import supamem.hooks.claude_code as hook
+    from supamem.retrieval.types import RetrievedChunk
+
+    proj = tmp_path / "proj"
+    (proj / "docs").mkdir(parents=True)
+    monkeypatch.chdir(proj)
+    hits = [
+        RetrievedChunk(id="1", text="temp copy", score=3.94, source_path="/private/tmp/fhx-spikes/x/docs/a.md"),
+        RetrievedChunk(id="2", text="ours abs", score=2.3, source_path=str(proj / "docs" / "b.md")),
+        RetrievedChunk(id="3", text="ours rel", score=0.9, source_path="docs/c.md"),
+        RetrievedChunk(id="4", text="other repo", score=0.8, source_path=str(tmp_path / "other" / "d.md")),
+    ]
+    b = MagicMock()
+    b.query.return_value = hits
+    monkeypatch.setattr(hook, "_get_backend", lambda cfg: b)
+    monkeypatch.setattr(hook, "_touch_marker", lambda *a, **k: None)
+    assert hook.run(proj / "src" / "shooting.cs", _cfg()) == 0
+    ctx = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
+    assert "ours abs" in ctx and "ours rel" in ctx
+    assert "temp copy" not in ctx and "other repo" not in ctx
+    assert "%" not in ctx and "score 2.30" in ctx  # rerank scores are not percentages
+    assert b.query.call_args.kwargs["k"] == 10
+
+
+def test_hook_cli_without_a_project_collection_exits_before_loading_models(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from typer.testing import CliRunner
+
+    import supamem.hooks as hooks
+    from supamem.cli import app
+
+    monkeypatch.chdir(tmp_path)  # no .supamem/config.toml, no pyproject section → collection is the default
+    monkeypatch.delenv("SUPAMEM_CONFIG", raising=False)
+    monkeypatch.setattr(hooks, "dispatch", lambda **kw: (_ for _ in ()).throw(AssertionError("dispatch must not run")))
+    r = CliRunner().invoke(app, ["hook", "claude-code"], input=json.dumps({"tool_input": {"file_path": str(tmp_path / "src" / "a.py")}}))
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.stdout.strip().splitlines()[-1]) == {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": ""}}

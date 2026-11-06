@@ -323,7 +323,16 @@ def cmd_hook(
     from supamem.config import load_config
     from supamem.hooks import dispatch
 
-    cfg, _chain = load_config()
+    cfg, chain = load_config()
+    if client == "claude-code" and chain.collection == "default" and not file_path:
+        # No project configured a collection: the edit hook would query the global default collection — another
+        # project's memory — after loading the embedders and the reranker (~9 s). Silence instead
+        # (field report 2026-11-06: cl-harness edits received supamem-repo context).
+        import json as _json
+        import sys as _sys
+
+        _sys.stdout.write(_json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": ""}}) + "\n")
+        raise typer.Exit(0)
     fp = Path(file_path) if file_path else None
     raise typer.Exit(dispatch(client=client, file_path=fp, config=cfg))
 

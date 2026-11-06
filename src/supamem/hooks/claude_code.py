@@ -157,14 +157,43 @@ def _models_offline() -> Iterator[None]:
 # ---- Output formatting ---------------------------------------------------
 
 
+# Over-fetch, then keep only this project's memory: a collection can hold chunks indexed from elsewhere (temp
+# checkouts under /private/tmp, other repos) — field report 2026-11-06 found both injected into edits.
+_FETCH_K = 10
+_INJECT_K = 5
+
+
+def _in_project(chunks: list[RetrievedChunk], root: Path) -> list[RetrievedChunk]:
+    """Chunks whose source lies inside ``root`` (relative paths are taken as project-relative)."""
+    try:
+        base = root.resolve()
+    except OSError:
+        return list(chunks)
+    out: list[RetrievedChunk] = []
+    for c in chunks:
+        src = c.source_path or c.file_path
+        if not src:
+            continue
+        p = Path(src)
+        if not p.is_absolute():
+            out.append(c)
+            continue
+        try:
+            if p.resolve().is_relative_to(base):
+                out.append(c)
+        except OSError:
+            continue
+    return out
+
+
 def _format_chunks(chunks: list[RetrievedChunk]) -> str:
     if not chunks:
         return ""
     lines = ["### Memory context (supamem)"]
     for c in chunks:
         src = c.source_path or c.file_path or "?"
-        score_pct = int(round(float(c.score or 0.0) * 100))
-        lines.append(f"- **{src}** ({score_pct}%): {c.text.strip()[:280]}")
+        # a rerank score is a logit-like relevance, not a probability: printing it as % showed "307%"
+        lines.append(f"- **{src}** (score {float(c.score or 0.0):.2f}): {c.text.strip()[:280]}")
     return "\n".join(lines)
 
 
@@ -224,7 +253,8 @@ def run(file_path: Path, config: ResolvedConfig) -> int:
         t0 = time.perf_counter()
         try:
             with _models_offline():
-                chunks = _get_backend(config).query(query, k=5)
+                chunks = _get_backend(config).query(query, k=_FETCH_K)
+            chunks = _in_project(chunks, Path.cwd())[:_INJECT_K]
         except Exception as exc:  # noqa: BLE001 — fail-soft
             log.warning("supamem hook claude_code: backend failed: %s", exc)
             _emit(empty_payload)
