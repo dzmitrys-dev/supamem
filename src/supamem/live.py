@@ -44,9 +44,9 @@ def _resolve_audit_path(override: Path | None = None) -> Path:
     if override is not None:
         return override
     try:
-        import platformdirs
+        from supamem.stats.counter import default_cache_dir
 
-        return Path(platformdirs.user_cache_dir("supamem")) / "audit.jsonl"
+        return default_cache_dir() / "audit.jsonl"  # the writer's location — one source of truth
     except Exception:
         return DEFAULT_AUDIT_PATH_FALLBACK
 

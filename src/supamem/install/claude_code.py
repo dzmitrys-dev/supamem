@@ -3,7 +3,8 @@
 Targets:
 1. ``~/.claude.json`` — register MCP server entry under ``mcpServers.supamem``.
 2. ``~/.claude/settings.json`` — add a ``hooks.PreToolUse`` entry that delegates
-   to ``supamem hook claude-code --file-path "$CLAUDE_FILE_PATH"``.
+   to ``supamem hook claude-code`` (the edited path arrives on stdin; a legacy
+   ``--file-path "$CLAUDE_FILE_PATH"`` registration is rewritten in place).
 3. ``~/CLAUDE.md`` — append (inside SUPAMEM managed-block fences) an
    ``@~/.supamem/share/rules/dual-memory.md`` import line.
 
@@ -77,6 +78,11 @@ GATE_EDIT_HOOK_ENTRY: dict[str, Any] = {
     ],
 }
 
+# Claude Code hands a hook its input ONLY as stdin JSON (tool_input.file_path); there is no $CLAUDE_FILE_PATH.
+# The hook reads the path from stdin itself (hooks.claude_code.resolve_file_path) — field report 2026-11-06.
+HOOK_COMMAND = "supamem hook claude-code"
+LEGACY_HOOK_COMMANDS = ('supamem hook claude-code --file-path "$CLAUDE_FILE_PATH"',)
+
 HOOKS_OVERLAY: dict[str, Any] = {
     "hooks": {
         "PreToolUse": [
@@ -85,7 +91,7 @@ HOOKS_OVERLAY: dict[str, Any] = {
                 "hooks": [
                     {
                         "type": "command",
-                        "command": 'supamem hook claude-code --file-path "$CLAUDE_FILE_PATH"',
+                        "command": HOOK_COMMAND,
                         "timeout": 30,
                     }
                 ],
@@ -146,6 +152,12 @@ def _settings_with_hook(
     """
     merged = json.loads(json.dumps(existing))
     hooks_root = merged.setdefault("hooks", {})
+
+    # Heal the legacy registration in place (it never received a path): same entry, same timeout, new command.
+    for entry in hooks_root.get("PreToolUse", []) or []:
+        for h in entry.get("hooks", []) or []:
+            if str(h.get("command", "")).strip() in LEGACY_HOOK_COMMANDS:
+                h["command"] = HOOK_COMMAND
 
     if not _hook_present(merged, "PreToolUse", "supamem hook claude-code"):
         hooks_root.setdefault("PreToolUse", []).extend(HOOKS_OVERLAY["hooks"]["PreToolUse"])

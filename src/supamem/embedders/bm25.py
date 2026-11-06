@@ -19,7 +19,9 @@ class BM25Embedder:
                 raise RuntimeError(
                     "supamem: fastembed[nlp] required for sparse retrieval"
                 ) from exc
-            self._impl = SparseTextEmbedding(self.model)
+            from supamem.embedders.cache import fastembed_kwargs
+
+            self._impl = SparseTextEmbedding(self.model, **fastembed_kwargs())
         return self._impl
 
     def embed(self, batch: Iterable[str]) -> Iterable[Any]:

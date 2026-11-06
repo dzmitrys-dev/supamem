@@ -3,7 +3,8 @@
 Ports ``softchat/scripts/dual_memory_bootstrap.py`` into a library module
 that lives next to the package. Hook contract (Phase 80.3):
 
-- Stdin: nothing (file_path comes from the hook invocation)
+- Stdin: the Claude Code PreToolUse payload; the edited path is ``tool_input.file_path`` (see
+  ``resolve_file_path``). ``--file-path`` still overrides for other hosts.
 - Stdout: exactly one line ``{"hookSpecificOutput": {"hookEventName":
   "PreToolUse", "additionalContext": "<retrieved chunks>"}}``
 - Exit: always 0 (fail-soft per PATTERNS — never block the calling tool)
@@ -12,14 +13,16 @@ that lives next to the package. Hook contract (Phase 80.3):
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
+import os
 import re
 import sys
 import time
 from datetime import date
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Iterator, Optional
 
 from supamem.config import ResolvedConfig
 from supamem.retrieval.tuned_hybrid import TunedHybridBackend
@@ -135,6 +138,22 @@ def _bump(kind: str, source: str, tokens: int, latency_ms: float, **_kw: Any) ->
         log.debug("counter bump failed: %s", exc)
 
 
+@contextlib.contextmanager
+def _models_offline() -> Iterator[None]:
+    """Never download a model on the edit path: a missing model must fail soft at once, not hang the edit until
+    the hook timeout (field report 2026-11-06). Models are fetched outside hooks (`supamem repair`, indexing).
+    Scoped: the previous value is restored, so a long-lived process is not switched offline for good."""
+    prev = os.environ.get("HF_HUB_OFFLINE")
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    try:
+        yield
+    finally:
+        if prev is None:
+            os.environ.pop("HF_HUB_OFFLINE", None)
+        else:
+            os.environ["HF_HUB_OFFLINE"] = prev
+
+
 # ---- Output formatting ---------------------------------------------------
 
 
@@ -155,6 +174,29 @@ def _emit(payload: dict[str, Any]) -> None:
 
 
 # ---- Hook entry point ----------------------------------------------------
+
+
+def resolve_file_path(cli_path: Optional[Path], stdin_text: str) -> Optional[Path]:
+    """The edited path: an explicit ``--file-path`` wins; otherwise the Claude Code PreToolUse payload on stdin
+    (``tool_input.file_path``, or ``notebook_path`` for NotebookEdit). Claude Code passes hook input ONLY as stdin
+    JSON — ``$CLAUDE_FILE_PATH`` is not a hook variable, so the old registration always ran with an empty path
+    (field report 2026-11-06). Garbage → None (the hook stays fail-soft)."""
+    if cli_path is not None and str(cli_path) not in ("", "."):
+        return cli_path
+    try:
+        payload = json.loads(stdin_text or "{}")
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return None
+    for key in ("file_path", "notebook_path"):
+        value = tool_input.get(key)
+        if isinstance(value, str) and value:
+            return Path(value)
+    return None
 
 
 def run(file_path: Path, config: ResolvedConfig) -> int:
@@ -181,7 +223,8 @@ def run(file_path: Path, config: ResolvedConfig) -> int:
 
         t0 = time.perf_counter()
         try:
-            chunks = _get_backend(config).query(query, k=5)
+            with _models_offline():
+                chunks = _get_backend(config).query(query, k=5)
         except Exception as exc:  # noqa: BLE001 — fail-soft
             log.warning("supamem hook claude_code: backend failed: %s", exc)
             _emit(empty_payload)
@@ -214,4 +257,4 @@ def run(file_path: Path, config: ResolvedConfig) -> int:
         return 0
 
 
-__all__ = ["derive_query", "is_code_target", "run"]
+__all__ = ["derive_query", "is_code_target", "resolve_file_path", "run"]

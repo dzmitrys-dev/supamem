@@ -306,7 +306,10 @@ def test_token_cap_enforced_by_minilm_tokenizer() -> None:
 
     from fastembed import TextEmbedding
 
-    emb = TextEmbedding("sentence-transformers/all-MiniLM-L6-v2")
+    from supamem.embedders.cache import fastembed_kwargs
+
+    # the persistent supamem cache, not fastembed's OS-temp default (purged on macOS → NO_SUCHFILE)
+    emb = TextEmbedding("sentence-transformers/all-MiniLM-L6-v2", **fastembed_kwargs())
     for idx, chunk in enumerate(chunks):
         tcount = emb.token_count(chunk)
         assert tcount <= 512, (

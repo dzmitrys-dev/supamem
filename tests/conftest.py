@@ -245,3 +245,14 @@ def tiny_repo(tmp_path):
     from tests.fixtures.coderag_tiny_repo.build_tiny_repo import build
 
     return build(tmp_path / "tiny")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_audit_log(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test may write the user's real audit log (field report 2026-11-06: MCP search tests polluted it once
+    MCP logging was fixed). The counter, its legacy-migration source and every reader resolve here instead."""
+    d = tmp_path_factory.mktemp("supamem-audit")
+    monkeypatch.setenv("SUPAMEM_AUDIT_DIR", str(d))
+    import supamem.stats.counter as counter
+
+    monkeypatch.setattr(counter, "_LEGACY_CACHE_DIR", d / "legacy")

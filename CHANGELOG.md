@@ -2,6 +2,32 @@
 
 All notable changes to `supamem` will be documented in this file.
 
+## [Unreleased] — 0.4.0a3.dev1 — Field report 2026-11-06: the edit hook works, models stay cached, searches are logged
+
+Found by the cl-harness session-2 research (measured on a live install of 0.3.0a7; all defects are still present in
+0.4.0a2). Each fix is pinned by a test in `tests/test_field_report_hooks_cache.py`.
+
+- **Edit hook received no path.** Claude Code passes hook input only as stdin JSON (`tool_input.file_path`);
+  `$CLAUDE_FILE_PATH` is not a hook variable, so `supamem hook claude-code --file-path "$CLAUDE_FILE_PATH"` always ran
+  with an empty path and injected nothing while costing ~0.85 s per Edit/Write. The hook now reads the path from stdin
+  (`hooks.claude_code.resolve_file_path`; `--file-path` still overrides); the installer registers
+  `supamem hook claude-code` and `install`/`repair` rewrite the legacy registration in place.
+- **Embedder models lived in the OS temp dir.** fastembed's default cache is `<tmp>/fastembed_cache`, which macOS
+  purges (snapshot dirs survive, `model.onnx` vanishes): every fresh process re-downloaded mid-call — hooks hung until
+  their timeout, `test_token_cap_enforced_by_minilm_tokenizer` failed with `NO_SUCHFILE`. All fastembed models now use
+  `<user cache>/supamem/fastembed` (`embedders.cache.fastembed_kwargs`; `FASTEMBED_CACHE_PATH` and `SUPAMEM_CACHE_DIR`
+  override), and `install`/`repair` pre-fetch them.
+- **No download on the edit path.** The edit hook loads models cache-only (`local_files_only`, scoped
+  `HF_HUB_OFFLINE=1`): a missing model fails soft at once instead of hanging the edit.
+- **MCP searches were never logged.** `mcp_server._bump(outcome=…, injected_tokens=…, elapsed_ms=…)` never matched
+  `counter.bump(kind, source, tokens, latency_ms)`; the `TypeError` was swallowed at debug level (a real audit log had
+  1 796 rows, all `rerank`, zero `search`). Searches now log `search:mcp` / `search_error:mcp`.
+- **Two audit-log locations.** The counter wrote `~/.cache/supamem` while `supamem live` and the session-start banner
+  read the platformdirs cache (`~/Library/Caches/supamem` on macOS) — they always showed an empty log. The counter now
+  writes the platformdirs cache (one resolver, `stats.counter.default_cache_dir`, used by every reader), migrating the
+  legacy `audit.jsonl`/`aggregates.json` once (the indexer's `manifest.json` stays). New env var `SUPAMEM_AUDIT_DIR`
+  overrides the audit location; the test suite now isolates it (an autouse fixture) so no test writes the user's log.
+
 ## [0.4.0a2] — 2026-08-20 — Post-release field-report fixes: truthful doctor / config / install surfaces (Phase 19.1)
 
 Phase 19.1 is a correctness-and-truthfulness pass driven by a field

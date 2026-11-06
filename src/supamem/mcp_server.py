@@ -139,15 +139,20 @@ def _sanitize_error(exc: BaseException, env_vars: tuple[str, ...] = SECRET_ENV_V
 # ---- Counter integration (no-op until plan 80.6-06 lands) ----------------
 
 
-def _bump(*_args: Any, **_kwargs: Any) -> None:
+def _bump(kind: str, tokens: int, latency_ms: float) -> None:
+    """One audit row per MCP search, with the counter's real signature ``bump(kind, source, tokens, latency_ms)``.
+
+    The previous ``_bump(outcome=..., injected_tokens=..., elapsed_ms=...)`` never matched that signature; the
+    TypeError was swallowed at debug level, so no MCP search was ever logged (field report 2026-11-06: 1 796 audit
+    rows, all ``rerank``, zero ``search``). ``kind`` is ``search`` (hits or no match) or ``search_error``."""
     try:
-        from supamem.stats.counter import bump as real_bump  # type: ignore[import-not-found]
+        from supamem.stats import counter
     except ImportError:
         return
     try:
-        real_bump(*_args, **_kwargs)
+        counter.bump(kind, "mcp", int(tokens), float(latency_ms))
     except Exception as exc:  # noqa: BLE001 — counter must never block the tool
-        log.debug("counter bump failed: %s", exc)
+        log.warning("counter bump failed: %s", exc)
 
 
 # ---- Backend cache (one TunedHybridBackend per config) -------------------
@@ -212,7 +217,7 @@ async def dual_memory_search(
     except Exception as exc:  # noqa: BLE001
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
         log.exception("retrieval failed: %s", exc)
-        _bump(outcome="error", elapsed_ms=elapsed_ms)
+        _bump("search_error", 0, elapsed_ms)
         raise RuntimeError(_sanitize_error(exc)) from None
 
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
@@ -252,11 +257,7 @@ async def dual_memory_search(
             )
         )
     total_tokens = sum(max(1, len(c.text) // 4) for c in chunks)
-    _bump(
-        outcome="injected" if chunks else "no_match",
-        injected_tokens=total_tokens,
-        elapsed_ms=elapsed_ms,
-    )
+    _bump("search", total_tokens, elapsed_ms)
     return SearchResult(
         summary_md=_build_summary_md(
             len(chunks),

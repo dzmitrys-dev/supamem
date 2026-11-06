@@ -15,7 +15,9 @@ class MiniLMEmbedder:
         if self._impl is None:
             from fastembed import TextEmbedding
 
-            self._impl = TextEmbedding(self.model)
+            from supamem.embedders.cache import fastembed_kwargs
+
+            self._impl = TextEmbedding(self.model, **fastembed_kwargs())
         return self._impl
 
     def embed(self, batch: Iterable[str]) -> Iterable[Any]:

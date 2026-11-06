@@ -57,7 +57,9 @@ def _get_tokenizer() -> Any | None:
     try:
         from fastembed import TextEmbedding
 
-        _TOKENIZER = TextEmbedding("sentence-transformers/all-MiniLM-L6-v2")
+        from supamem.embedders.cache import fastembed_kwargs
+
+        _TOKENIZER = TextEmbedding("sentence-transformers/all-MiniLM-L6-v2", **fastembed_kwargs())
         return _TOKENIZER
     except Exception:  # noqa: BLE001 — tokenizer is best-effort; chunker must not fail
         return None

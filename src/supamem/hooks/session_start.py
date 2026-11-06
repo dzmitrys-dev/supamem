@@ -61,11 +61,11 @@ def _probe_collection(cfg: ResolvedConfig) -> tuple[str | None, int | None]:
 
 
 def _probe_audit_path() -> Path:
-    """The canonical audit JSONL path (``platformdirs.user_cache_dir/audit.jsonl``)."""
+    """The canonical audit JSONL path — resolved by the writer (``stats.counter.default_cache_dir``)."""
     try:
-        import platformdirs
+        from supamem.stats.counter import default_cache_dir
 
-        return Path(platformdirs.user_cache_dir("supamem")) / "audit.jsonl"
+        return default_cache_dir() / "audit.jsonl"
     except Exception:
         return Path.home() / ".cache" / "supamem" / "audit.jsonl"
 

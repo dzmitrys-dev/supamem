@@ -46,6 +46,15 @@ def _maybe_prepare_models(skip_models: bool) -> None:
         info("--skip-models: skipping ML model pre-fetch")
         return
     try:
+        from supamem.embedders.cache import prepare_embedders  # noqa: PLC0415
+
+        prepare_embedders()
+        ok("embedder models cached (persistent cache, not the OS temp dir)")
+    except Exception as exc:  # noqa: BLE001 — offline install must still wire the client
+        from supamem.console import warn as _warn  # noqa: PLC0415
+
+        _warn(f"embedder model fetch failed — run `supamem repair` online later ({type(exc).__name__})")
+    try:
         from supamem.config import load_config  # noqa: PLC0415
         from supamem.rerankers import prepare  # noqa: PLC0415
 

@@ -21,6 +21,7 @@ from typing import Any, Optional
 
 from qdrant_client.http import models as qmodels
 
+from supamem.embedders.cache import fastembed_kwargs
 from supamem.config import ResolvedConfig
 from supamem.qdrant_collection import assert_collection_exists_for_read
 from supamem.retrieval.filters import WhereDict, build_qdrant_filter
@@ -289,9 +290,9 @@ class TunedHybridBackend:
                 timeout=60,
             )
         if self._dense is None:
-            self._dense = TextEmbedding(DEFAULT_DENSE_MODEL)
+            self._dense = TextEmbedding(DEFAULT_DENSE_MODEL, **fastembed_kwargs())
         if self._sparse is None:
-            self._sparse = SparseTextEmbedding(DEFAULT_SPARSE_MODEL)
+            self._sparse = SparseTextEmbedding(DEFAULT_SPARSE_MODEL, **fastembed_kwargs())
         return self._client, self._dense, self._sparse
 
     def query(

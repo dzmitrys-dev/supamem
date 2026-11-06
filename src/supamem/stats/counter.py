@@ -34,7 +34,48 @@ log = logging.getLogger("supamem.stats.counter")
 if not log.handlers:
     log.addHandler(logging.StreamHandler(stream=sys.stderr))
 
-DEFAULT_CACHE_DIR = Path.home() / ".cache" / "supamem"
+# The audit log lives in the platformdirs cache, where every reader (live, session-start, doctor) looks. It used to
+# be written to ~/.cache/supamem while the readers read ~/Library/Caches/supamem on macOS, so `supamem live` and the
+# status line always saw an empty log (field report 2026-11-06). The legacy dir is migrated once.
+_LEGACY_CACHE_DIR = Path.home() / ".cache" / "supamem"
+_MIGRATED_FILES = ("audit.jsonl", "aggregates.json")  # the indexer's manifest.json is not ours: it stays
+
+
+def default_cache_dir() -> Path:
+    """The ONE location of the audit log + aggregates; every reader (live, session-start) resolves through here.
+    ``SUPAMEM_AUDIT_DIR`` overrides it (the test suite points it at a temp dir so no test writes the user's log)."""
+    override = os.environ.get("SUPAMEM_AUDIT_DIR")
+    if override:
+        return Path(override)
+    root = os.environ.get("SUPAMEM_CACHE_DIR")  # the repo-wide cache-root override (rerankers, agent patcher)
+    if root:
+        return Path(root)
+    try:
+        import platformdirs
+
+        return Path(platformdirs.user_cache_dir("supamem"))
+    except Exception:  # noqa: BLE001 — platformdirs is a dependency; this is only the last resort
+        return _LEGACY_CACHE_DIR
+
+
+DEFAULT_CACHE_DIR = default_cache_dir()
+
+
+def _migrate_legacy(target: Path) -> None:
+    if os.environ.get("SUPAMEM_AUDIT_DIR"):
+        return  # an explicit location never adopts the legacy user log
+    legacy = _LEGACY_CACHE_DIR
+    if legacy.resolve() == target.resolve():
+        return
+    for name in _MIGRATED_FILES:
+        old, new = legacy / name, target / name
+        if not old.exists():
+            continue
+        if not new.exists():
+            old.replace(new)
+        elif name == "audit.jsonl":  # both exist: keep history, legacy rows first
+            new.write_text(old.read_text(encoding="utf-8") + new.read_text(encoding="utf-8"), encoding="utf-8")
+            old.unlink()
 
 # Phase 8 D-CPU-02 / W3: process-local ring buffer of recent latency samples
 # keyed by ``(kind, source)``. ``maxlen=100`` mirrors the doctor panel's
@@ -60,8 +101,13 @@ def get_latency_samples(kind: str, source: str) -> list[float]:
 
 
 def _resolve_cache_dir(cache_dir: Path | None) -> Path:
-    target = Path(cache_dir) if cache_dir else DEFAULT_CACHE_DIR
+    target = Path(cache_dir) if cache_dir else default_cache_dir()
     target.mkdir(parents=True, exist_ok=True)
+    if cache_dir is None:
+        try:
+            _migrate_legacy(target)
+        except OSError as exc:
+            log.warning("supamem.stats.counter: legacy audit migration failed: %s", exc)
     return target
 
 

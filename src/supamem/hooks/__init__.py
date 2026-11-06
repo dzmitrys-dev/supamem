@@ -21,9 +21,18 @@ def dispatch(
     config: ResolvedConfig,
 ) -> int:
     if client == "claude-code":
-        from supamem.hooks.claude_code import run
+        import sys
 
-        return run(file_path or Path("."), config)
+        from supamem.hooks import claude_code
+
+        stdin_text = ""
+        if file_path is None or str(file_path) in ("", "."):
+            try:
+                stdin_text = "" if sys.stdin is None or sys.stdin.isatty() else sys.stdin.read()
+            except (OSError, ValueError):
+                stdin_text = ""
+        resolved = claude_code.resolve_file_path(file_path, stdin_text)
+        return claude_code.run(resolved or Path("."), config)
     if client == "opencode":
         from supamem.hooks.opencode import run
 

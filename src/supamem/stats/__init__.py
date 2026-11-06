@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 from typing import Any, Literal
 
-from supamem.stats.counter import DEFAULT_CACHE_DIR, bump
+from supamem.stats.counter import bump, default_cache_dir
 
 __all__ = ["bump", "render"]
 
@@ -74,7 +74,7 @@ def render(
     *,
     cache_dir: Path | None = None,
 ) -> str:
-    target = Path(cache_dir) if cache_dir else DEFAULT_CACHE_DIR
+    target = Path(cache_dir) if cache_dir else default_cache_dir()
     records = _filter_window(_read_jsonl(target / "audit.jsonl"), show)
     summary = _aggregate(records)
 
