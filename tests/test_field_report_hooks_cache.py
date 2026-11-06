@@ -319,3 +319,30 @@ def test_hook_cli_without_a_project_collection_exits_before_loading_models(monke
     r = CliRunner().invoke(app, ["hook", "claude-code"], input=json.dumps({"tool_input": {"file_path": str(tmp_path / "src" / "a.py")}}))
     assert r.exit_code == 0, r.output
     assert json.loads(r.stdout.strip().splitlines()[-1]) == {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": ""}}
+
+
+# ---- 7. index hygiene: `exclude` globs keep prompt dumps / scratch out of the collection --------------------
+
+
+def test_exclude_globs_filter_expanded_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from supamem.indexer import _expand_sources
+
+    monkeypatch.chdir(tmp_path)
+    for rel in ("docs/design/a.md", "docs/business/bench/x/context/dump.md", "docs/business/research/r.md", "docs/notes.jsonl"):
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("# t\n")
+    got = {str(p.relative_to(tmp_path.resolve())) for p in _expand_sources(["docs"], exclude=["docs/business/bench/*/context/**", "**/*.jsonl"])}
+    assert got == {"docs/design/a.md", "docs/business/research/r.md"}
+    assert len(_expand_sources(["docs"])) == 4  # no exclude → unchanged behaviour
+
+
+def test_exclude_is_a_config_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from supamem.config import load_config
+
+    (tmp_path / ".supamem").mkdir()
+    (tmp_path / ".supamem" / "config.toml").write_text('[supamem]\ncollection = "c"\nsources = ["docs"]\nexclude = ["docs/tmp/**"]\n')
+    monkeypatch.delenv("SUPAMEM_CONFIG", raising=False)
+    cfg, chain = load_config(tmp_path)
+    assert cfg.exclude == ["docs/tmp/**"]
+    assert chain.exclude != "default"

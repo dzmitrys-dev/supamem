@@ -44,6 +44,7 @@ class ResolvedConfig:
     embedder: str = "minilm"
     chunker: str = "markdown_header"
     sources: list[str] = field(default_factory=list)
+    exclude: list[str] = field(default_factory=list)  # globs (relative to the project root) never indexed
     chunk_size: int = 200
     fusion: str = "rrf"
     drop_tokens: list[str] = field(default_factory=list)
@@ -167,6 +168,7 @@ class ConfigChain:
     embedder: Source = "default"
     chunker: Source = "default"
     sources: Source = "default"
+    exclude: Source = "default"
     chunk_size: Source = "default"
     fusion: Source = "default"
     drop_tokens: Source = "default"

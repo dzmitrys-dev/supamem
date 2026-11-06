@@ -28,6 +28,7 @@ to keep smoke-test output deterministic.
 """
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import json
 import os
@@ -91,8 +92,19 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 
-def _expand_sources(sources: Iterable[str]) -> list[Path]:
-    """Walk the source list; collect ``*.md`` and ``*.jsonl`` files (Plan 06-03)."""
+def _excluded(path: Path, patterns: Iterable[str]) -> bool:
+    """``fnmatch`` against the cwd-relative POSIX path (``*`` crosses ``/``, so ``a/**`` and ``**/*.x`` work)."""
+    try:
+        rel = path.resolve().relative_to(Path.cwd().resolve()).as_posix()
+    except ValueError:
+        rel = path.resolve().as_posix()
+    return any(fnmatch.fnmatchcase(rel, pat) for pat in patterns)
+
+
+def _expand_sources(sources: Iterable[str], exclude: Iterable[str] = ()) -> list[Path]:
+    """Walk the source list; collect ``*.md`` and ``*.jsonl`` files (Plan 06-03), minus ``exclude`` globs
+    (field report 2026-11-06: prompt dumps under docs/ polluted retrieval with code/strings noise)."""
+    patterns = list(exclude)
     out: list[Path] = []
     for s in sources:
         p = Path(s)
@@ -101,6 +113,8 @@ def _expand_sources(sources: Iterable[str]) -> list[Path]:
         elif p.is_dir():
             for ext in ("*.md", "*.jsonl"):
                 out.extend(sorted(q.resolve() for q in p.rglob(ext)))
+    if patterns:
+        out = [q for q in out if not _excluded(q, patterns)]
     return sorted(set(out))
 
 
@@ -844,7 +858,7 @@ def run_index(
     """Embed Markdown + JSONL sources into Qdrant. Fail-soft: returns 0 on any external failure."""
     cfg = config or ResolvedConfig()
     src_list = sources if sources is not None else cfg.sources or []
-    files = _expand_sources(src_list)
+    files = _expand_sources(src_list, exclude=cfg.exclude or [])
     if not files:
         return 0
 

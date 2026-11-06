@@ -2,7 +2,7 @@
 
 All notable changes to `supamem` will be documented in this file.
 
-## [Unreleased] — 0.4.0a3.dev1 — Field report 2026-11-06: the edit hook works, models stay cached, searches are logged
+## [0.4.0a3] — 2026-11-06 — Field report: the edit hook works, models stay cached, searches are logged, index hygiene
 
 Found by the cl-harness session-2 research (measured on a live install of 0.3.0a7; all defects are still present in
 0.4.0a2). Each fix is pinned by a test in `tests/test_field_report_hooks_cache.py`.
@@ -32,6 +32,10 @@ Found by the cl-harness session-2 research (measured on a live install of 0.3.0a
   stays silent before loading anything. In a configured project it over-fetches 10 and injects only the top 5 chunks
   whose source lies inside the project root (a real collection held chunks indexed from `/private/tmp` checkouts),
   and prints the rerank score as a score, not a percentage (it showed "307%").
+- **Index hygiene: `exclude` globs.** New `[supamem] exclude = [...]` (fnmatch globs, relative to the project root)
+  keeps files out of indexing — e.g. prompt dumps under `docs/` that flooded retrieval with code/string noise.
+  The same field report found 44 % of a real collection indexed from `/private/tmp` checkouts (a temp copy of the
+  repo with the same collection name); that collection was cleaned by hand.
 
 ## [0.4.0a2] — 2026-08-20 — Post-release field-report fixes: truthful doctor / config / install surfaces (Phase 19.1)
 
