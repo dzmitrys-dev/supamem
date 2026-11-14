@@ -99,6 +99,11 @@ is pinned by a test in `tests/test_edit_hook_usefulness.py` (plus smoke tests in
   other boot-time gates: `fetch_k`/`inject_k` ints ≥ 1 with `inject_k ≤ fetch_k`, `min_score` a
   number ≥ 0, `shadow_task_query` a real TOML bool; the error names the key and the table and
   exits 2 (`test_hook_config_rejects_invalid_values`, `test_hook_config_accepts_valid_boundary_values`).
+- **The Claude Code edit hook never blocks an edit on a config error.** In a PreToolUse hook exit
+  code 2 blocks the tool call, so any fail-closed config gate (these keys and the older reranker /
+  recency gates) would have denied every Edit/Write in the project. `supamem hook claude-code`
+  now catches the gate's `SystemExit`, keeps the key-naming error on stderr, emits one empty
+  payload and exits 0 (`test_claude_code_hook_never_blocks_the_edit_on_a_bad_config`).
 - **Dedup-marker race fixed; expired markers swept.** `save_seen` used a FIXED per-session `.tmp`
   name, so parallel hooks of one session collided (torn writes / `os.replace` `FileNotFoundError` →
   the whole update lost); each writer now uses a unique `mkstemp` file, re-reads and re-merges

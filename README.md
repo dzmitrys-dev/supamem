@@ -400,8 +400,10 @@ shadow_task_query = true  # TOML bool — journal (never emit) a task-text query
 drop_tokens = []          # extra tokens stripped from the path-derived query
 ```
 
-All four numeric/bool keys are validated fail-closed at config load (an invalid value exits with code 2 and
-names the key — a string like `shadow_task_query = "false"` is rejected rather than silently treated as true).
+All four numeric/bool keys are validated fail-closed at config load (an invalid value names the key and exits
+with code 2 — a string like `shadow_task_query = "false"` is rejected rather than silently treated as true). The
+Claude Code edit hook is the exception: exit code 2 would block the edit, so it prints the error to stderr,
+injects nothing and exits 0.
 `hook-stats` reports the filter-aware `dedup_suppressed_rate` and `stale_dropped_rate` over candidate rows —
 the numbers to compare against the research baselines (repeats 65.6%, stale 8.5%, printed in the text report);
 the legacy `repeat_rate` / `stale_rate` keys remain, labeled emitted-rows-only / emitted-chunks-only.

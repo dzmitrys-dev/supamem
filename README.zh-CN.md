@@ -345,20 +345,23 @@ pip uninstall supamem
 
 Claude Code 编辑钩子(`supamem hook claude-code`)现在会把每次调用记录到 `<audit dir>/injections.jsonl`,并用 `supamem hook-stats [--days N] [--json]` 度量自身。2026-11-14 的基线:注入率 4.2%,使用率 0.6%,重复率 65.6%,过期率 8.5%,且 42% 的调用(worktree 会话)必然为空。第一阶段修复:
 
-- **感知 worktree** —— 载荷中的 `cwd` 会被映射回主检出(`git rev-parse --git-common-dir`),配置从该根目录加载,因此 `.claude/worktrees/*` 中的会话也能看到项目的记忆。
-- **会话去重** —— 同一会话中已注入过的 chunk 不会再次注入(24 小时 TTL 标记;新会话重新开始)。
+- **感知 worktree** —— 载荷中的 `cwd` 会被映射回主检出(`git rev-parse --git-common-dir`),配置从该根目录加载,因此 `.claude/worktrees/*` 中的会话也能看到项目的记忆。裸仓库(或特殊的 `GIT_DIR`)映射到自身 —— 不存在可解析到的主检出。
+- **会话去重** —— 同一会话中已注入过的 chunk 不会再次注入(24 小时 TTL 标记;新会话重新开始;过期标记在每次保存时清理;同一会话的并行钩子不会相互竞争)。
 - **过期丢弃 + 分数下限** —— 源文件已消失的 chunk 会被丢弃;低于 `[supamem.hook] min_score`(默认 2.5,仅作用于 rerank 分数)的 chunk 会被丢弃;项目过滤器运行在更深的抓取层(`fetch_k`,默认 30),其他仓库的 chunk 不再挤掉自己的。
-- **影子任务查询** —— 钩子还会用「最近一条用户消息 + 路径 token」查询,并把结果记录在 `shadow` 下 —— 永不输出 —— 让 `shadow_use_rate` 能在任何输出切换之前证明(或证伪)任务文本查询。
+- **影子任务查询** —— 钩子还会用「最近一条用户消息 + 路径 token」查询,并把结果记录在 `shadow` 下 —— 永不输出 —— 让 `shadow_use_rate` 能在任何输出切换之前证明(或证伪)任务文本查询。代价:即使主路径什么也没注入,影子查询也会运行(这正是指标需要的对比),因此 `shadow_task_query = true` 大约会让**每次代码目标编辑的检索工作翻倍**;设为 `false` 即可不再付出这部分开销(其余延迟所有者已接受)。
 - **指针而非粘贴** —— 注入内容上限 2000 字符:`- **docs/design.md** — Header (score 3.94): 第一句…`,并附 "Pointers only: open the file before relying on it."
 
 ```toml
 [supamem.hook]
-fetch_k = 30              # 项目过滤器之前的查询深度
-inject_k = 5              # 每次编辑最多注入的 chunk 数
-min_score = 2.5           # rerank 分数下限;0 禁用
-shadow_task_query = true  # 记录(绝不输出)来自转录的任务文本查询
+fetch_k = 30              # int >= 1 —— 项目过滤器之前的查询深度
+inject_k = 5              # int >= 1,<= fetch_k —— 每次编辑最多注入的 chunk 数
+min_score = 2.5           # 数值 >= 0 —— rerank 分数下限;0 禁用
+shadow_task_query = true  # TOML bool —— 记录(绝不输出)来自转录的任务文本查询
 drop_tokens = []          # 从路径派生查询中剔除的额外 token
 ```
+
+四个数值/布尔键在加载配置时均以 fail-closed 方式校验(无效值会指出键名并以代码 2 退出 —— 像 `shadow_task_query = "false"` 这样的字符串会被拒绝,而不是被悄悄当作 true)。Claude Code 编辑钩子是例外:代码 2 会阻止编辑,所以它把错误打印到 stderr,不注入任何内容,并以 0 退出。
+`hook-stats` 在候选行上报告考虑过滤器的 `dedup_suppressed_rate` 和 `stale_dropped_rate` —— 这些才是应与调研基线(重复 65.6%,过期 8.5%,在文本报告中打印)对比的数字;旧的 `repeat_rate` / `stale_rate` 键保留,分别标注为仅输出行 / 仅输出 chunk。
 
 延迟明确不是关注点(所有者,2026-11-14);日志的存在是为了让**有效性**可见。
 

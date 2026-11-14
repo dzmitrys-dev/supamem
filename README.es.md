@@ -359,20 +359,23 @@ sepas que está trabajando. Usa `--help` en cualquier subcomando para detalles.
 
 El hook de edición de Claude Code (`supamem hook claude-code`) ahora registra cada invocación en `<audit dir>/injections.jsonl` y se mide a sí mismo con `supamem hook-stats [--days N] [--json]`. La línea base del 2026-11-14: tasa de inyección 4.2%, tasa de uso 0.6%, tasa de repetición 65.6%, tasa de obsolescencia 8.5%, y el 42% de las llamadas (sesiones en worktree) garantizado vacío. Correcciones de etapa 1:
 
-- **Consciente de worktrees** — el `cwd` del payload se mapea al checkout principal (`git rev-parse --git-common-dir`) y la config se carga desde esa raíz, así las sesiones en `.claude/worktrees/*` ven la memoria del proyecto.
-- **Dedup por sesión** — un chunk ya inyectado en una sesión no se inyecta de nuevo (marcadores con TTL de 24 h; una sesión nueva empieza limpio).
+- **Consciente de worktrees** — el `cwd` del payload se mapea al checkout principal (`git rev-parse --git-common-dir`) y la config se carga desde esa raíz, así las sesiones en `.claude/worktrees/*` ven la memoria del proyecto. Un repo bare (o un `GIT_DIR` exótico) se mapea a sí mismo — no existe un checkout principal al que resolver.
+- **Dedup por sesión** — un chunk ya inyectado en una sesión no se inyecta de nuevo (marcadores con TTL de 24 h; una sesión nueva empieza limpio; los marcadores vencidos se barren en cada guardado; los hooks paralelos de una misma sesión son seguros ante carreras).
 - **Descarte de obsoletos + suelo de puntaje** — los chunks cuyo archivo fuente ya no existe se descartan; los chunks por debajo de `[supamem.hook] min_score` (2.5 por defecto, solo puntajes rerankeados) se descartan; el filtro de proyecto corre sobre una búsqueda más profunda (`fetch_k`, 30 por defecto) para que otros repos ya no desplacen a los tuyos.
-- **Consulta de tarea en sombra** — el hook también consulta `último mensaje de usuario + tokens de ruta` y registra el resultado bajo `shadow` — nunca emitido — para que `shadow_use_rate` pueda probar (o refutar) las consultas por texto de tarea antes de cambiar la emisión.
+- **Consulta de tarea en sombra** — el hook también consulta `último mensaje de usuario + tokens de ruta` y registra el resultado bajo `shadow` — nunca emitido — para que `shadow_use_rate` pueda probar (o refutar) las consultas por texto de tarea antes de cambiar la emisión. Costo: la sombra corre incluso cuando la ruta principal no inyecta nada (es la comparación que la métrica necesita), así que `shadow_task_query = true` aproximadamente **duplica el trabajo de recuperación por cada edición de código**; ponlo en `false` para dejar de pagarlo (la latencia, por lo demás, la acepta el owner).
 - **Punteros, no pegados** — las inyecciones se limitan a 2000 caracteres: `- **docs/design.md** — Header (score 3.94): primera frase…` más "Pointers only: open the file before relying on it."
 
 ```toml
 [supamem.hook]
-fetch_k = 30              # profundidad de consulta antes del filtro de proyecto
-inject_k = 5              # chunks máximos inyectados por edición
-min_score = 2.5           # suelo de puntaje rerankeado; 0 desactiva
-shadow_task_query = true  # registra (nunca emite) una consulta de texto de tarea desde la transcripción
+fetch_k = 30              # int >= 1 — profundidad de consulta antes del filtro de proyecto
+inject_k = 5              # int >= 1, <= fetch_k — chunks máximos inyectados por edición
+min_score = 2.5           # número >= 0 — suelo de puntaje rerankeado; 0 desactiva
+shadow_task_query = true  # bool TOML — registra (nunca emite) una consulta de texto de tarea desde la transcripción
 drop_tokens = []          # tokens extra eliminados de la consulta derivada de la ruta
 ```
+
+Las cuatro claves numéricas/booleanas se validan fail-closed al cargar la config (un valor inválido nombra la clave y sale con código 2 — una cadena como `shadow_task_query = "false"` se rechaza en lugar de tratarse en silencio como verdadera). El hook de edición de Claude Code es la excepción: el código 2 bloquearía la edición, así que imprime el error en stderr, no inyecta nada y sale con 0.
+`hook-stats` reporta `dedup_suppressed_rate` y `stale_dropped_rate`, conscientes de los filtros, sobre las filas candidatas — los números a comparar con las líneas base del estudio (repeticiones 65.6%, obsoletos 8.5%, impresas en el reporte de texto); las claves heredadas `repeat_rate` / `stale_rate` se mantienen, etiquetadas como solo-filas-emitidas / solo-chunks-emitidos.
 
 La latencia explícitamente no es una preocupación (owner, 2026-11-14); el diario existe para hacer visible la **utilidad**.
 

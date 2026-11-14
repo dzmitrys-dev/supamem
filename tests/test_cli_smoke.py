@@ -688,3 +688,40 @@ def test_hook_stats_json_on_empty_journal(tmp_path) -> None:
     assert stats["injection_rate"] == 0.0
     assert stats["use_rate"] == 0.0
     assert stats["shadow_rows"] == 0
+
+
+def test_claude_code_hook_never_blocks_the_edit_on_a_bad_config(tmp_path) -> None:
+    """A fail-closed config gate (SystemExit 2) must not reach Claude Code: in a PreToolUse
+    hook exit code 2 BLOCKS the tool call, so one bad [supamem.hook] value would deny every
+    Edit/Write in the project. The edit hook degrades to one empty payload + exit 0 and names
+    the bad key on stderr."""
+    import json
+
+    proj = tmp_path / "proj"
+    (proj / ".supamem").mkdir(parents=True)
+    (proj / ".supamem" / "config.toml").write_text(
+        '[supamem]\ncollection = "x"\n[supamem.hook]\nfetch_k = "abc"\n'
+    )
+    audit = tmp_path / "audit"
+    audit.mkdir()
+    payload = {
+        "session_id": "t",
+        "tool_name": "Edit",
+        "tool_input": {"file_path": str(proj / "a.ts")},
+        "cwd": str(proj),
+    }
+    env = {**os.environ, "NO_COLOR": "1", "TERM": "dumb", "SUPAMEM_AUDIT_DIR": str(audit)}
+    env.pop("SUPAMEM_CONFIG", None)
+    r = subprocess.run(
+        [sys.executable, "-m", "supamem", "hook", "claude-code"],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=proj,
+    )
+    assert r.returncode == 0, f"exit {r.returncode} would block the edit; stderr: {r.stderr}"
+    out = json.loads(r.stdout)  # exactly one JSON object
+    assert out["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
+    assert out["hookSpecificOutput"]["additionalContext"] == ""
+    assert "fetch_k" in r.stderr

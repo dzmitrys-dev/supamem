@@ -333,7 +333,25 @@ def cmd_hook(
         stdin_text = read_stdin_text()
         payload = parse_payload(stdin_text)
         cwd = Path(payload.get("cwd") or Path.cwd())
-        cfg, chain = load_config(main_checkout_root(cwd))
+        try:
+            cfg, chain = load_config(main_checkout_root(cwd))
+        except SystemExit as exc:
+            if exc.code in (0, None):
+                raise
+            # A fail-closed config gate already named the bad key on stderr. In a PreToolUse
+            # hook exit code 2 BLOCKS the tool call, so propagating it would deny every
+            # Edit/Write in the project; degrade to an empty payload and exit 0 instead.
+            import json as _json
+            import sys as _sys
+
+            _sys.stdout.write(
+                _json.dumps(
+                    {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": ""}}
+                )
+                + "\n"
+            )
+            _sys.stderr.write("supamem: edit hook skipped — fix the config error above\n")
+            raise typer.Exit(0) from None
         if chain.collection == "default" and not file_path:
             # No project configured a collection: the edit hook would query the global default collection — another
             # project's memory — after loading the embedders and the reranker (~9 s). Silence instead
