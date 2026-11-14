@@ -798,5 +798,36 @@ def load_config(cwd: Path | None = None) -> tuple[ResolvedConfig, ConfigChain]:
             f"{cfg.mcp_cache_ttl_ms} must be >= 0 (0 disables cache hints)"
         )
         raise SystemExit(2)
+    # ── v0.4.0a4 review round — [supamem.hook] fail-closed validation ─────
+    # The hook coerces these LATE (int()/float()/bool() in hooks.claude_code.run), so a
+    # raw bad value reached the pipeline silently: fetch_k="abc" muted the hook entirely
+    # (int("abc") raised → outer fail-soft) and shadow_task_query="false" was a truthy
+    # string. Validate at load, same shape as the boot-time gates above; values stay
+    # fail-closed (no string coercion — TOML bools are the only accepted form).
+    from rich.markup import escape  # noqa: PLC0415
+
+    def _hook_gate(detail: str) -> None:
+        err_console.print("[supamem.err]" + escape(f"config: [supamem.hook] {detail}"))
+        raise SystemExit(2)
+
+    if isinstance(cfg.hook_fetch_k, bool) or not isinstance(cfg.hook_fetch_k, int):
+        _hook_gate(f"fetch_k={cfg.hook_fetch_k!r} must be an integer >= 1")
+    elif cfg.hook_fetch_k < 1:
+        _hook_gate(f"fetch_k={cfg.hook_fetch_k} must be an integer >= 1")
+    if isinstance(cfg.hook_inject_k, bool) or not isinstance(cfg.hook_inject_k, int):
+        _hook_gate(f"inject_k={cfg.hook_inject_k!r} must be an integer >= 1")
+    elif cfg.hook_inject_k < 1:
+        _hook_gate(f"inject_k={cfg.hook_inject_k} must be an integer >= 1")
+    elif cfg.hook_inject_k > cfg.hook_fetch_k:
+        _hook_gate(f"inject_k={cfg.hook_inject_k} must be <= fetch_k={cfg.hook_fetch_k}")
+    if isinstance(cfg.hook_min_score, bool) or not isinstance(cfg.hook_min_score, (int, float)):
+        _hook_gate(f"min_score={cfg.hook_min_score!r} must be a number >= 0")
+    elif cfg.hook_min_score < 0:
+        _hook_gate(f"min_score={cfg.hook_min_score} must be >= 0 (0 disables the floor)")
+    if not isinstance(cfg.hook_shadow_task_query, bool):
+        _hook_gate(
+            f"shadow_task_query={cfg.hook_shadow_task_query!r} must be a TOML bool "
+            '(true / false — strings like "false" are rejected, they are truthy)'
+        )
 
     return cfg, chain

@@ -221,6 +221,10 @@ def _models_offline() -> Iterator[None]:
 _FETCH_K = 30
 _INJECT_K = 5
 _MIN_SCORE = 2.5  # rerank logits: useful chunks 3.5–5.8, noise < 1.5 (2026-11-14 study)
+# COST: shadow_task_query roughly DOUBLES the retrieval work per code-target edit (a second
+# full query runs even when the main path injects nothing — that is the comparison the
+# shadow_use_rate metric needs). Owner accepts the latency; disable with
+# [supamem.hook] shadow_task_query = false once the channel is measured.
 _SHADOW_TASK_QUERY = True
 
 _POINTER_HEADER = "### Memory context (supamem)"
@@ -440,6 +444,20 @@ def _emit(payload: dict[str, Any]) -> None:
 # ---- journal -------------------------------------------------------------------
 
 
+def _safe_float(value: Any) -> float:
+    """Journal-visible float that never raises and never emits json ``NaN``.
+
+    ``json.dumps`` writes bare ``NaN`` for NaN floats — invalid JSON for any strict
+    parser downstream; a non-numeric score (should the pydantic guard on
+    ``RetrievedChunk`` ever loosen) used to raise straight through ``_journal_row``.
+    """
+    try:
+        f = float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    return f if f == f and f not in (float("inf"), float("-inf")) else 0.0
+
+
 def _journal_row(
     *,
     session: str,
@@ -461,7 +479,7 @@ def _journal_row(
         "chunks": [
             {
                 "source": c.source_path or c.file_path or "?",
-                "score": round(float(c.score or 0.0), 4),
+                "score": round(_safe_float(c.score), 4),
                 "exists": bool(source_exists(c.source_path or c.file_path or "", root))
                 if (c.source_path or c.file_path)
                 else False,
@@ -472,7 +490,7 @@ def _journal_row(
         "empty": empty,
         "deduped": deduped,
         "dropped": dropped,
-        "ms": round(ms, 1),
+        "ms": round(_safe_float(ms), 1),
         "shadow": shadow,
     }
 
@@ -488,7 +506,16 @@ def _shadow_result(
     inject_k: int,
     seen: set[str],
 ) -> dict[str, Any] | None:
-    """Query `task text + path tokens` through the SAME filters; journaled, never emitted."""
+    """Query `task text + path tokens` through the SAME filters; journaled, never emitted.
+
+    COST NOTE (review round 2026-11-14, owner accepts the latency): with
+    ``shadow_task_query = true`` every code-target edit runs a SECOND full retrieval
+    (embed + query + rerank) on top of the main path query — the shadow keeps running
+    even when the main path injects nothing, because that exactly is the comparison the
+    metric needs (does the task text find what the path tokens miss?). Roughly doubles
+    the backend work per edit; disable with ``[supamem.hook] shadow_task_query = false``
+    once ``shadow_use_rate`` justifies (or refutes) the channel.
+    """
     try:
         task = last_user_task_text(Path(transcript_path))
         if not task:
@@ -502,7 +529,7 @@ def _shadow_result(
             "chunks": [
                 {
                     "source": c.source_path or c.file_path or "?",
-                    "score": round(float(c.score or 0.0), 4),
+                    "score": round(_safe_float(c.score), 4),
                 }
                 for c in kept[:inject_k]
             ],
@@ -529,23 +556,36 @@ def run(file_path: Path, config: ResolvedConfig, payload: dict[str, Any] | None 
     cwd = Path(payload.get("cwd") or Path.cwd())
     root = main_checkout_root(cwd)
     t0 = time.perf_counter()
+    # Structural single-emit guarantee (review round 2026-11-14): the hook contract is
+    # EXACTLY ONE stdout JSON per invocation. A journal crash used to land in the outer
+    # handler below and emit a SECOND payload. `emitted` flips only after a successful
+    # write, so the handler emits only when no payload went out yet.
+    emitted = False
+
+    def _emit_once(payload_out: dict[str, Any]) -> None:
+        nonlocal emitted
+        _emit(payload_out)
+        emitted = True
 
     def journal(**kw: Any) -> None:
-        row = _journal_row(
-            session=session,
-            target=str(file_path),
-            root=root,
-            ms=(time.perf_counter() - t0) * 1000.0,
-            **kw,
-        )
-        append_row(row)
+        try:
+            row = _journal_row(
+                session=session,
+                target=str(file_path),
+                root=root,
+                ms=(time.perf_counter() - t0) * 1000.0,
+                **kw,
+            )
+            append_row(row)
+        except Exception as exc:  # noqa: BLE001 — journaling must never reach the emit path
+            log.warning("supamem hook claude_code: journal failed: %s", exc)
 
     try:
         if not is_code_target(file_path):
             journal(
                 query="", chunks=[], empty=True, deduped=0, dropped=dict(ZERO_DROPPED), shadow=None
             )
-            _emit(empty_payload)
+            _emit_once(empty_payload)
             _touch_marker()
             return 0
 
@@ -555,7 +595,7 @@ def run(file_path: Path, config: ResolvedConfig, payload: dict[str, Any] | None 
             journal(
                 query="", chunks=[], empty=True, deduped=0, dropped=dict(ZERO_DROPPED), shadow=None
             )
-            _emit(empty_payload)
+            _emit_once(empty_payload)
             _touch_marker()
             return 0
 
@@ -581,7 +621,7 @@ def run(file_path: Path, config: ResolvedConfig, payload: dict[str, Any] | None 
                 dropped=dict(ZERO_DROPPED),
                 shadow=None,
             )
-            _emit(empty_payload)
+            _emit_once(empty_payload)
             _touch_marker()
             return 0
 
@@ -610,7 +650,7 @@ def run(file_path: Path, config: ResolvedConfig, payload: dict[str, Any] | None 
 
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
         context_text = _format_chunks(final, root)
-        _emit(
+        _emit_once(
             {
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
@@ -626,7 +666,7 @@ def run(file_path: Path, config: ResolvedConfig, payload: dict[str, Any] | None 
             dropped=dropped,
             shadow=shadow,
         )
-        total_tokens = sum(max(1, len(c.text) // 4) for c in final)
+        total_tokens = sum(max(1, len(c.text or "") // 4) for c in final)
         _bump(
             kind="search",
             source="hook_claude_code",
@@ -637,10 +677,11 @@ def run(file_path: Path, config: ResolvedConfig, payload: dict[str, Any] | None 
         return 0
     except Exception as exc:  # noqa: BLE001 — outermost fail-soft
         log.warning("supamem hook claude_code: unhandled: %s", exc)
-        try:
-            _emit(empty_payload)
-        except Exception:  # noqa: BLE001
-            pass
+        if not emitted:  # never a second JSON on stdout
+            try:
+                _emit(empty_payload)
+            except Exception:  # noqa: BLE001
+                pass
         return 0
 
 

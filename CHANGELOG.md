@@ -62,6 +62,58 @@ is pinned by a test in `tests/test_edit_hook_usefulness.py` (plus smoke tests in
   (`test_run_index_warns_when_no_files_collected`, `test_run_index_warns_when_sources_fail`).
 - **Installer matcher.** The claude-code injection hook registration widens `Edit|Write` →
   `Edit|Write|MultiEdit` (`test_installer_injection_hook_matches_multiedit`).
+- **Exactly one JSON per hook invocation.** The success path emitted its payload and then
+  journaled INSIDE the outer fail-soft try, so a journal crash with a non-`OSError` (a lone
+  surrogate in a chunk payload → `UnicodeEncodeError`, a `ValueError`) re-triggered the outer
+  handler and emitted a SECOND stdout JSON — two lines violate the hook contract and break the
+  calling client. The hook now guarantees one emit structurally: an `emitted` guard flips only
+  after a successful write and the handler emits nothing if a payload already went out, the
+  `journal` closure itself is fully fail-soft (broad except + stderr log), and `append_row`
+  catches broad with `errors="replace"` writing so the journal file stays line-parseable.
+  Journal scores go through a `_safe_float` that also keeps json-invalid `NaN` out of the rows
+  (`test_raising_journal_still_emits_exactly_one_json`,
+  `test_journal_fail_soft_on_non_code_target_too`, `test_append_row_survives_lone_surrogate`,
+  `test_journal_row_tolerates_bad_score_values`).
+- **`supamem hook-stats` survives naive timestamps and malformed rows.** `_parse_ts` returned
+  naive datetimes for offset-less stamps → `TypeError` comparing with the aware cutoff crashed
+  the whole command; naive stamps (UTC by construction) are now normalized to UTC. Junk rows
+  (non-dict, non-string/unparseable `ts`, non-numeric `deduped`) are skipped or coerced via a
+  `_safe_int` — never crash (`test_hook_stats_handles_naive_timestamps_and_malformed_rows`).
+- **Filter-aware metrics.** `repeat_rate` ran on emitted rows only, so a row whose candidates
+  were ALL deduped (`chunks=[]`, `deduped>0`) was invisible, and `stale_rate` ran on emitted
+  chunks whose `exists` flag is ~always true by construction. New `dedup_suppressed_rate` and
+  `stale_dropped_rate` (over candidate rows — anything that survived the score floor), plus the
+  `dedup_candidates` denominator and a `baselines` block; the legacy keys stay, labeled in the
+  text report, which now prints the 2026-11-14 research baselines beside them (repeats 65.6%,
+  stale 8.5%) (`test_hook_stats_reports_dedup_and_stale_dropped_rates`,
+  `test_hook_stats_text_output_compares_to_research_baseline`).
+- **Use heuristic on path-component boundaries.** `_same_target` treated any suffix as a match
+  (`/repo/src/myapp.py` matched chunk `app.py`) and the prose signal counted a bare basename
+  anywhere in assistant text; both now anchor on path-component boundaries — `src/app.py` still
+  matches `/repo/src/app.py`, `myapp.py` and `app.py.bak` no longer count
+  (`test_same_target_matches_on_path_component_boundary`,
+  `test_prose_mention_requires_boundary_anchored_basename`).
+- **`[supamem.hook]` values validated fail-closed at load.** The hook coerced the keys late, so
+  `fetch_k = "abc"` silently muted the whole hook (`int("abc")` raised into the outer fail-soft)
+  and `shadow_task_query = "false"` was a truthy string. `load_config` now gates them like the
+  other boot-time gates: `fetch_k`/`inject_k` ints ≥ 1 with `inject_k ≤ fetch_k`, `min_score` a
+  number ≥ 0, `shadow_task_query` a real TOML bool; the error names the key and the table and
+  exits 2 (`test_hook_config_rejects_invalid_values`, `test_hook_config_accepts_valid_boundary_values`).
+- **Dedup-marker race fixed; expired markers swept.** `save_seen` used a FIXED per-session `.tmp`
+  name, so parallel hooks of one session collided (torn writes / `os.replace` `FileNotFoundError` →
+  the whole update lost); each writer now uses a unique `mkstemp` file, re-reads and re-merges
+  immediately before the atomic replace, and self-checks its own ids landed (bounded re-merge).
+  `dedup-*.json` markers were never deleted; each save now opportunistically sweeps markers older
+  than the 24 h TTL (≤ 50 deletions per call)
+  (`test_save_seen_remerges_ids_saved_between_read_and_replace`,
+  `test_save_seen_parallel_writers_keep_union`, `test_save_seen_sweeps_expired_markers_bounded`).
+- **`_iter_events` streams the transcript** line by line instead of reading the whole session
+  JSONL into memory (behaviour unchanged; `test_iter_events_streams_without_a_full_read`).
+- **Shadow query cost documented.** `shadow_task_query = true` roughly doubles the retrieval work
+  per code-target edit (the shadow runs even when the main path injects nothing — that is the
+  comparison the metric needs); the owner accepts the latency, so the behaviour is unchanged and
+  the cost + the `false` off-switch are now stated in the hook docstring and in `llms.txt`/README.
+  A bare repo maps to itself (no main checkout exists) — stated in `llms.txt`.
 
 ## [0.4.0a3] — 2026-11-06 — Field report: the edit hook works, models stay cached, searches are logged, index hygiene
 

@@ -377,23 +377,34 @@ stale rate 8.5%, and 42% of calls (worktree sessions) guaranteed empty. Stage-1 
 
 - **Worktree-aware** — the payload `cwd` is mapped to the main checkout (`git rev-parse --git-common-dir`),
   and the config is loaded from that root, so sessions in `.claude/worktrees/*` see the project's memory.
-- **Session dedup** — a chunk injected once in a session is not injected again (24 h TTL markers; a new session starts clean).
+  A bare repo (or exotic `GIT_DIR`) maps to itself — no main checkout exists to resolve to.
+- **Session dedup** — a chunk injected once in a session is not injected again (24 h TTL markers; a new session
+  starts clean; expired markers are swept on each save; parallel hooks of one session are race-safe).
 - **Stale drop + score floor** — chunks whose source file is gone are dropped; chunks below
   `[supamem.hook] min_score` (default 2.5, reranked scores only) are dropped; the project filter runs on a
   deeper fetch (`fetch_k`, default 30) so other repos can no longer crowd out your own chunks.
 - **Shadow task query** — the hook also queries `last user message + path tokens` and journals the result under
   `shadow` — never emitted — so `shadow_use_rate` can prove (or disprove) task-text queries before any emit flip.
+  Cost: the shadow runs even when the main path injects nothing (that is the comparison the metric needs), so
+  `shadow_task_query = true` roughly **doubles the retrieval work per code-target edit**; set it to `false` to
+  stop paying that (latency is otherwise accepted by the owner).
 - **Pointers, not pastes** — injections are capped at 2000 chars:
   `- **docs/design.md** — Header (score 3.94): first sentence…` plus "Pointers only: open the file before relying on it."
 
 ```toml
 [supamem.hook]
-fetch_k = 30              # query depth before the project filter
-inject_k = 5              # max chunks injected per edit
-min_score = 2.5           # reranked-score floor; 0 disables
-shadow_task_query = true  # journal (never emit) a task-text query from the transcript
+fetch_k = 30              # int >= 1 — query depth before the project filter
+inject_k = 5              # int >= 1, <= fetch_k — max chunks injected per edit
+min_score = 2.5           # number >= 0 — reranked-score floor; 0 disables
+shadow_task_query = true  # TOML bool — journal (never emit) a task-text query from the transcript
 drop_tokens = []          # extra tokens stripped from the path-derived query
 ```
+
+All four numeric/bool keys are validated fail-closed at config load (an invalid value exits with code 2 and
+names the key — a string like `shadow_task_query = "false"` is rejected rather than silently treated as true).
+`hook-stats` reports the filter-aware `dedup_suppressed_rate` and `stale_dropped_rate` over candidate rows —
+the numbers to compare against the research baselines (repeats 65.6%, stale 8.5%, printed in the text report);
+the legacy `repeat_rate` / `stale_rate` keys remain, labeled emitted-rows-only / emitted-chunks-only.
 
 Latency is explicitly not a concern (owner, 2026-11-14); the journal exists to make **usefulness** visible.
 

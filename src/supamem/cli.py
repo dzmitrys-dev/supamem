@@ -394,6 +394,7 @@ def cmd_hook_stats(
             f"[supamem.muted]({stats['window_days']:.0f}d window)[/supamem.muted]"
         )
         console.print(f"[supamem.muted]journal:[/supamem.muted] {stats['journal_path']}")
+        baselines = stats.get("baselines") or {}
         for key in (
             "invocations",
             "non_empty",
@@ -401,12 +402,31 @@ def cmd_hook_stats(
             "use_rate",
             "used_events",
             "useful_per_100_edits",
-            "repeat_rate",
-            "stale_rate",
-            "lang_mismatch_rate",
-            "shadow_rows",
-            "shadow_use_rate",
         ):
+            console.print(f"  {key}: {stats[key]}")
+        # The study-comparable filter metrics (2026-11-14 research baselines). The legacy
+        # keys stay but are labeled: repeat_rate runs on emitted rows only, and stale_rate
+        # runs on emitted chunks, which are ~never stale by construction.
+        console.print(
+            f"  repeat_rate: {stats['repeat_rate']} "
+            "[supamem.muted](emitted rows only — see dedup_suppressed_rate)[/supamem.muted]"
+        )
+        console.print(
+            f"  dedup_suppressed_rate: {stats['dedup_suppressed_rate']} "
+            f"over {stats['dedup_candidates']} candidate rows [supamem.muted]"
+            f"← baseline repeats {baselines.get('repeat_rate', 0) * 100:.1f}% "
+            "(study 2026-11-14)[/supamem.muted]"
+        )
+        console.print(
+            f"  stale_rate: {stats['stale_rate']} "
+            "[supamem.muted](emitted chunks only — see stale_dropped_rate)[/supamem.muted]"
+        )
+        console.print(
+            f"  stale_dropped_rate: {stats['stale_dropped_rate']} [supamem.muted]"
+            f"← baseline stale {baselines.get('stale_rate', 0) * 100:.1f}% "
+            "(study 2026-11-14)[/supamem.muted]"
+        )
+        for key in ("lang_mismatch_rate", "shadow_rows", "shadow_use_rate"):
             console.print(f"  {key}: {stats[key]}")
     raise typer.Exit(0)
 
