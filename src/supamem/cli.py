@@ -323,18 +323,92 @@ def cmd_hook(
     from supamem.config import load_config
     from supamem.hooks import dispatch
 
-    cfg, chain = load_config()
-    if client == "claude-code" and chain.collection == "default" and not file_path:
-        # No project configured a collection: the edit hook would query the global default collection — another
-        # project's memory — after loading the embedders and the reranker (~9 s). Silence instead
-        # (field report 2026-11-06: cl-harness edits received supamem-repo context).
-        import json as _json
-        import sys as _sys
+    if client == "claude-code":
+        # The edit hook is worktree-aware (v0.4.0a4): the payload's cwd may be a linked
+        # worktree whose parent checkout carries the untracked .supamem/config.toml — load
+        # the config from the MAIN checkout so worktree sessions are not silently muted.
+        from supamem.hooks.claude_code import main_checkout_root, parse_payload, read_stdin_text
+        from supamem.stats.injections import append_row, empty_row
 
-        _sys.stdout.write(_json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": ""}}) + "\n")
-        raise typer.Exit(0)
+        stdin_text = read_stdin_text()
+        payload = parse_payload(stdin_text)
+        cwd = Path(payload.get("cwd") or Path.cwd())
+        cfg, chain = load_config(main_checkout_root(cwd))
+        if chain.collection == "default" and not file_path:
+            # No project configured a collection: the edit hook would query the global default collection — another
+            # project's memory — after loading the embedders and the reranker (~9 s). Silence instead
+            # (field report 2026-11-06: cl-harness edits received supamem-repo context).
+            import json as _json
+            import sys as _sys
+
+            _sys.stdout.write(
+                _json.dumps(
+                    {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": ""}}
+                )
+                + "\n"
+            )
+            # journal it too — the injection_rate denominator is every invocation
+            tool_input = payload.get("tool_input")
+            target = ""
+            if isinstance(tool_input, dict):
+                for key in ("file_path", "notebook_path"):
+                    value = tool_input.get(key)
+                    if isinstance(value, str) and value:
+                        target = value
+                        break
+            append_row(empty_row(session=str(payload.get("session_id") or ""), target=target))
+            raise typer.Exit(0)
+        fp = Path(file_path) if file_path else None
+        raise typer.Exit(dispatch(client=client, file_path=fp, config=cfg, stdin_text=stdin_text))
+
+    cfg, chain = load_config()
     fp = Path(file_path) if file_path else None
     raise typer.Exit(dispatch(client=client, file_path=fp, config=cfg))
+
+
+@app.command("hook-stats")
+def cmd_hook_stats(
+    days: int = typer.Option(
+        7, "--days", help="Look-back window in days for the injection journal."
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Print the metrics as one JSON object."),
+) -> None:
+    """Usefulness metrics for the Claude Code edit-hook injections (v0.4.0a4).
+
+    Reads ``<audit dir>/injections.jsonl`` and correlates each row with the Claude Code
+    session transcript: injection rate, use rate (a chunk counts as used when a later
+    Read/Edit/Write/Grep targets its source or its basename appears in assistant text),
+    repeat / stale / language-mismatch rates, useful-per-100-edits, and the same use
+    metric for the shadow task-query channel.
+    """
+    import json as _json
+
+    from supamem.stats.injections import compute_stats
+
+    stats = compute_stats(days=float(days))
+    if json_output:
+        console.print_json(_json.dumps(stats))
+    else:
+        console.print(
+            f"[supamem.brand]edit-hook injections[/supamem.brand] "
+            f"[supamem.muted]({stats['window_days']:.0f}d window)[/supamem.muted]"
+        )
+        console.print(f"[supamem.muted]journal:[/supamem.muted] {stats['journal_path']}")
+        for key in (
+            "invocations",
+            "non_empty",
+            "injection_rate",
+            "use_rate",
+            "used_events",
+            "useful_per_100_edits",
+            "repeat_rate",
+            "stale_rate",
+            "lang_mismatch_rate",
+            "shadow_rows",
+            "shadow_use_rate",
+        ):
+            console.print(f"  {key}: {stats[key]}")
+    raise typer.Exit(0)
 
 
 class StatsWindow(str, Enum):

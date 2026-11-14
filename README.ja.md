@@ -121,7 +121,7 @@ env-var 名、ファイルパス)を捉えます。Dense は BM25 が見逃す *
 
 ```bash
 # 1. インストール(uv が最速)
-uv tool install 'supamem==0.4.0a3'
+uv tool install 'supamem==0.4.0a4'
 
 # 2. Qdrant を起動(初回のみ、~30s)
 docker run -d -p 6333:6333 -p 6334:6334 -v $HOME/.qdrant:/qdrant/storage qdrant/qdrant:latest
@@ -249,13 +249,13 @@ Docker がない?[Qdrant Cloud](https://cloud.qdrant.io/) でマネージドク�
 
 ```bash
 # 推奨:uv(最速、隔離)
-uv tool install 'supamem==0.4.0a3'
+uv tool install 'supamem==0.4.0a4'
 
 # 代替:pipx(これも隔離)
-pipx install supamem==0.4.0a3
+pipx install supamem==0.4.0a4
 
 # プレーン pip(venv 内で)
-pip install supamem==0.4.0a3
+pip install supamem==0.4.0a4
 ```
 
 > **バージョン固定は必須です。** `0.4.0a3` はプレリリースであり、最新の*安定版*(`0.2.0`)は `0.3.x` / `0.4.x` 系列全体より古いため、固定なしの `install supamem` は本ドキュメントが説明する機能よりも古いバージョンへ**逆方向に**解決されます。厳密なプレリリース固定は追加フラグなしで解決でき、依存関係は安定版のままです。`--prerelease allow` は**使用しないでください**(解決全体に適用され、プレリリース依存を引き込みます)。
@@ -333,6 +333,7 @@ pip uninstall supamem
 | `supamem index` | ロックされた tuned-hybrid パイプラインで dev メモリを Qdrant に embed(D-25) |
 | `supamem mcp-server` | MCP サーバー実行(`--transport stdio` デフォルト;`http` で HTTP) |
 | `supamem hook <client>` | クライアント別セッション/編集フック(クライアント自身が呼び出す) |
+| `supamem hook-stats` | 📈 編集フックの有用性メトリクス(v0.4.0a4+):`injection_rate`、`use_rate`、`repeat_rate`、`stale_rate`、`lang_mismatch_rate`、`useful_per_100_edits`、`shadow_use_rate` — インジェクションジャーナル(`<audit dir>/injections.jsonl`)と Claude Code セッションのトランスクリプトを突き合わせます。`--days N`(デフォルト 7)、`--json` で機械可読出力。 |
 | `supamem doctor` | 🩺 Qdrant をプローブ、解決済み設定チェーンを出力、バージョンドリフトを報告 |
 | `supamem stats` | `.supamem/state/` からの Welford schema-v2 利用カウンタ |
 | `supamem live` | 👀 audit JSONL を追跡するライブダッシュボード — パイプセーフ(非 TTY 時はプレーン JSONL);ローテーション、リサイズ、Ctrl-C を処理 |
@@ -343,6 +344,29 @@ pip uninstall supamem
 
 すべての長時間実行コマンドは経過時間付きの **ライブスピナー** を表示するので、動作中だと
 常にわかります。任意のサブコマンドに `--help` を付けると詳細が出ます。
+
+---
+
+### 編集フックの有用性(v0.4.0a4+)
+
+Claude Code 編集フック(`supamem hook claude-code`)は呼び出しごとに `<audit dir>/injections.jsonl` へ記録し、`supamem hook-stats [--days N] [--json]` で自己測定します。2026-11-14 のベースライン:注入率 4.2%、使用率 0.6%、repeat 率 65.6%、stale 率 8.5%、さらに呼び出しの 42%(worktree セッション)は構造的に空。ステージ 1 の修正:
+
+- **worktree 対応** — ペイロードの `cwd` をメインチェックアウトへマッピングし(`git rev-parse --git-common-dir`)、そこから設定を読み込むため、`.claude/worktrees/*` のセッションでもプロジェクトのメモリが見えます。
+- **セッション重複排除** — 同一セッションで一度注入された chunk は再注入されません(24 時間 TTL のマーカー。新しいセッションはクリア)。
+- **stale 除去 + スコア下限** — ソースファイルが存在しない chunk は破棄。`[supamem.hook] min_score`(既定 2.5、rerank スコアのみ)未満の chunk も破棄。プロジェクトフィルタは深いフェッチ(`fetch_k`、既定 30)に対して走るため、他リポジトリの chunk が自分のものを追い出すことはもうありません。
+- **シャドウタスククエリ** — フックは「最新ユーザーメッセージ + パストークン」でもクエリし、結果を `shadow` としてジャーナルに記録します(決して出力されない)。これにより emit を切り替える前に `shadow_use_rate` がタスクテキストクエリを証明(または反証)できます。
+- **ポインタ、貼り付けではない** — 注入は 2000 文字に制限:`- **docs/design.md** — Header (score 3.94): 第一文…` と "Pointers only: open the file before relying on it."
+
+```toml
+[supamem.hook]
+fetch_k = 30              # プロジェクトフィルタ前のクエリ深度
+inject_k = 5              # 編集ごとに注入する最大 chunk 数
+min_score = 2.5           # rerank スコアの下限。0 で無効
+shadow_task_query = true  # トランスクリプトのタスクテキストクエリを記録(出力はしない)
+drop_tokens = []          # パス由来クエリから除外する追加トークン
+```
+
+レイテンシは明示的に非関心事です(オーナー、2026-11-14)。ジャーナルは**有用性**を見える化するために存在します。
 
 ---
 

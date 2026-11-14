@@ -44,7 +44,9 @@ class ResolvedConfig:
     embedder: str = "minilm"
     chunker: str = "markdown_header"
     sources: list[str] = field(default_factory=list)
-    exclude: list[str] = field(default_factory=list)  # globs (relative to the project root) never indexed
+    exclude: list[str] = field(
+        default_factory=list
+    )  # globs (relative to the project root) never indexed
     chunk_size: int = 200
     fusion: str = "rrf"
     drop_tokens: list[str] = field(default_factory=list)
@@ -158,6 +160,15 @@ class ResolvedConfig:
     # not a cacheable method, so no tool result (read or write) is ever
     # stamped. Boot-time gate rejects negative values.
     mcp_cache_ttl_ms: int = 0
+    # ── v0.4.0a4 — edit-hook injection pipeline ([supamem.hook]) ──────────
+    # Order: query(k=fetch_k) → project filter → score floor → stale drop →
+    # session dedup → [:inject_k]. min_score applies ONLY to reranker-produced
+    # scores (rerank_score is not None); 0 disables the floor. Latency is
+    # explicitly NOT a concern (owner, 2026-11-14).
+    hook_fetch_k: int = 30
+    hook_inject_k: int = 5
+    hook_min_score: float = 2.5
+    hook_shadow_task_query: bool = True
 
 
 @dataclass
@@ -212,6 +223,11 @@ class ConfigChain:
     # Phase 19 L3/L2 — MCP response format + cache-hint TTL ([supamem.mcp]).
     mcp_response_format: Source = "default"
     mcp_cache_ttl_ms: Source = "default"
+    # v0.4.0a4 — edit-hook injection pipeline ([supamem.hook]).
+    hook_fetch_k: Source = "default"
+    hook_inject_k: Source = "default"
+    hook_min_score: Source = "default"
+    hook_shadow_task_query: Source = "default"
 
 
 _LEGACY_ENV: dict[str, str] = {
@@ -222,7 +238,16 @@ _LEGACY_ENV: dict[str, str] = {
 }
 
 _NESTED_TABLES: list[tuple[str, dict[str, str]]] = [
-    ("hook", {"drop_tokens": "drop_tokens"}),
+    (
+        "hook",
+        {
+            "drop_tokens": "drop_tokens",
+            "fetch_k": "hook_fetch_k",
+            "inject_k": "hook_inject_k",
+            "min_score": "hook_min_score",
+            "shadow_task_query": "hook_shadow_task_query",
+        },
+    ),
     (
         "eval",
         {
@@ -593,6 +618,31 @@ def find_project_root(start: Path | None = None) -> Path | None:
         if home is not None and current == home:
             return None
         current = parent
+
+
+def describe_config_path(cwd: Path | None = None) -> str:
+    """Human-readable name of the config path discovery checks (for run_index warnings).
+
+    Mirrors the ``load_config`` rungs: ``$SUPAMEM_CONFIG`` → ``<cwd>/.supamem/config.toml``
+    → ``<cwd>/pyproject.toml`` ``[tool.supamem]``. When nothing is configured, the canonical
+    path is named with a ``(not found)`` suffix so the warning is actionable.
+    """
+    cwd = cwd or Path.cwd()
+    explicit = os.environ.get("SUPAMEM_CONFIG", "").strip()
+    if explicit:
+        return explicit
+    canonical = cwd / ".supamem" / "config.toml"
+    if canonical.is_file():
+        return str(canonical)
+    pyproject = cwd / "pyproject.toml"
+    if pyproject.is_file():
+        try:
+            data = _load_toml(pyproject)
+        except RuntimeError:
+            data = {}
+        if isinstance(data.get("tool"), dict) and isinstance(data["tool"].get("supamem"), dict):
+            return str(pyproject)
+    return f"{canonical} (not found)"
 
 
 def load_config(cwd: Path | None = None) -> tuple[ResolvedConfig, ConfigChain]:

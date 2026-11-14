@@ -120,7 +120,7 @@ Anthropic API 标价(2026 年 3 月):
 
 ```bash
 # 1. 安装(uv 是最快路径)
-uv tool install 'supamem==0.4.0a3'
+uv tool install 'supamem==0.4.0a4'
 
 # 2. 启动 Qdrant(一次性,~30 秒)
 docker run -d -p 6333:6333 -p 6334:6334 -v $HOME/.qdrant:/qdrant/storage qdrant/qdrant:latest
@@ -248,13 +248,13 @@ services:
 
 ```bash
 # 推荐:uv(最快、隔离)
-uv tool install 'supamem==0.4.0a3'
+uv tool install 'supamem==0.4.0a4'
 
 # 备选:pipx(也隔离)
-pipx install supamem==0.4.0a3
+pipx install supamem==0.4.0a4
 
 # 普通 pip(在 venv 中)
-pip install supamem==0.4.0a3
+pip install supamem==0.4.0a4
 ```
 
 > **必须固定版本。** `0.4.0a3` 是预发布版本,而最新的*稳定*版(`0.2.0`)早于整个 `0.3.x` / `0.4.x` 系列 —— 因此不带版本号的 `install supamem` 会**向后**解析到比本文档所述功能更旧的版本。精确的预发布版本固定无需任何额外标志即可解析,同时依赖仍停留在稳定版;请**不要**使用 `--prerelease allow`(它作用于整个解析过程,会拉入预发布依赖)。
@@ -327,6 +327,7 @@ pip uninstall supamem
 | `supamem index` | 用锁定的 tuned-hybrid 管线把开发记忆嵌入 Qdrant(D-25) |
 | `supamem mcp-server` | 运行 MCP 服务器(`--transport stdio` 默认;`http` 走 HTTP) |
 | `supamem hook <client>` | 每客户端会话/编辑钩子(由客户端自动调用) |
+| `supamem hook-stats` | 📈 编辑钩子有效性指标(v0.4.0a4+):`injection_rate`、`use_rate`、`repeat_rate`、`stale_rate`、`lang_mismatch_rate`、`useful_per_100_edits`、`shadow_use_rate` —— 将注入日志(`<audit dir>/injections.jsonl`)与 Claude Code 会话转录关联。`--days N`(默认 7),`--json` 输出机器可读结果。 |
 | `supamem doctor` | 🩺 探测 Qdrant、打印解析后的配置链、报告版本漂移 |
 | `supamem stats` | 来自 `.supamem/state/` 的 Welford schema-v2 使用计数 |
 | `supamem live` | 👀 跟踪 audit JSONL 的实时仪表盘 — 管道安全(非 TTY 时输出纯 JSONL);处理日志轮转、终端尺寸变化、Ctrl-C |
@@ -337,6 +338,29 @@ pip uninstall supamem
 
 每个长时间命令都有**实时进度条**显示已用时间,所以你始终知道它在工作。
 任意子命令上加 `--help` 可看详细说明。
+
+---
+
+### 编辑钩子有效性(v0.4.0a4+)
+
+Claude Code 编辑钩子(`supamem hook claude-code`)现在会把每次调用记录到 `<audit dir>/injections.jsonl`,并用 `supamem hook-stats [--days N] [--json]` 度量自身。2026-11-14 的基线:注入率 4.2%,使用率 0.6%,重复率 65.6%,过期率 8.5%,且 42% 的调用(worktree 会话)必然为空。第一阶段修复:
+
+- **感知 worktree** —— 载荷中的 `cwd` 会被映射回主检出(`git rev-parse --git-common-dir`),配置从该根目录加载,因此 `.claude/worktrees/*` 中的会话也能看到项目的记忆。
+- **会话去重** —— 同一会话中已注入过的 chunk 不会再次注入(24 小时 TTL 标记;新会话重新开始)。
+- **过期丢弃 + 分数下限** —— 源文件已消失的 chunk 会被丢弃;低于 `[supamem.hook] min_score`(默认 2.5,仅作用于 rerank 分数)的 chunk 会被丢弃;项目过滤器运行在更深的抓取层(`fetch_k`,默认 30),其他仓库的 chunk 不再挤掉自己的。
+- **影子任务查询** —— 钩子还会用「最近一条用户消息 + 路径 token」查询,并把结果记录在 `shadow` 下 —— 永不输出 —— 让 `shadow_use_rate` 能在任何输出切换之前证明(或证伪)任务文本查询。
+- **指针而非粘贴** —— 注入内容上限 2000 字符:`- **docs/design.md** — Header (score 3.94): 第一句…`,并附 "Pointers only: open the file before relying on it."
+
+```toml
+[supamem.hook]
+fetch_k = 30              # 项目过滤器之前的查询深度
+inject_k = 5              # 每次编辑最多注入的 chunk 数
+min_score = 2.5           # rerank 分数下限;0 禁用
+shadow_task_query = true  # 记录(绝不输出)来自转录的任务文本查询
+drop_tokens = []          # 从路径派生查询中剔除的额外 token
+```
+
+延迟明确不是关注点(所有者,2026-11-14);日志的存在是为了让**有效性**可见。
 
 ---
 

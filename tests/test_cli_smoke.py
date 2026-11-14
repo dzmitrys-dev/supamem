@@ -1,4 +1,5 @@
 """Smoke tests for the supamem CLI surface (plan 80.6-01 Task 2)."""
+
 from __future__ import annotations
 
 import os
@@ -22,7 +23,7 @@ def _run(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedP
     )
 
 
-SUBCOMMANDS = ["index", "mcp-server", "hook", "stats", "eval", "install", "doctor"]
+SUBCOMMANDS = ["index", "mcp-server", "hook", "hook-stats", "stats", "eval", "install", "doctor"]
 
 
 def test_help_lists_all_subcommands() -> None:
@@ -318,7 +319,8 @@ def test_install_with_skip_patch_agents_emits_skip_message(tmp_path) -> None:
     env = {"HOME": str(home), "SUPAMEM_NO_UPDATE_CHECK": "1"}
     r = _run(
         "install",
-        "--client", "claude-code",
+        "--client",
+        "claude-code",
         "--dry-run",
         "--skip-patch-agents",
         "--skip-models",
@@ -436,8 +438,10 @@ def test_unpatch_agents_restores_after_install_repair_loop(tmp_path) -> None:
     # patches agent files); user scope keeps every write inside sandboxed HOME.
     r1 = _run(
         "install",
-        "--client", "claude-code",
-        "--scope", "user",
+        "--client",
+        "claude-code",
+        "--scope",
+        "user",
         "--skip-models",
         env=env,
     )
@@ -475,8 +479,10 @@ def test_unpatch_agents_warns_on_user_edited_file(tmp_path) -> None:
     # patches agent files); user scope keeps every write inside sandboxed HOME.
     _run(
         "install",
-        "--client", "claude-code",
-        "--scope", "user",
+        "--client",
+        "claude-code",
+        "--scope",
+        "user",
         "--skip-models",
         env=env,
     )
@@ -522,9 +528,7 @@ def test_eval_list_suites() -> None:
     assert r.returncode == 0, r.stderr
     out = r.stdout + r.stderr
     assert "goldens" in out, f"expected 'goldens' suite in --list-suites, got: {out!r}"
-    assert "longmemeval_s" in out, (
-        f"expected 'longmemeval_s' suite in --list-suites, got: {out!r}"
-    )
+    assert "longmemeval_s" in out, f"expected 'longmemeval_s' suite in --list-suites, got: {out!r}"
 
 
 def test_eval_coderag_smoke(tmp_path) -> None:
@@ -535,18 +539,18 @@ def test_eval_coderag_smoke(tmp_path) -> None:
     no network, no Qdrant, no live corpus walk.
     """
     import json as _json
+
     out = tmp_path / "coderag_smoke_out.json"
     result = _run(
-        "eval", "--suite", "coderag", "--out", str(out),
+        "eval",
+        "--suite",
+        "coderag",
+        "--out",
+        str(out),
         env={"SUPAMEM_NO_UPDATE_CHECK": "1"},
     )
-    assert result.returncode == 0, (
-        f"stderr: {result.stderr}\nstdout: {result.stdout}"
-    )
-    assert out.exists(), (
-        f"expected envelope at {out}, dir contents: "
-        f"{list(tmp_path.iterdir())}"
-    )
+    assert result.returncode == 0, f"stderr: {result.stderr}\nstdout: {result.stdout}"
+    assert out.exists(), f"expected envelope at {out}, dir contents: {list(tmp_path.iterdir())}"
     envelope = _json.loads(out.read_text(encoding="utf-8"))
     assert envelope["report_schema_version"] == "coderag.v1"
     assert "code_fact" in envelope["scores"]
@@ -654,3 +658,33 @@ def test_skip_patch_agents_help_names_both_agent_scopes() -> None:
         r = _run(sub, "--help")
         assert r.returncode == 0, f"stderr: {r.stderr}"
         assert needle in r.stdout, f"{sub} --help missing dual-scope text:\n{r.stdout}"
+
+
+# ---- v0.4.0a4 — `supamem hook-stats` (edit-hook usefulness metrics) ----------------------
+
+
+def test_hook_stats_help_lists_flags() -> None:
+    """hook-stats --help shows --days and --json (v0.4.0a4)."""
+    result = _run("hook-stats", "--help")
+    assert result.returncode == 0, result.stderr
+    for flag in ("--days", "--json"):
+        assert flag in result.stdout, f"expected {flag} in hook-stats --help"
+
+
+def test_hook_stats_json_on_empty_journal(tmp_path) -> None:
+    """hook-stats exits 0 with all-zero metrics when the journal is missing/empty.
+
+    SUPAMEM_AUDIT_DIR is redirected to a fresh tmp dir so no user journal is read
+    (mirrors the autouse audit-isolation fixture, but for the subprocess path).
+    """
+    audit = tmp_path / "audit"
+    audit.mkdir()
+    result = _run("hook-stats", "--days", "1", "--json", env={"SUPAMEM_AUDIT_DIR": str(audit)})
+    assert result.returncode == 0, result.stderr
+    import json
+
+    stats = json.loads(result.stdout)  # console.print_json — the whole stdout IS the object
+    assert stats["invocations"] == 0
+    assert stats["injection_rate"] == 0.0
+    assert stats["use_rate"] == 0.0
+    assert stats["shadow_rows"] == 0

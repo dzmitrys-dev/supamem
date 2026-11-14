@@ -73,6 +73,10 @@ def test_run_emits_hookspecificoutput_on_stdout(
     ]
     monkeypatch.setattr(mod, "_get_backend", lambda cfg: fake_backend)
     monkeypatch.setattr(mod, "_marker_dir", lambda: tmp_path)
+    # v0.4.0a4: the hook drops chunks whose source does not exist (stale drop) —
+    # create the relative source so the chunk survives to the output.
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "a.md").write_text("# a\n")
 
     cap = io.StringIO()
     real = sys.stdout

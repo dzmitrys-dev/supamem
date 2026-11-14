@@ -120,7 +120,7 @@ not for code-aware retrieval.
 
 ```bash
 # 1. Install (uv is the fastest path)
-uv tool install 'supamem==0.4.0a3'
+uv tool install 'supamem==0.4.0a4'
 
 # 2. Start Qdrant (one-time, ~30s)
 docker run -d -p 6333:6333 -p 6334:6334 -v $HOME/.qdrant:/qdrant/storage qdrant/qdrant:latest
@@ -249,16 +249,16 @@ available) and point `supamem` at the URL via `supamem init`.
 
 ```bash
 # Recommended: uv (fastest, isolated)
-uv tool install 'supamem==0.4.0a3'
+uv tool install 'supamem==0.4.0a4'
 
 # Alternative: pipx (also isolated)
-pipx install supamem==0.4.0a3
+pipx install supamem==0.4.0a4
 
 # Plain pip (in a venv)
-pip install supamem==0.4.0a3
+pip install supamem==0.4.0a4
 ```
 
-> **The version pin is required.** `0.4.0a3` is a pre-release, and the newest *stable* release (`0.2.0`) predates the entire `0.3.x` / `0.4.x` line — so an unpinned `install supamem` resolves **backwards**, to a version older than the features documented here. An exact pre-release pin resolves with no extra flags while dependencies stay on stable versions; do **not** use `--prerelease allow` (it applies to the whole resolution and drags in pre-release dependencies).
+> **The version pin is required.** `0.4.0a4` is a pre-release, and the newest *stable* release (`0.2.0`) predates the entire `0.3.x` / `0.4.x` line — so an unpinned `install supamem` resolves **backwards**, to a version older than the features documented here. An exact pre-release pin resolves with no extra flags while dependencies stay on stable versions; do **not** use `--prerelease allow` (it applies to the whole resolution and drags in pre-release dependencies).
 
 Verify:
 
@@ -331,6 +331,7 @@ discover this flow naturally.
 | `supamem index` | Embed dev memories into Qdrant using the locked tuned-hybrid pipeline (D-25) |
 | `supamem mcp-server` | Run the MCP server (`--transport stdio` default; `--transport http` for HTTP) |
 | `supamem hook <client>` | Per-client session/edit hooks (called by the client itself) |
+| `supamem hook-stats` | 📈 Edit-hook usefulness metrics (v0.4.0a4+): `injection_rate`, `use_rate`, `repeat_rate`, `stale_rate`, `lang_mismatch_rate`, `useful_per_100_edits`, `shadow_use_rate` — correlates the injection journal (`<audit dir>/injections.jsonl`) with the Claude Code session transcripts. `--days N` (default 7), `--json` for machine output. |
 | `supamem doctor` | 🩺 Probe Qdrant, print resolved config chain, report version drift |
 | `supamem stats` | Welford schema-v2 usage counters from `.supamem/state/` |
 | `supamem live` | 👀 Live dashboard tailing the audit JSONL — pipe-safe (plain JSONL when not a TTY); handles rotation, resize, Ctrl-C |
@@ -366,6 +367,35 @@ the banner only signals; run `supamem repair` to act.
 
 Every long-running command shows a **live spinner** with elapsed time so you always know it's
 working. Use `--help` on any subcommand for details.
+
+### Edit-hook usefulness (v0.4.0a4+)
+
+The Claude Code edit hook (`supamem hook claude-code`) now journals every invocation to
+`<audit dir>/injections.jsonl` and measures itself with `supamem hook-stats [--days N] [--json]`.
+The 2026-11-14 baseline it works against: injection rate 4.2%, use rate 0.6%, repeat rate 65.6%,
+stale rate 8.5%, and 42% of calls (worktree sessions) guaranteed empty. Stage-1 fixes:
+
+- **Worktree-aware** — the payload `cwd` is mapped to the main checkout (`git rev-parse --git-common-dir`),
+  and the config is loaded from that root, so sessions in `.claude/worktrees/*` see the project's memory.
+- **Session dedup** — a chunk injected once in a session is not injected again (24 h TTL markers; a new session starts clean).
+- **Stale drop + score floor** — chunks whose source file is gone are dropped; chunks below
+  `[supamem.hook] min_score` (default 2.5, reranked scores only) are dropped; the project filter runs on a
+  deeper fetch (`fetch_k`, default 30) so other repos can no longer crowd out your own chunks.
+- **Shadow task query** — the hook also queries `last user message + path tokens` and journals the result under
+  `shadow` — never emitted — so `shadow_use_rate` can prove (or disprove) task-text queries before any emit flip.
+- **Pointers, not pastes** — injections are capped at 2000 chars:
+  `- **docs/design.md** — Header (score 3.94): first sentence…` plus "Pointers only: open the file before relying on it."
+
+```toml
+[supamem.hook]
+fetch_k = 30              # query depth before the project filter
+inject_k = 5              # max chunks injected per edit
+min_score = 2.5           # reranked-score floor; 0 disables
+shadow_task_query = true  # journal (never emit) a task-text query from the transcript
+drop_tokens = []          # extra tokens stripped from the path-derived query
+```
+
+Latency is explicitly not a concern (owner, 2026-11-14); the journal exists to make **usefulness** visible.
 
 ---
 

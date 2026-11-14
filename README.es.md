@@ -126,7 +126,7 @@ CRM personal, no para retrieval consciente del código.
 
 ```bash
 # 1. Instalar (uv es la ruta más rápida)
-uv tool install 'supamem==0.4.0a3'
+uv tool install 'supamem==0.4.0a4'
 
 # 2. Iniciar Qdrant (una vez, ~30s)
 docker run -d -p 6333:6333 -p 6334:6334 -v $HOME/.qdrant:/qdrant/storage qdrant/qdrant:latest
@@ -255,13 +255,13 @@ y apunta `supamem` a la URL vía `supamem init`.
 
 ```bash
 # Recomendado: uv (más rápido, aislado)
-uv tool install 'supamem==0.4.0a3'
+uv tool install 'supamem==0.4.0a4'
 
 # Alternativa: pipx (también aislado)
-pipx install supamem==0.4.0a3
+pipx install supamem==0.4.0a4
 
 # pip plano (en un venv)
-pip install supamem==0.4.0a3
+pip install supamem==0.4.0a4
 ```
 
 > **El pin de versión es obligatorio.** `0.4.0a3` es una pre-release, y la versión *estable* más reciente (`0.2.0`) es anterior a toda la línea `0.3.x` / `0.4.x`, por lo que un `install supamem` sin pin resuelve **hacia atrás**, a una versión más antigua que las funciones documentadas aquí. Un pin exacto de pre-release resuelve sin flags adicionales y mantiene las dependencias en versiones estables; **no** uses `--prerelease allow` (se aplica a toda la resolución y arrastra dependencias pre-release).
@@ -341,6 +341,7 @@ y el recordatorio para que descubras este flujo de manera natural.
 | `supamem index` | Embeber memorias de dev en Qdrant usando el pipeline tuned-hybrid fijo (D-25) |
 | `supamem mcp-server` | Correr el servidor MCP (`--transport stdio` default; `--transport http` para HTTP) |
 | `supamem hook <client>` | Hooks de sesión/edición por cliente (llamados por el cliente) |
+| `supamem hook-stats` | 📈 Métricas de utilidad del hook de edición (v0.4.0a4+): `injection_rate`, `use_rate`, `repeat_rate`, `stale_rate`, `lang_mismatch_rate`, `useful_per_100_edits`, `shadow_use_rate` — correlaciona el diario de inyecciones (`<audit dir>/injections.jsonl`) con las transcripciones de sesión de Claude Code. `--days N` (7 por defecto), `--json` para salida legible por máquina. |
 | `supamem doctor` | 🩺 Probar Qdrant, imprimir cadena de config resuelta, reportar drift de versión |
 | `supamem stats` | Contadores Welford schema-v2 desde `.supamem/state/` |
 | `supamem live` | 👀 Dashboard en vivo siguiendo el audit JSONL — pipe-safe (JSONL plano cuando no hay TTY); maneja rotación, redimensionado, Ctrl-C |
@@ -351,6 +352,29 @@ y el recordatorio para que descubras este flujo de manera natural.
 
 Cada comando de larga ejecución muestra un **spinner en vivo** con tiempo transcurrido para que siempre
 sepas que está trabajando. Usa `--help` en cualquier subcomando para detalles.
+
+---
+
+### Utilidad del hook de edición (v0.4.0a4+)
+
+El hook de edición de Claude Code (`supamem hook claude-code`) ahora registra cada invocación en `<audit dir>/injections.jsonl` y se mide a sí mismo con `supamem hook-stats [--days N] [--json]`. La línea base del 2026-11-14: tasa de inyección 4.2%, tasa de uso 0.6%, tasa de repetición 65.6%, tasa de obsolescencia 8.5%, y el 42% de las llamadas (sesiones en worktree) garantizado vacío. Correcciones de etapa 1:
+
+- **Consciente de worktrees** — el `cwd` del payload se mapea al checkout principal (`git rev-parse --git-common-dir`) y la config se carga desde esa raíz, así las sesiones en `.claude/worktrees/*` ven la memoria del proyecto.
+- **Dedup por sesión** — un chunk ya inyectado en una sesión no se inyecta de nuevo (marcadores con TTL de 24 h; una sesión nueva empieza limpio).
+- **Descarte de obsoletos + suelo de puntaje** — los chunks cuyo archivo fuente ya no existe se descartan; los chunks por debajo de `[supamem.hook] min_score` (2.5 por defecto, solo puntajes rerankeados) se descartan; el filtro de proyecto corre sobre una búsqueda más profunda (`fetch_k`, 30 por defecto) para que otros repos ya no desplacen a los tuyos.
+- **Consulta de tarea en sombra** — el hook también consulta `último mensaje de usuario + tokens de ruta` y registra el resultado bajo `shadow` — nunca emitido — para que `shadow_use_rate` pueda probar (o refutar) las consultas por texto de tarea antes de cambiar la emisión.
+- **Punteros, no pegados** — las inyecciones se limitan a 2000 caracteres: `- **docs/design.md** — Header (score 3.94): primera frase…` más "Pointers only: open the file before relying on it."
+
+```toml
+[supamem.hook]
+fetch_k = 30              # profundidad de consulta antes del filtro de proyecto
+inject_k = 5              # chunks máximos inyectados por edición
+min_score = 2.5           # suelo de puntaje rerankeado; 0 desactiva
+shadow_task_query = true  # registra (nunca emite) una consulta de texto de tarea desde la transcripción
+drop_tokens = []          # tokens extra eliminados de la consulta derivada de la ruta
+```
+
+La latencia explícitamente no es una preocupación (owner, 2026-11-14); el diario existe para hacer visible la **utilidad**.
 
 ---
 

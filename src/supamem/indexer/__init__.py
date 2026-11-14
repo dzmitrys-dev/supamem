@@ -26,6 +26,7 @@ attached to ``supamem.console.console`` when stdout is a real terminal and
 ``NO_COLOR`` is unset; CI / NO_COLOR / non-tty paths skip the bar entirely
 to keep smoke-test output deterministic.
 """
+
 from __future__ import annotations
 
 import fnmatch
@@ -233,12 +234,8 @@ def _close_validity_window(
     now_iso = datetime.now(timezone.utc).isoformat()
     scroll_filter = qmodels.Filter(
         must=[
-            qmodels.FieldCondition(
-                key="file_path", match=qmodels.MatchValue(value=file_path)
-            ),
-            qmodels.IsEmptyCondition(
-                is_empty=qmodels.PayloadField(key="valid_to")
-            ),
+            qmodels.FieldCondition(key="file_path", match=qmodels.MatchValue(value=file_path)),
+            qmodels.IsEmptyCondition(is_empty=qmodels.PayloadField(key="valid_to")),
         ]
     )
     offset: Any = None
@@ -290,11 +287,7 @@ def _eager_validity_migration(
     from qdrant_client.http import models as qmodels  # noqa: PLC0415
 
     scroll_filter = qmodels.Filter(
-        must=[
-            qmodels.IsEmptyCondition(
-                is_empty=qmodels.PayloadField(key="valid_to")
-            )
-        ]
+        must=[qmodels.IsEmptyCondition(is_empty=qmodels.PayloadField(key="valid_to"))]
     )
     offset: Any = None
     migrated = 0
@@ -406,9 +399,7 @@ def _gc_sweep(
     from datetime import timedelta  # noqa: PLC0415
     from qdrant_client.http import models as qmodels  # noqa: PLC0415
 
-    cutoff_iso = (
-        datetime.now(timezone.utc) - timedelta(days=retention_days)
-    ).isoformat()
+    cutoff_iso = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
     scroll_filter = qmodels.Filter(
         must=[
             qmodels.FieldCondition(
@@ -477,10 +468,7 @@ def _ensure_payload_indexes(client: Any, cfg: ResolvedConfig) -> None:
             wait=True,
         )
     except Exception as exc:  # noqa: BLE001 — fail-soft + SURFACE per CLAUDE.md
-        err_console.print(
-            f"[red]temporal index creation failed: "
-            f"{type(exc).__name__}: {exc}[/red]"
-        )
+        err_console.print(f"[red]temporal index creation failed: {type(exc).__name__}: {exc}[/red]")
 
     # Phase 11 D-PFX-04 — path_prefixes keyword index (on_disk for cardinality
     # cost). Verbose ``KeywordIndexParams`` form rather than
@@ -495,8 +483,7 @@ def _ensure_payload_indexes(client: Any, cfg: ResolvedConfig) -> None:
         )
     except Exception as exc:  # noqa: BLE001 — fail-soft + SURFACE per CLAUDE.md
         err_console.print(
-            f"[yellow]warn:[/] could not create path_prefixes index: "
-            f"{type(exc).__name__}: {exc}"
+            f"[yellow]warn:[/] could not create path_prefixes index: {type(exc).__name__}: {exc}"
         )
 
 
@@ -544,9 +531,7 @@ def _manifest_path(config: ResolvedConfig) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def _normalize_chunks(
-    result: Any, *, default_metadata: dict
-) -> list[ChunkRecord]:
+def _normalize_chunks(result: Any, *, default_metadata: dict) -> list[ChunkRecord]:
     """Adapt ``list[str]`` (markdown) or ``list[ChunkRecord]`` (transcript).
 
     Returns the same shape (``list[ChunkRecord]``) so the rest of the
@@ -556,9 +541,7 @@ def _normalize_chunks(
         return []
     first = result[0]
     if isinstance(first, str):
-        return [
-            ChunkRecord(text=t, metadata=dict(default_metadata)) for t in result
-        ]
+        return [ChunkRecord(text=t, metadata=dict(default_metadata)) for t in result]
     return list(result)
 
 
@@ -605,9 +588,7 @@ def _dispatch_chunks(path: Path, body: str) -> list[ChunkRecord]:
     return _normalize_chunks(raw, default_metadata={"chunker": "markdown_header"})
 
 
-def _filter_transcript_dedupe(
-    records: list[ChunkRecord], manifest: Manifest
-) -> list[ChunkRecord]:
+def _filter_transcript_dedupe(records: list[ChunkRecord], manifest: Manifest) -> list[ChunkRecord]:
     """Per-message dedupe gate (D-25, D-27).
 
     W4: a record missing ``session_id`` or ``user_uuid`` indicates an
@@ -620,8 +601,7 @@ def _filter_transcript_dedupe(
         msg_uuid = tmeta.get("user_uuid", "")
         if not session_id or not msg_uuid:
             raise ValueError(
-                f"Transcript chunk missing session_id or message_uuid: "
-                f"{rec.metadata!r}"
+                f"Transcript chunk missing session_id or message_uuid: {rec.metadata!r}"
             )
         content_hash = hashlib.sha256(rec.text.encode("utf-8")).hexdigest()
         if manifest.transcript_needs_index(session_id, msg_uuid, content_hash):
@@ -777,9 +757,7 @@ def _process_one_source(
     is_transcript = path.suffix == ".jsonl"
 
     # File-level dedupe still applies for markdown.
-    if not is_transcript and not force and not manifest.needs_index(
-        abs_path, sha, target
-    ):
+    if not is_transcript and not force and not manifest.needs_index(abs_path, sha, target):
         return 0, 0
 
     try:
@@ -802,8 +780,7 @@ def _process_one_source(
             _close_validity_window(client, cfg, abs_path)
         except Exception as exc:  # noqa: BLE001
             err_console.print(
-                f"[red]close-old failed for {abs_path}: "
-                f"{type(exc).__name__}: {exc}[/red]"
+                f"[red]close-old failed for {abs_path}: {type(exc).__name__}: {exc}[/red]"
             )
             raise
 
@@ -817,8 +794,7 @@ def _process_one_source(
                 msg_uuid = tmeta.get("user_uuid", "")
                 if not session_id or not msg_uuid:
                     raise ValueError(
-                        f"Transcript chunk missing session_id or message_uuid: "
-                        f"{rec.metadata!r}"
+                        f"Transcript chunk missing session_id or message_uuid: {rec.metadata!r}"
                     )
                 content_hash = hashlib.sha256(rec.text.encode("utf-8")).hexdigest()
                 manifest.transcript_update(session_id, msg_uuid, content_hash)
@@ -848,6 +824,24 @@ def _process_one_source(
         return 0, 1
 
 
+def _warn_no_files_collected(src_list: list[str]) -> None:
+    """R7 guardrail (2026-11-14 study): the silent no-op index hid an unconfigured project for weeks."""
+    from supamem.config import describe_config_path
+
+    if src_list:
+        detail = (
+            f"index: no files collected — nothing indexed "
+            f"({len(src_list)} source path(s) configured, none matched *.md/*.jsonl; "
+            f"config: {describe_config_path()})"
+        )
+    else:
+        detail = (
+            f"index: no files collected — nothing indexed "
+            f"(sources unconfigured/empty; config: {describe_config_path()})"
+        )
+    err_console.print(f"[supamem.warn]⚠ {detail}[/supamem.warn]")
+
+
 def run_index(
     *,
     target: Target = "tuned",
@@ -860,6 +854,7 @@ def run_index(
     src_list = sources if sources is not None else cfg.sources or []
     files = _expand_sources(src_list, exclude=cfg.exclude or [])
     if not files:
+        _warn_no_files_collected(src_list)
         return 0
 
     # Fail-soft: Qdrant unreachable or qdrant-client missing.
@@ -916,17 +911,13 @@ def run_index(
         try:
             migrated = _eager_validity_migration(client, cfg)
             sweep_ok = True
-            err_console.print(
-                f"  back-filled {migrated} legacy chunks with valid_to=null"
-            )
+            err_console.print(f"  back-filled {migrated} legacy chunks with valid_to=null")
         except Exception as exc:  # noqa: BLE001 — fail-soft, but SURFACE
-            err_console.print(
-                f"[red]validity migration failed: "
-                f"{type(exc).__name__}: {exc}[/red]"
-            )
+            err_console.print(f"[red]validity migration failed: {type(exc).__name__}: {exc}[/red]")
         if sweep_ok:
             # Persist gate ONLY on full success; otherwise leave None to retry.
             from supamem import __version__ as _supamem_version  # noqa: PLC0415
+
             manifest.validity_migration = _supamem_version
 
     # ── Phase 11 D-PFX-06 / Pitfall 4 — eager path-prefixes migration gate ─
@@ -944,16 +935,14 @@ def run_index(
         try:
             migrated = _eager_path_prefixes_migration(client, cfg)
             sweep_ok = True
-            err_console.print(
-                f"  back-filled {migrated} legacy chunks with path_prefixes"
-            )
+            err_console.print(f"  back-filled {migrated} legacy chunks with path_prefixes")
         except Exception as exc:  # noqa: BLE001 — fail-soft, but SURFACE
             err_console.print(
-                f"[red]path_prefixes migration failed: "
-                f"{type(exc).__name__}: {exc}[/red]"
+                f"[red]path_prefixes migration failed: {type(exc).__name__}: {exc}[/red]"
             )
         if sweep_ok:
             from supamem import __version__ as _supamem_version  # noqa: PLC0415
+
             manifest.path_prefixes_migration = _supamem_version
 
     # Plan 07-02 D-08 / D-09 / R-04: gate the classifier sweep on hash drift.
@@ -963,21 +952,15 @@ def run_index(
     current_classifier_hash = _classifier_hash(cfg.classifier_rooms)
     if manifest.classifier_hash != current_classifier_hash:
         err_console.print(
-            "[supamem.brand]Classifier config changed — re-classifying chunks…"
-            "[/supamem.brand]"
+            "[supamem.brand]Classifier config changed — re-classifying chunks…[/supamem.brand]"
         )
         sweep_ok = False
         try:
             updated = _reclassify_sweep(client, cfg)
             sweep_ok = True
-            err_console.print(
-                f"  re-classified {updated} chunks (no re-embedding)"
-            )
+            err_console.print(f"  re-classified {updated} chunks (no re-embedding)")
         except Exception as exc:  # noqa: BLE001 — fail-soft, but SURFACE
-            err_console.print(
-                f"[red]classifier sweep failed: "
-                f"{type(exc).__name__}: {exc}[/red]"
-            )
+            err_console.print(f"[red]classifier sweep failed: {type(exc).__name__}: {exc}[/red]")
         if sweep_ok:
             # Only persist the hash on a fully-successful sweep; otherwise
             # leave the stale hash in place so the next run_index retries.
@@ -1037,19 +1020,22 @@ def run_index(
     try:
         gc_count = _gc_sweep(client, cfg, retention_days)
         if gc_count:
-            err_console.print(
-                f"  garbage-collected {gc_count} superseded chunks"
-            )
+            err_console.print(f"  garbage-collected {gc_count} superseded chunks")
     except Exception as exc:  # noqa: BLE001 — fail-soft, but SURFACE
-        err_console.print(
-            f"[red]gc sweep failed: {type(exc).__name__}: {exc}[/red]"
-        )
+        err_console.print(f"[red]gc sweep failed: {type(exc).__name__}: {exc}[/red]")
 
     # D-VFROM-02 — ONE wall-clock fallback warning per run (not per file).
     if wallclock_fallback[0]:
         err_console.print(
             f"[supamem.warn]{wallclock_fallback[0]} files used wall-clock "
             f"fallback for valid_from (corrupt/zero mtime)[/supamem.warn]"
+        )
+
+    # R7 guardrail — per-source failures were counted and surfaced per file, but the
+    # END-OF-RUN tally was silent; a partial index looked complete.
+    if failed:
+        err_console.print(
+            f"[supamem.warn]⚠ index: {failed} source file(s) failed to index[/supamem.warn]"
         )
 
     try:

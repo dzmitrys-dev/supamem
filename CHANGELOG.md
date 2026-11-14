@@ -2,6 +2,67 @@
 
 All notable changes to `supamem` will be documented in this file.
 
+## [0.4.0a4] — 2026-11-14 — Edit-hook usefulness: measured, deduped, worktree-aware
+
+Implements stage 1 of the owner-approved plan from the 2026-11-14 effectiveness study
+(cl-harness `research-supamem-effectiveness-2026-11-14.md`), which measured the edit hook at
+injection rate 4.2%, use rate 0.6%, repeat rate 65.6%, stale rate 8.5% — with 42% of calls
+(worktree sessions) guaranteed empty. Latency is explicitly NOT a concern (owner). Every fix
+is pinned by a test in `tests/test_edit_hook_usefulness.py` (plus smoke tests in
+`tests/test_cli_smoke.py`).
+
+- **Injection journal.** The edit hook appends one JSON line per invocation to
+  `<audit dir>/injections.jsonl` (resolved through `stats.counter.default_cache_dir`, so
+  `SUPAMEM_AUDIT_DIR` overrides it like `audit.jsonl`). Fields: `ts`, `session`, `target`,
+  `query`, `chunks` (`source`, `score`, `exists`, `lang` — "ru" when >30% Cyrillic letters),
+  `empty`, `deduped`, `dropped` (`stale`/`floor`/`foreign`), `ms`, `shadow`. Fail-soft:
+  journaling never breaks the hook (`test_journal_row_schema`).
+- **`supamem hook-stats [--days N] [--json]`.** Correlates the journal with the Claude Code
+  transcripts and reports `injection_rate`, `use_rate` (a chunk counts as used when a LATER
+  Read/Edit/Write/Grep targets its source or its basename appears in assistant text),
+  `repeat_rate`, `stale_rate`, `lang_mismatch_rate`, `useful_per_100_edits` (the Goodhart
+  guard — absolute first-uses must not fall), and `shadow_use_rate` for the shadow channel
+  (`test_hook_stats_on_synthetic_transcript`, `test_hook_stats_ignores_older_transcript_events`,
+  smoke: `test_hook_stats_json_on_empty_journal`).
+- **Worktree-aware project root.** The payload `cwd` is mapped to the main checkout via
+  `git rev-parse --path-format=absolute --git-common-dir` (parent of the `.git` dir); the hook
+  config is loaded from that root, and `_in_project` filters against it. Worktree sessions
+  (which never contain the untracked `.supamem/config.toml`) resolve the project collection
+  again; outside git the cwd is kept (`test_worktree_session_sees_main_checkout_chunks`,
+  `test_hook_cli_loads_config_from_the_main_checkout`).
+- **Session dedup.** Chunk keys (sha256 of source|text) already injected in a session are kept
+  in `<audit dir>/dedup-<session>.json` (24 h TTL, bounded, atomic replace) and never
+  re-injected; suppressed candidates are counted in `deduped`. A new session injects again
+  (`test_session_dedup_suppresses_repeat_and_new_session_reinjects`,
+  `test_dedup_marker_expires_after_24h`).
+- **Stale drop.** Chunks whose source file no longer exists are dropped (`dropped.stale`);
+  relative sources resolve against the project root (`test_stale_chunk_is_dropped`).
+- **Pipeline order + score floor.** `query(k=fetch_k)` → project filter → score floor → stale
+  → dedup → `[:inject_k]`. New `[supamem.hook]` keys: `fetch_k` (default 30, raised from 10 so
+  other repos' chunks cannot crowd the project's own out of the fetch window),
+  `inject_k` (default 5), `min_score` (default 2.5 — applies ONLY to reranker-produced scores,
+  `rerank_score is not None`; `0` disables), `shadow_task_query` (default true);
+  `drop_tokens` semantics unchanged
+  (`test_project_filter_runs_before_the_cut`, `test_score_floor_applies_only_to_reranked_scores`,
+  `test_hook_config_keys_round_trip`, `test_hook_config_defaults`).
+- **Shadow task query.** When `transcript_path` is present, the hook reads the last real user
+  message (last 256 KB of the transcript, ≤400 chars, tool_results excluded), queries
+  `task text + path tokens` through the same filters, and records the result in the journal
+  under `shadow` — NEVER emitted — so its use rate can be measured before any emit flip
+  (`test_shadow_task_query_journaled_but_never_emitted`,
+  `test_shadow_survives_a_broken_transcript`).
+- **Pointer format.** `_format_chunks` emits `### Memory context (supamem)`, then
+  `- **<source relative to root>** — <first header if any> (score X.XX): <first sentence, ≤160
+  chars>…` per chunk, then "Pointers only: open the file before relying on it."; the total is
+  capped at 2000 chars (`test_pointer_format_and_cap`, `test_pointer_format_without_header`).
+- **`run_index` warnings.** A silent no-op index now warns on stderr — `no files collected —
+  nothing indexed`, naming whether `sources` is unconfigured and the config path checked (new
+  `config.describe_config_path`) — and per-run failures warn `N source file(s) failed to
+  index`. The fail-soft exit code is unchanged
+  (`test_run_index_warns_when_no_files_collected`, `test_run_index_warns_when_sources_fail`).
+- **Installer matcher.** The claude-code injection hook registration widens `Edit|Write` →
+  `Edit|Write|MultiEdit` (`test_installer_injection_hook_matches_multiedit`).
+
 ## [0.4.0a3] — 2026-11-06 — Field report: the edit hook works, models stay cached, searches are logged, index hygiene
 
 Found by the cl-harness session-2 research (measured on a live install of 0.3.0a7; all defects are still present in

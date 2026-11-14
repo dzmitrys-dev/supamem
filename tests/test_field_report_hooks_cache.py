@@ -3,6 +3,7 @@ lived in the OS temp dir, MCP searches were never logged and the audit log had t
 
 Each test pins one defect; all of them failed before the fix.
 """
+
 from __future__ import annotations
 
 import io
@@ -29,9 +30,13 @@ def _cfg(**overrides: Any) -> ResolvedConfig:
 def test_resolve_file_path_reads_tool_input_from_stdin() -> None:
     from supamem.hooks.claude_code import resolve_file_path
 
-    payload = json.dumps({"tool_name": "Edit", "tool_input": {"file_path": "/repo/src/shooting.cs"}})
+    payload = json.dumps(
+        {"tool_name": "Edit", "tool_input": {"file_path": "/repo/src/shooting.cs"}}
+    )
     assert resolve_file_path(None, payload) == Path("/repo/src/shooting.cs")
-    nb = json.dumps({"tool_name": "NotebookEdit", "tool_input": {"notebook_path": "/repo/src/a.ipynb"}})
+    nb = json.dumps(
+        {"tool_name": "NotebookEdit", "tool_input": {"notebook_path": "/repo/src/a.ipynb"}}
+    )
     assert resolve_file_path(None, nb) == Path("/repo/src/a.ipynb")
 
 
@@ -49,8 +54,12 @@ def test_dispatch_without_cli_path_uses_stdin(monkeypatch: pytest.MonkeyPatch) -
     from supamem.hooks import dispatch
 
     seen: list[Path] = []
-    monkeypatch.setattr(hook, "run", lambda file_path, config: seen.append(file_path) or 0)
-    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"tool_input": {"file_path": "/r/src/k.ts"}})))
+    monkeypatch.setattr(
+        hook, "run", lambda file_path, config, payload=None: seen.append(file_path) or 0
+    )
+    monkeypatch.setattr(
+        sys, "stdin", io.StringIO(json.dumps({"tool_input": {"file_path": "/r/src/k.ts"}}))
+    )
     assert dispatch(client="claude-code", file_path=None, config=_cfg()) == 0
     assert seen == [Path("/r/src/k.ts")]
 
@@ -71,7 +80,13 @@ def test_installer_rewrites_a_legacy_registration_in_place() -> None:
             "PreToolUse": [
                 {
                     "matcher": "Edit|Write",
-                    "hooks": [{"type": "command", "command": 'supamem hook claude-code --file-path "$CLAUDE_FILE_PATH"', "timeout": 30}],
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": 'supamem hook claude-code --file-path "$CLAUDE_FILE_PATH"',
+                            "timeout": 30,
+                        }
+                    ],
                 },
                 {"matcher": "Bash", "hooks": [{"type": "command", "command": "other-tool"}]},
             ]
@@ -104,7 +119,9 @@ def test_fastembed_cache_dir_is_persistent(monkeypatch: pytest.MonkeyPatch, tmp_
     assert Path(fastembed_cache_dir()) == tmp_path / "override"
 
 
-def test_every_fastembed_model_gets_the_cache_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_every_fastembed_model_gets_the_cache_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     import supamem.retrieval.tuned_hybrid as th
 
     monkeypatch.setenv("FASTEMBED_CACHE_PATH", str(tmp_path))
@@ -139,7 +156,9 @@ def test_every_fastembed_model_gets_the_cache_dir(monkeypatch: pytest.MonkeyPatc
     assert all(c.get("cache_dir") == str(tmp_path) for c in calls)
 
 
-def test_offline_env_makes_every_model_cache_only(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_offline_env_makes_every_model_cache_only(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     from supamem.embedders.cache import fastembed_kwargs
 
     monkeypatch.setenv("FASTEMBED_CACHE_PATH", str(tmp_path))
@@ -152,7 +171,9 @@ def test_offline_env_makes_every_model_cache_only(monkeypatch: pytest.MonkeyPatc
 # ---- 3. the edit hook never downloads models on the edit path ---------------------------------------------
 
 
-def test_edit_hook_runs_hf_offline(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_edit_hook_runs_hf_offline(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     import os
 
     import supamem.hooks.claude_code as hook
@@ -177,7 +198,9 @@ def test_edit_hook_runs_hf_offline(monkeypatch: pytest.MonkeyPatch, capsys: pyte
 # ---- 4. MCP searches are logged with the counter's real signature -------------------------------------------
 
 
-def test_mcp_search_is_logged_as_search_mcp(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_mcp_search_is_logged_as_search_mcp(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     import asyncio
 
     import supamem.mcp_server as mod
@@ -187,7 +210,9 @@ def test_mcp_search_is_logged_as_search_mcp(monkeypatch: pytest.MonkeyPatch, tmp
     calls: list[tuple[Any, ...]] = []
     monkeypatch.setattr(counter, "bump", lambda *a, **k: calls.append((a, k)))
     fake = MagicMock()
-    fake.query.return_value = [RetrievedChunk(id="1", text="alpha body", score=0.9, source_path="a.md")]
+    fake.query.return_value = [
+        RetrievedChunk(id="1", text="alpha body", score=0.9, source_path="a.md")
+    ]
     monkeypatch.setattr(mod, "_get_backend", lambda cfg: fake)
     asyncio.run(mod.dual_memory_search(query="hi", top_k=1, config=_cfg()))
     assert len(calls) == 1
@@ -208,8 +233,12 @@ def test_mcp_search_is_logged_as_search_mcp(monkeypatch: pytest.MonkeyPatch, tmp
 # ---- 5. one audit log: the writer and every reader agree on platformdirs ------------------------------------
 
 
-def test_counter_writes_where_the_readers_read(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.delenv("SUPAMEM_AUDIT_DIR", raising=False)  # exercise the real resolution (platformdirs patched)
+def test_counter_writes_where_the_readers_read(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv(
+        "SUPAMEM_AUDIT_DIR", raising=False
+    )  # exercise the real resolution (platformdirs patched)
     monkeypatch.delenv("SUPAMEM_CACHE_DIR", raising=False)
     import platformdirs
 
@@ -226,8 +255,12 @@ def test_counter_writes_where_the_readers_read(monkeypatch: pytest.MonkeyPatch, 
     assert Path(live_audit(None)) == written
 
 
-def test_counter_migrates_the_legacy_audit_once(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.delenv("SUPAMEM_AUDIT_DIR", raising=False)  # exercise the real resolution (platformdirs patched)
+def test_counter_migrates_the_legacy_audit_once(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv(
+        "SUPAMEM_AUDIT_DIR", raising=False
+    )  # exercise the real resolution (platformdirs patched)
     monkeypatch.delenv("SUPAMEM_CACHE_DIR", raising=False)
     import platformdirs
 
@@ -235,9 +268,13 @@ def test_counter_migrates_the_legacy_audit_once(monkeypatch: pytest.MonkeyPatch,
 
     legacy = tmp_path / "legacy"
     legacy.mkdir()
-    (legacy / "audit.jsonl").write_text('{"ts":"2026-11-01T00:00:00+00:00","kind":"rerank","source":"x","tokens":1,"latency_ms":1.0}\n')
+    (legacy / "audit.jsonl").write_text(
+        '{"ts":"2026-11-01T00:00:00+00:00","kind":"rerank","source":"x","tokens":1,"latency_ms":1.0}\n'
+    )
     (legacy / "aggregates.json").write_text("{}")
-    (legacy / "manifest.json").write_text("{}")  # the indexer's file stays where the indexer reads it
+    (legacy / "manifest.json").write_text(
+        "{}"
+    )  # the indexer's file stays where the indexer reads it
     monkeypatch.setattr(platformdirs, "user_cache_dir", lambda name: str(tmp_path / "plat" / name))
     monkeypatch.setattr(counter, "_LEGACY_CACHE_DIR", legacy)
     counter.bump("search", "mcp", tokens=3, latency_ms=1.0)
@@ -248,16 +285,24 @@ def test_counter_migrates_the_legacy_audit_once(monkeypatch: pytest.MonkeyPatch,
     assert (legacy / "manifest.json").exists()
 
 
-def test_install_and_repair_prefetch_the_embedders_online(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_install_and_repair_prefetch_the_embedders_online(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     import fastembed
 
     from supamem.install import _maybe_prepare_models
 
     monkeypatch.setenv("FASTEMBED_CACHE_PATH", str(tmp_path))
-    monkeypatch.setenv("HF_HUB_OFFLINE", "1")  # even if the shell is offline-flagged, repair is the fetch point
+    monkeypatch.setenv(
+        "HF_HUB_OFFLINE", "1"
+    )  # even if the shell is offline-flagged, repair is the fetch point
     calls: list[dict[str, Any]] = []
-    monkeypatch.setattr(fastembed, "TextEmbedding", lambda name, **kw: calls.append({"name": name, **kw}))
-    monkeypatch.setattr(fastembed, "SparseTextEmbedding", lambda name, **kw: calls.append({"name": name, **kw}))
+    monkeypatch.setattr(
+        fastembed, "TextEmbedding", lambda name, **kw: calls.append({"name": name, **kw})
+    )
+    monkeypatch.setattr(
+        fastembed, "SparseTextEmbedding", lambda name, **kw: calls.append({"name": name, **kw})
+    )
     import supamem.rerankers as rr
 
     monkeypatch.setattr(rr, "prepare", lambda *a, **k: None)
@@ -266,7 +311,9 @@ def test_install_and_repair_prefetch_the_embedders_online(monkeypatch: pytest.Mo
     assert all(c["cache_dir"] == str(tmp_path) and c["local_files_only"] is False for c in calls)
 
 
-def test_audit_dir_override_never_adopts_the_legacy_log(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_audit_dir_override_never_adopts_the_legacy_log(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     import supamem.stats.counter as counter
 
     legacy = tmp_path / "legacy"
@@ -282,18 +329,28 @@ def test_audit_dir_override_never_adopts_the_legacy_log(monkeypatch: pytest.Monk
 # ---- 6. query correctness: only this project's memory, honest scores, no work without a project config -------
 
 
-def test_edit_hook_keeps_only_hits_inside_the_project(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_edit_hook_keeps_only_hits_inside_the_project(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     import supamem.hooks.claude_code as hook
     from supamem.retrieval.types import RetrievedChunk
 
     proj = tmp_path / "proj"
     (proj / "docs").mkdir(parents=True)
+    # v0.4.0a4: the hook drops chunks whose source no longer exists (stale drop) — the
+    # fixture must create the files it expects to see injected.
+    (proj / "docs" / "b.md").write_text("# b\n")
+    (proj / "docs" / "c.md").write_text("# c\n")
     monkeypatch.chdir(proj)
     hits = [
-        RetrievedChunk(id="1", text="temp copy", score=3.94, source_path="/private/tmp/fhx-spikes/x/docs/a.md"),
+        RetrievedChunk(
+            id="1", text="temp copy", score=3.94, source_path="/private/tmp/fhx-spikes/x/docs/a.md"
+        ),
         RetrievedChunk(id="2", text="ours abs", score=2.3, source_path=str(proj / "docs" / "b.md")),
         RetrievedChunk(id="3", text="ours rel", score=0.9, source_path="docs/c.md"),
-        RetrievedChunk(id="4", text="other repo", score=0.8, source_path=str(tmp_path / "other" / "d.md")),
+        RetrievedChunk(
+            id="4", text="other repo", score=0.8, source_path=str(tmp_path / "other" / "d.md")
+        ),
     ]
     b = MagicMock()
     b.query.return_value = hits
@@ -304,35 +361,63 @@ def test_edit_hook_keeps_only_hits_inside_the_project(monkeypatch: pytest.Monkey
     assert "ours abs" in ctx and "ours rel" in ctx
     assert "temp copy" not in ctx and "other repo" not in ctx
     assert "%" not in ctx and "score 2.30" in ctx  # rerank scores are not percentages
-    assert b.query.call_args.kwargs["k"] == 10
+    assert (
+        b.query.call_args.kwargs["k"] == 30
+    )  # fetch_k raised 10 -> 30 in v0.4.0a4 (filter runs after the cut)
 
 
-def test_hook_cli_without_a_project_collection_exits_before_loading_models(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_hook_cli_without_a_project_collection_exits_before_loading_models(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     from typer.testing import CliRunner
 
     import supamem.hooks as hooks
     from supamem.cli import app
 
-    monkeypatch.chdir(tmp_path)  # no .supamem/config.toml, no pyproject section → collection is the default
+    monkeypatch.chdir(
+        tmp_path
+    )  # no .supamem/config.toml, no pyproject section → collection is the default
     monkeypatch.delenv("SUPAMEM_CONFIG", raising=False)
-    monkeypatch.setattr(hooks, "dispatch", lambda **kw: (_ for _ in ()).throw(AssertionError("dispatch must not run")))
-    r = CliRunner().invoke(app, ["hook", "claude-code"], input=json.dumps({"tool_input": {"file_path": str(tmp_path / "src" / "a.py")}}))
+    monkeypatch.setattr(
+        hooks,
+        "dispatch",
+        lambda **kw: (_ for _ in ()).throw(AssertionError("dispatch must not run")),
+    )
+    r = CliRunner().invoke(
+        app,
+        ["hook", "claude-code"],
+        input=json.dumps({"tool_input": {"file_path": str(tmp_path / "src" / "a.py")}}),
+    )
     assert r.exit_code == 0, r.output
-    assert json.loads(r.stdout.strip().splitlines()[-1]) == {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": ""}}
+    assert json.loads(r.stdout.strip().splitlines()[-1]) == {
+        "hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": ""}
+    }
 
 
 # ---- 7. index hygiene: `exclude` globs keep prompt dumps / scratch out of the collection --------------------
 
 
-def test_exclude_globs_filter_expanded_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_exclude_globs_filter_expanded_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from supamem.indexer import _expand_sources
 
     monkeypatch.chdir(tmp_path)
-    for rel in ("docs/design/a.md", "docs/business/bench/x/context/dump.md", "docs/business/research/r.md", "docs/notes.jsonl"):
+    for rel in (
+        "docs/design/a.md",
+        "docs/business/bench/x/context/dump.md",
+        "docs/business/research/r.md",
+        "docs/notes.jsonl",
+    ):
         p = tmp_path / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text("# t\n")
-    got = {str(p.relative_to(tmp_path.resolve())) for p in _expand_sources(["docs"], exclude=["docs/business/bench/*/context/**", "**/*.jsonl"])}
+    got = {
+        str(p.relative_to(tmp_path.resolve()))
+        for p in _expand_sources(
+            ["docs"], exclude=["docs/business/bench/*/context/**", "**/*.jsonl"]
+        )
+    }
     assert got == {"docs/design/a.md", "docs/business/research/r.md"}
     assert len(_expand_sources(["docs"])) == 4  # no exclude → unchanged behaviour
 
@@ -341,7 +426,9 @@ def test_exclude_is_a_config_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     from supamem.config import load_config
 
     (tmp_path / ".supamem").mkdir()
-    (tmp_path / ".supamem" / "config.toml").write_text('[supamem]\ncollection = "c"\nsources = ["docs"]\nexclude = ["docs/tmp/**"]\n')
+    (tmp_path / ".supamem" / "config.toml").write_text(
+        '[supamem]\ncollection = "c"\nsources = ["docs"]\nexclude = ["docs/tmp/**"]\n'
+    )
     monkeypatch.delenv("SUPAMEM_CONFIG", raising=False)
     cfg, chain = load_config(tmp_path)
     assert cfg.exclude == ["docs/tmp/**"]

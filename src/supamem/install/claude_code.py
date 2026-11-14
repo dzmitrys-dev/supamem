@@ -87,7 +87,9 @@ HOOKS_OVERLAY: dict[str, Any] = {
     "hooks": {
         "PreToolUse": [
             {
-                "matcher": "Edit|Write",
+                # v0.4.0a4: MultiEdit included — the injection journal + dedup must see
+                # every edit path, and MultiEdit carries tool_input.file_path too.
+                "matcher": "Edit|Write|MultiEdit",
                 "hooks": [
                     {
                         "type": "command",
