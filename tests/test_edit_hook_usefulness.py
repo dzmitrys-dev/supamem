@@ -1158,3 +1158,55 @@ def test_iter_events_streams_without_a_full_read(
     events = inj._iter_events(t)
     monkeypatch.undo()
     assert len(events) == 50
+
+
+# ---- 21. review round 2: non-finite / unbounded gate values, anchored marker sweep ------------------------------
+
+
+@pytest.mark.parametrize(
+    ("toml_line", "needle"),
+    [
+        ("min_score = inf", "min_score"),
+        ("min_score = nan", "min_score"),
+        ("min_score = 1e400", "min_score"),
+        ("fetch_k = 1000000000", "fetch_k"),
+    ],
+)
+def test_hook_config_rejects_non_finite_and_unbounded_values(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    toml_line: str,
+    needle: str,
+) -> None:
+    from supamem.config import load_config
+
+    cfg_path = tmp_path / "config.toml"
+    cfg_path.write_text(f"[supamem.hook]\n{toml_line}\n")
+    monkeypatch.setenv("SUPAMEM_CONFIG", str(cfg_path))
+    with pytest.raises(SystemExit) as ei:
+        load_config(tmp_path)
+    assert ei.value.code == 2
+    assert needle in capsys.readouterr().err
+
+
+def test_marker_sweep_only_deletes_supamem_markers(tmp_path: Path) -> None:
+    """A shared audit dir may hold foreign files that match a loose glob; the sweep deletes
+    only files that are supamem dedup markers (marker schema) or supamem's own tmp names."""
+    from supamem.stats import injections as inj
+
+    old_ts = time.time() - 25 * 3600
+    marker = tmp_path / "dedup-old.json"
+    marker.write_text('{"ts": 0, "ids": []}', encoding="utf-8")
+    own_tmp = tmp_path / ".dedup-old.json.abc123.tmp"
+    own_tmp.write_text("{", encoding="utf-8")
+    foreign_json = tmp_path / "dedup-notes.json"
+    foreign_json.write_text('{"title": "my notes"}', encoding="utf-8")
+    foreign_tmp = tmp_path / "upload.tmp"
+    foreign_tmp.write_text("x", encoding="utf-8")
+    for f in (marker, own_tmp, foreign_json, foreign_tmp):
+        os.utime(f, (old_ts, old_ts))
+    inj._sweep_expired_markers(tmp_path)
+    assert not marker.exists() and not own_tmp.exists()
+    assert foreign_json.exists(), "a non-marker dedup-*.json must survive"
+    assert foreign_tmp.exists(), "a foreign *.tmp must survive"

@@ -367,9 +367,9 @@ El hook de edición de Claude Code (`supamem hook claude-code`) ahora registra c
 
 ```toml
 [supamem.hook]
-fetch_k = 30              # int >= 1 — profundidad de consulta antes del filtro de proyecto
+fetch_k = 30              # int 1..500 — profundidad de consulta antes del filtro de proyecto
 inject_k = 5              # int >= 1, <= fetch_k — chunks máximos inyectados por edición
-min_score = 2.5           # número >= 0 — suelo de puntaje rerankeado; 0 desactiva
+min_score = 2.5           # número finito >= 0 — suelo de puntaje rerankeado; 0 desactiva
 shadow_task_query = true  # bool TOML — registra (nunca emite) una consulta de texto de tarea desde la transcripción
 drop_tokens = []          # tokens extra eliminados de la consulta derivada de la ruta
 ```

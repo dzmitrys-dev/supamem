@@ -353,9 +353,9 @@ Claude Code 编辑钩子(`supamem hook claude-code`)现在会把每次调用记�
 
 ```toml
 [supamem.hook]
-fetch_k = 30              # int >= 1 —— 项目过滤器之前的查询深度
+fetch_k = 30              # int 1..500 —— 项目过滤器之前的查询深度
 inject_k = 5              # int >= 1,<= fetch_k —— 每次编辑最多注入的 chunk 数
-min_score = 2.5           # 数值 >= 0 —— rerank 分数下限;0 禁用
+min_score = 2.5           # 有限数值 >= 0 —— rerank 分数下限;0 禁用
 shadow_task_query = true  # TOML bool —— 记录(绝不输出)来自转录的任务文本查询
 drop_tokens = []          # 从路径派生查询中剔除的额外 token
 ```

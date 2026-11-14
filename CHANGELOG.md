@@ -103,7 +103,16 @@ is pinned by a test in `tests/test_edit_hook_usefulness.py` (plus smoke tests in
   code 2 blocks the tool call, so any fail-closed config gate (these keys and the older reranker /
   recency gates) would have denied every Edit/Write in the project. `supamem hook claude-code`
   now catches the gate's `SystemExit`, keeps the key-naming error on stderr, emits one empty
-  payload and exits 0 (`test_claude_code_hook_never_blocks_the_edit_on_a_bad_config`).
+  payload and exits 0 (`test_claude_code_hook_never_blocks_the_edit_on_a_bad_config`). Any other
+  config failure (malformed TOML, a missing `SUPAMEM_CONFIG` file, a wrong-typed non-hook key)
+  degrades the same way with one short stderr line instead of a traceback on every edit, and every
+  degraded call is journaled (`test_claude_code_hook_degrades_on_any_config_error`).
+- **Hook gate bounds tightened.** `min_score` must be finite (`inf` muted the hook forever, `nan`
+  silently disabled the floor) and `fetch_k` is capped at 500
+  (`test_hook_config_rejects_non_finite_and_unbounded_values`).
+- **Marker sweep anchored to supamem's own files.** The audit dir may be shared, so the sweep
+  deletes a `dedup-*.json` only when it has the marker schema and touches only supamem's own tmp
+  names (`test_marker_sweep_only_deletes_supamem_markers`).
 - **Dedup-marker race fixed; expired markers swept.** `save_seen` used a FIXED per-session `.tmp`
   name, so parallel hooks of one session collided (torn writes / `os.replace` `FileNotFoundError` →
   the whole update lost); each writer now uses a unique `mkstemp` file, re-reads and re-merges

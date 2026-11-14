@@ -189,25 +189,46 @@ def save_seen(session: str, ids: set[str], cache_dir: Path | None = None) -> Non
         log.debug("dedup marker save failed: %s", exc)
 
 
+def _is_marker_file(f: Path, size: int) -> bool:
+    """True when ``f`` holds a supamem dedup marker: a JSON object with an ``ids`` list
+    and no keys beyond ``ts``/``ids``. Markers cap at a few tens of KB."""
+    if size > 1_000_000:
+        return False
+    try:
+        data = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return (
+        isinstance(data, dict) and isinstance(data.get("ids"), list) and set(data) <= {"ts", "ids"}
+    )
+
+
 def _sweep_expired_markers(cache_dir: Path | None = None, *, max_files: int = 50) -> int:
     """Delete ``dedup-*.json`` markers older than the 24 h TTL (bounded, fail-soft).
 
     Called opportunistically on each ``save_seen`` — markers were previously never
     deleted and accumulated forever. mtime stands in for the JSON ``ts`` (every save
-    rewrites it). Stale ``.tmp`` leftovers from the old fixed-tmp writer are swept too.
+    rewrites it). Stale tmp leftovers are swept too — only supamem's own names: the old
+    fixed-tmp writer's ``dedup-<s>.tmp`` and ``save_seen``'s ``.dedup-<s>.json.*.tmp``.
+    The audit dir may be shared (``SUPAMEM_AUDIT_DIR``), so a ``dedup-*.json`` is deleted
+    only when its content has the marker schema (``{"ts", "ids": [...]}``).
     """
     removed = 0
     try:
         d = dedup_marker_path("sweep", cache_dir).parent
         now = time.time()
-        for pattern in ("dedup-*.json", "*.tmp"):
+        for pattern in ("dedup-*.json", "dedup-*.tmp", ".dedup-*.json.*.tmp"):
             for f in d.glob(pattern):
                 if removed >= max_files:
                     return removed
                 try:
-                    if now - f.stat().st_mtime > _DEDUP_TTL_SECONDS:
-                        f.unlink()
-                        removed += 1
+                    st = f.stat()
+                    if now - st.st_mtime <= _DEDUP_TTL_SECONDS:
+                        continue
+                    if pattern == "dedup-*.json" and not _is_marker_file(f, st.st_size):
+                        continue
+                    f.unlink()
+                    removed += 1
                 except OSError:
                     continue
     except OSError:

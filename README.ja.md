@@ -359,9 +359,9 @@ Claude Code 編集フック(`supamem hook claude-code`)は呼び出しごとに 
 
 ```toml
 [supamem.hook]
-fetch_k = 30              # int >= 1 — プロジェクトフィルタ前のクエリ深度
+fetch_k = 30              # int 1..500 — プロジェクトフィルタ前のクエリ深度
 inject_k = 5              # int >= 1、<= fetch_k — 編集ごとに注入する最大 chunk 数
-min_score = 2.5           # 数値 >= 0 — rerank スコアの下限。0 で無効
+min_score = 2.5           # 有限の数値 >= 0 — rerank スコアの下限。0 で無効
 shadow_task_query = true  # TOML bool — トランスクリプトのタスクテキストクエリを記録(出力はしない)
 drop_tokens = []          # パス由来クエリから除外する追加トークン
 ```

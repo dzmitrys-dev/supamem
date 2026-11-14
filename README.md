@@ -393,9 +393,9 @@ stale rate 8.5%, and 42% of calls (worktree sessions) guaranteed empty. Stage-1 
 
 ```toml
 [supamem.hook]
-fetch_k = 30              # int >= 1 — query depth before the project filter
+fetch_k = 30              # int 1..500 — query depth before the project filter
 inject_k = 5              # int >= 1, <= fetch_k — max chunks injected per edit
-min_score = 2.5           # number >= 0 — reranked-score floor; 0 disables
+min_score = 2.5           # finite number >= 0 — reranked-score floor; 0 disables
 shadow_task_query = true  # TOML bool — journal (never emit) a task-text query from the transcript
 drop_tokens = []          # extra tokens stripped from the path-derived query
 ```

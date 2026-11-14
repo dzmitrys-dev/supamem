@@ -6,6 +6,8 @@ import os
 import subprocess
 import sys
 
+import pytest
+
 
 def _run(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     # Force plain output: capture_output makes stdout non-TTY, but CI may also set
@@ -725,3 +727,44 @@ def test_claude_code_hook_never_blocks_the_edit_on_a_bad_config(tmp_path) -> Non
     assert out["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
     assert out["hookSpecificOutput"]["additionalContext"] == ""
     assert "fetch_k" in r.stderr
+
+
+@pytest.mark.parametrize(
+    "config_text",
+    [
+        '[supamem]\ncollection = "x"\n[supamem\n',  # malformed TOML (RuntimeError in _load_toml)
+        '[supamem]\ncollection = "x"\n[supamem.mcp]\ncache_ttl_ms = "x"\n',  # wrong type, non-hook gate
+    ],
+)
+def test_claude_code_hook_degrades_on_any_config_error(tmp_path, config_text) -> None:
+    """Any load_config failure (not only a SystemExit gate) degrades to one empty payload,
+    exit 0, a short stderr line and a journal row — never a traceback on every edit."""
+    import json
+
+    proj = tmp_path / "proj"
+    (proj / ".supamem").mkdir(parents=True)
+    (proj / ".supamem" / "config.toml").write_text(config_text)
+    audit = tmp_path / "audit"
+    audit.mkdir()
+    payload = {
+        "session_id": "t",
+        "tool_name": "Edit",
+        "tool_input": {"file_path": str(proj / "a.ts")},
+        "cwd": str(proj),
+    }
+    env = {**os.environ, "NO_COLOR": "1", "TERM": "dumb", "SUPAMEM_AUDIT_DIR": str(audit)}
+    env.pop("SUPAMEM_CONFIG", None)
+    r = subprocess.run(
+        [sys.executable, "-m", "supamem", "hook", "claude-code"],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=proj,
+    )
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    assert out["hookSpecificOutput"]["additionalContext"] == ""
+    assert "Traceback" not in r.stderr
+    rows = (audit / "injections.jsonl").read_text().splitlines()
+    assert len(rows) == 1 and json.loads(rows[0])["empty"] is True

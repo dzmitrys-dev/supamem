@@ -804,7 +804,11 @@ def load_config(cwd: Path | None = None) -> tuple[ResolvedConfig, ConfigChain]:
     # (int("abc") raised → outer fail-soft) and shadow_task_query="false" was a truthy
     # string. Validate at load, same shape as the boot-time gates above; values stay
     # fail-closed (no string coercion — TOML bools are the only accepted form).
+    import math  # noqa: PLC0415
+
     from rich.markup import escape  # noqa: PLC0415
+
+    fetch_k_max = 500  # one hook query; a huge k only makes the backend fail (→ silent empty)
 
     def _hook_gate(detail: str) -> None:
         err_console.print("[supamem.err]" + escape(f"config: [supamem.hook] {detail}"))
@@ -812,8 +816,8 @@ def load_config(cwd: Path | None = None) -> tuple[ResolvedConfig, ConfigChain]:
 
     if isinstance(cfg.hook_fetch_k, bool) or not isinstance(cfg.hook_fetch_k, int):
         _hook_gate(f"fetch_k={cfg.hook_fetch_k!r} must be an integer >= 1")
-    elif cfg.hook_fetch_k < 1:
-        _hook_gate(f"fetch_k={cfg.hook_fetch_k} must be an integer >= 1")
+    elif not 1 <= cfg.hook_fetch_k <= fetch_k_max:
+        _hook_gate(f"fetch_k={cfg.hook_fetch_k} must be an integer in 1..{fetch_k_max}")
     if isinstance(cfg.hook_inject_k, bool) or not isinstance(cfg.hook_inject_k, int):
         _hook_gate(f"inject_k={cfg.hook_inject_k!r} must be an integer >= 1")
     elif cfg.hook_inject_k < 1:
@@ -822,8 +826,11 @@ def load_config(cwd: Path | None = None) -> tuple[ResolvedConfig, ConfigChain]:
         _hook_gate(f"inject_k={cfg.hook_inject_k} must be <= fetch_k={cfg.hook_fetch_k}")
     if isinstance(cfg.hook_min_score, bool) or not isinstance(cfg.hook_min_score, (int, float)):
         _hook_gate(f"min_score={cfg.hook_min_score!r} must be a number >= 0")
-    elif cfg.hook_min_score < 0:
-        _hook_gate(f"min_score={cfg.hook_min_score} must be >= 0 (0 disables the floor)")
+    elif not math.isfinite(cfg.hook_min_score) or cfg.hook_min_score < 0:
+        # inf would drop every chunk (hook muted forever); nan compares False and disables the floor
+        _hook_gate(
+            f"min_score={cfg.hook_min_score} must be a finite number >= 0 (0 disables the floor)"
+        )
     if not isinstance(cfg.hook_shadow_task_query, bool):
         _hook_gate(
             f"shadow_task_query={cfg.hook_shadow_task_query!r} must be a TOML bool "
