@@ -120,7 +120,7 @@ not for code-aware retrieval.
 
 ```bash
 # 1. Install (uv is the fastest path)
-uv tool install 'supamem==0.4.0a5'
+uv tool install 'supamem==0.4.0a6'
 
 # 2. Start Qdrant (one-time, ~30s)
 docker run -d -p 6333:6333 -p 6334:6334 -v $HOME/.qdrant:/qdrant/storage qdrant/qdrant:latest
@@ -249,16 +249,16 @@ available) and point `supamem` at the URL via `supamem init`.
 
 ```bash
 # Recommended: uv (fastest, isolated)
-uv tool install 'supamem==0.4.0a5'
+uv tool install 'supamem==0.4.0a6'
 
 # Alternative: pipx (also isolated)
-pipx install supamem==0.4.0a5
+pipx install supamem==0.4.0a6
 
 # Plain pip (in a venv)
-pip install supamem==0.4.0a5
+pip install supamem==0.4.0a6
 ```
 
-> **The version pin is required.** `0.4.0a5` is a pre-release, and the newest *stable* release (`0.2.0`) predates the entire `0.3.x` / `0.4.x` line — so an unpinned `install supamem` resolves **backwards**, to a version older than the features documented here. An exact pre-release pin resolves with no extra flags while dependencies stay on stable versions; do **not** use `--prerelease allow` (it applies to the whole resolution and drags in pre-release dependencies).
+> **The version pin is required.** `0.4.0a6` is a pre-release, and the newest *stable* release (`0.2.0`) predates the entire `0.3.x` / `0.4.x` line — so an unpinned `install supamem` resolves **backwards**, to a version older than the features documented here. An exact pre-release pin resolves with no extra flags while dependencies stay on stable versions; do **not** use `--prerelease allow` (it applies to the whole resolution and drags in pre-release dependencies).
 
 Verify:
 
@@ -332,6 +332,7 @@ discover this flow naturally.
 | `supamem mcp-server` | Run the MCP server (`--transport stdio` default; `--transport http` for HTTP) |
 | `supamem hook <client>` | Per-client session/edit hooks (called by the client itself) |
 | `supamem hook-stats` | 📈 Edit-hook usefulness metrics (v0.4.0a4+): `injection_rate`, `use_rate`, `repeat_rate`, `stale_rate`, `lang_mismatch_rate`, `useful_per_100_edits`, `shadow_use_rate` — correlates the injection journal (`<audit dir>/injections.jsonl`) with the Claude Code session transcripts. `--days N` (default 7), `--json` for machine output. |
+| `supamem daemon` | 🧠 Shared model daemon (v0.4.0a6+): `serve` (normally spawned on demand), `status [--json]`, `stop`. One copy of the models per machine for the edit hook and every MCP server. |
 | `supamem doctor` | 🩺 Probe Qdrant, print resolved config chain, report version drift |
 | `supamem stats` | Welford schema-v2 usage counters from `.supamem/state/` |
 | `supamem live` | 👀 Live dashboard tailing the audit JSONL — pipe-safe (plain JSONL when not a TTY); handles rotation, resize, Ctrl-C |
@@ -413,6 +414,36 @@ the legacy `repeat_rate` / `stale_rate` keys remain, labeled emitted-rows-only /
 Latency is explicitly not a concern (owner, 2026-11-14); the journal exists to make **usefulness** visible.
 
 ---
+
+### Shared model daemon (v0.4.0a6+)
+
+**One copy of the models per machine.** Before a6 every process that ran a retrieval loaded
+~2.4 GB of models itself: one stdio MCP server per Claude Code window, plus a fresh
+`supamem hook claude-code` process per Edit/Write. On 2026-11-17 a single hook call peaked at
+8.66 GB footprint and several windows pushed the host to 27.4/28 GB swap. Now the edit hook and
+the MCP servers send retrievals to **one** lazily spawned daemon over a user-only Unix socket
+(`<cache>/run/daemon.sock`, mode 0600). It holds one pooled copy of each model and exits by
+itself after `[supamem.mcp] model_idle_minutes` idle (zero footprint when unused). Measured: the
+hook process ~32 MB instead of 2.5–8.7 GB, an MCP server 119 MB instead of 2.47 GB, three
+concurrent windows → one daemon at ~2.85 GB.
+
+```bash
+supamem daemon status        # pid, version, RSS, loaded models (+dtype), served / busy_rejected / expired
+supamem daemon stop          # finish in-flight work and exit (the next client respawns it)
+```
+
+```toml
+[supamem.daemon]
+enabled = true               # false (or env SUPAMEM_DAEMON=off) = every process loads its own models
+```
+
+Safety rules: a daemon that is merely **busy or slow** never makes a client load models itself
+(the hook skips that edit's injection instead); only an **unreachable** daemon falls back to the
+in-process path, and the hook serializes that fallback host-wide (one model load at a time).
+Requests that out-waited their client's deadline are dropped from the queue, a `kill -9`'d
+daemon is respawned by the next request, and a newer supamem client (after `pipx upgrade`)
+makes the old daemon retire. `kill -USR1 <pid>` dumps all daemon thread stacks into
+`<cache>/run/daemon.log`. Design and alternatives: `docs/adr/0005`.
 
 ### Multilingual embedder + idle model unload (v0.4.0a5+)
 

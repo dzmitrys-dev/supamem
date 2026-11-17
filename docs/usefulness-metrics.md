@@ -75,9 +75,17 @@ for MCP cannot be computed from the journal; the study measured it by transcript
 6. **Per-project hook opt-out** — therapy (personal notes) raises a privacy question (study
    Q2): should coding hooks reach it at all? There is no `[supamem.hook] enabled = false`
    switch today; adding one is small but policy-first (owner decision).
-7. **Timeout drops** — attachments > 60 s were ~1% of invocations at the old latency; the
-   journal records `ms` per row, so `timeout_drop_rate` = rows with ms > hook timeout is a
-   one-line addition when the number matters again.
+7. **Timeout drops** — the number matters again. Journal 2026-11-17: searched hook rows had
+   p50 24.6 s and p90 73.6 s. 38% of searches, and 49% of non-empty injections, ran past the
+   then-30 s hook timeout. The timeout was raised to 100 s that day, and a6 moved retrieval into
+   the shared daemon (ADR-0005), so no edit loads models per call any more. Delivery of those late
+   injections could not be confirmed from transcripts (the marker counts were inconsistent), so
+   treat it as a hypothesis.
+   - Add `timeout_drop_rate` = rows with ms > hook timeout to `hook-stats`.
+   - Compare `use_rate` / `useful_per_100_edits` across the a5 → a6 boundary. The latency fix
+     should raise both without any change in retrieval quality.
+   - Expected new empty-row causes in a6: daemon `busy` / `expired` skips. Read them in
+     `supamem daemon status` (`busy_rejected`, `expired`).
 
 ## Baseline table for future comparisons
 

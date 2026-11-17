@@ -121,7 +121,7 @@ env-var 名、ファイルパス)を捉えます。Dense は BM25 が見逃す *
 
 ```bash
 # 1. インストール(uv が最速)
-uv tool install 'supamem==0.4.0a5'
+uv tool install 'supamem==0.4.0a6'
 
 # 2. Qdrant を起動(初回のみ、~30s)
 docker run -d -p 6333:6333 -p 6334:6334 -v $HOME/.qdrant:/qdrant/storage qdrant/qdrant:latest
@@ -249,13 +249,13 @@ Docker がない?[Qdrant Cloud](https://cloud.qdrant.io/) でマネージドク�
 
 ```bash
 # 推奨:uv(最速、隔離)
-uv tool install 'supamem==0.4.0a5'
+uv tool install 'supamem==0.4.0a6'
 
 # 代替:pipx(これも隔離)
-pipx install supamem==0.4.0a5
+pipx install supamem==0.4.0a6
 
 # プレーン pip(venv 内で)
-pip install supamem==0.4.0a5
+pip install supamem==0.4.0a6
 ```
 
 > **バージョン固定は必須です。** `0.4.0a3` はプレリリースであり、最新の*安定版*(`0.2.0`)は `0.3.x` / `0.4.x` 系列全体より古いため、固定なしの `install supamem` は本ドキュメントが説明する機能よりも古いバージョンへ**逆方向に**解決されます。厳密なプレリリース固定は追加フラグなしで解決でき、依存関係は安定版のままです。`--prerelease allow` は**使用しないでください**(解決全体に適用され、プレリリース依存を引き込みます)。
@@ -334,6 +334,7 @@ pip uninstall supamem
 | `supamem mcp-server` | MCP サーバー実行(`--transport stdio` デフォルト;`http` で HTTP) |
 | `supamem hook <client>` | クライアント別セッション/編集フック(クライアント自身が呼び出す) |
 | `supamem hook-stats` | 📈 編集フックの有用性メトリクス(v0.4.0a4+):`injection_rate`、`use_rate`、`repeat_rate`、`stale_rate`、`lang_mismatch_rate`、`useful_per_100_edits`、`shadow_use_rate` — インジェクションジャーナル(`<audit dir>/injections.jsonl`)と Claude Code セッションのトランスクリプトを突き合わせます。`--days N`(デフォルト 7)、`--json` で機械可読出力。 |
+| `supamem daemon` | 🧠 共有モデルデーモン(v0.4.0a6+):`serve`(通常は必要時に自動起動)、`status [--json]`、`stop`。編集フックとすべての MCP サーバーでモデルはマシン全体で1コピー。 |
 | `supamem doctor` | 🩺 Qdrant をプローブ、解決済み設定チェーンを出力、バージョンドリフトを報告 |
 | `supamem stats` | `.supamem/state/` からの Welford schema-v2 利用カウンタ |
 | `supamem live` | 👀 audit JSONL を追跡するライブダッシュボード — パイプセーフ(非 TTY 時はプレーン JSONL);ローテーション、リサイズ、Ctrl-C を処理 |
@@ -374,6 +375,36 @@ target_globs = []         # v0.4.0a5 — src/tests ヒューリスティック�
 レイテンシは明示的に非関心事です(オーナー、2026-11-14)。ジャーナルは**有用性**を見える化するために存在します。
 
 ---
+
+### 共有モデルデーモン (v0.4.0a6+)
+
+**モデルはマシン全体で1コピー。** a6 以前は検索を行うすべてのプロセスが ~2.4 GB のモデルを
+各自ロードしていました。Claude Code のウィンドウごとに stdio MCP サーバーが1つ、さらに
+Edit/Write のたびに新しい `supamem hook claude-code` プロセスです。2026-11-17 にはフック1回で
+footprint が 8.66 GB に達し、複数ウィンドウでホストのスワップが 27.4/28 GB になりました。現在は
+編集フックと MCP サーバーが、ユーザー専用の Unix ソケット(`<cache>/run/daemon.sock`、
+モード 0600)上で必要時に起動される **1つの** デーモンへ検索を送ります。デーモンは各モデルを
+1コピーだけ保持し、`[supamem.mcp] model_idle_minutes` のアイドル後に自動終了します(未使用時の
+メモリはゼロ)。実測:フックプロセス ~32 MB(以前は 2.5–8.7 GB)、MCP サーバー 119 MB(以前は
+2.47 GB)、同時3ウィンドウ → デーモン1つで ~2.85 GB。
+
+```bash
+supamem daemon status        # pid, version, RSS, loaded models (+dtype), served / busy_rejected / expired
+supamem daemon stop          # finish in-flight work and exit (the next client respawns it)
+```
+
+```toml
+[supamem.daemon]
+enabled = true               # false (or env SUPAMEM_DAEMON=off) = every process loads its own models
+```
+
+安全規則:デーモンが **混雑・低速** なだけならクライアントは決して自前でモデルをロードしません
+(フックはその編集のインジェクションをスキップ)。インプロセス経路へのフォールバックはデーモンに
+**到達できない** 場合のみで、フックはそのフォールバックをマシン全体で直列化します(同時に1ロード)。
+クライアントの期限を過ぎて待った要求はキューから破棄され、`kill -9` されたデーモンは次の要求で
+再起動され、新しい supamem クライアント(`pipx upgrade` 後)は古いデーモンを退役させます。
+`kill -USR1 <pid>` でデーモンの全スレッドのスタックを `<cache>/run/daemon.log` に出力します。
+設計と代替案:`docs/adr/0005`。
 
 ### 多言語エンベッダー + アイドル時モデル解放 (v0.4.0a5+)
 

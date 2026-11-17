@@ -953,6 +953,72 @@ def cmd_migrate(
     raise typer.Exit(run_migrate(client, source, tgt, path=path.value, yes=yes))
 
 
+daemon_app = typer.Typer(
+    name="daemon",
+    no_args_is_help=True,
+    help="Shared model daemon (v0.4.0a6): one copy of the retrieval models per machine. "
+    "Spawned on demand by the edit hook and MCP servers; exits by itself when idle.",
+)
+app.add_typer(daemon_app, name="daemon")
+
+
+@daemon_app.command("serve")
+def cmd_daemon_serve(
+    idle_seconds: float = typer.Option(
+        1800.0, "--idle-seconds", help="Exit after this many idle seconds (0 = never)."
+    ),
+) -> None:
+    """Run the daemon in the foreground (clients normally spawn it for you)."""
+    from supamem.daemon import supported
+    from supamem.daemon.server import main_serve
+
+    if not supported():
+        err_console.print("supamem daemon: Unix domain sockets are not available on this OS")
+        raise typer.Exit(2)
+    raise typer.Exit(main_serve(idle_seconds))
+
+
+@daemon_app.command("status")
+def cmd_daemon_status(
+    as_json: bool = typer.Option(False, "--json", help="Machine-readable output."),
+) -> None:
+    """Show whether the daemon runs, its pid, version, memory and loaded models."""
+    import json as _json
+
+    from supamem.daemon import socket_path
+    from supamem.daemon.client import ping
+
+    status = ping()
+    if as_json:
+        console.print_json(_json.dumps(status or {"running": False}))
+        raise typer.Exit(0)
+    if status is None:
+        console.print(f"supamem daemon: not running (socket {socket_path()})")
+        raise typer.Exit(0)
+    rss = status.get("rss_kb")
+    console.print(
+        f"supamem daemon: running pid={status.get('pid')} v{status.get('version')} "
+        f"uptime={status.get('uptime_s')}s idle_for={status.get('idle_for_s')}s "
+        f"rss={'?' if rss is None else f'{rss // 1024} MB'} served={status.get('served')} "
+        f"busy_rejected={status.get('busy_rejected')}"
+    )
+    for kind, ids in (status.get("models") or {}).items():
+        console.print(f"  {kind}: {', '.join(ids)}")
+    for key, dtype in (status.get("dtypes") or {}).items():
+        console.print(f"  dtype {key}: {dtype}")
+
+
+@daemon_app.command("stop")
+def cmd_daemon_stop() -> None:
+    """Ask the running daemon to finish in-flight work and exit."""
+    from supamem.daemon.client import stop
+
+    if stop():
+        console.print("supamem daemon: stop requested")
+    else:
+        console.print("supamem daemon: not running")
+
+
 def main() -> None:
     # Fire-and-forget update probe — writes cache for *next* invocation. Skipped
     # when env vars opt out, when stderr is non-TTY (piped/redirected output),

@@ -180,6 +180,11 @@ class ResolvedConfig:
     # minutes the sweeper thread drops the cached backend (models re-load lazily on the
     # next query, ~9 s). 0 disables. Negative values fail closed below.
     mcp_model_idle_minutes: int = 30
+    # v0.4.0a6 — shared model daemon ([supamem.daemon] enabled). The edit hook and MCP
+    # servers send retrievals to ONE lazily spawned daemon holding one copy of the models
+    # (it exits after mcp_model_idle_minutes idle). false = every process loads its own
+    # models (pre-a6 behaviour). Env SUPAMEM_DAEMON=off|on overrides. See ADR-0005.
+    daemon_enabled: bool = True
 
 
 @dataclass
@@ -241,6 +246,7 @@ class ConfigChain:
     hook_shadow_task_query: Source = "default"
     hook_target_globs: Source = "default"
     mcp_model_idle_minutes: Source = "default"
+    daemon_enabled: Source = "default"
 
 
 _LEGACY_ENV: dict[str, str] = {
@@ -363,6 +369,13 @@ _NESTED_TABLES: list[tuple[str, dict[str, str]]] = [
             "response_format": "mcp_response_format",
             "cache_ttl_ms": "mcp_cache_ttl_ms",
             "model_idle_minutes": "mcp_model_idle_minutes",
+        },
+    ),
+    # v0.4.0a6 — [supamem.daemon] (shared model daemon).
+    (
+        "daemon",
+        {
+            "enabled": "daemon_enabled",
         },
     ),
 ]
@@ -844,6 +857,12 @@ def load_config(cwd: Path | None = None) -> tuple[ResolvedConfig, ConfigChain]:
         err_console.print(
             f"[supamem.err]config: mcp.model_idle_minutes={cfg.mcp_model_idle_minutes} "
             "must be >= 0 (0 disables idle unload)"
+        )
+        raise SystemExit(2)
+    # v0.4.0a6 — daemon.enabled must be a real bool (a "false" string is truthy).
+    if not isinstance(cfg.daemon_enabled, bool):
+        err_console.print(
+            f"[supamem.err]config: daemon.enabled={cfg.daemon_enabled!r} must be true or false"
         )
         raise SystemExit(2)
     # v0.4.0a5 — target_globs must be a list of non-empty strings.

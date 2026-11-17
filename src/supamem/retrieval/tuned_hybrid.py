@@ -289,14 +289,25 @@ class TunedHybridBackend:
                 check_compatibility=False,
                 timeout=60,
             )
+        # v0.4.0a6: dense/sparse come from the process-wide pool (one copy per model id,
+        # however many backends/collections this process serves).
+        from supamem.retrieval import model_pool  # noqa: PLC0415
+
         if self._dense is None:
             # v0.4.0a5: the dense model follows cfg.embedder (was hardcoded — a configured
             # plugin was silently ignored and queries ran in the wrong vector space).
             from supamem.embedders import dense_model_id_for  # noqa: PLC0415
 
-            self._dense = TextEmbedding(dense_model_id_for(self.config), **fastembed_kwargs())
+            dense_id = dense_model_id_for(self.config)
+            self._dense = model_pool.get(
+                "dense", dense_id, lambda: TextEmbedding(dense_id, **fastembed_kwargs())
+            )
         if self._sparse is None:
-            self._sparse = SparseTextEmbedding(DEFAULT_SPARSE_MODEL, **fastembed_kwargs())
+            self._sparse = model_pool.get(
+                "sparse",
+                DEFAULT_SPARSE_MODEL,
+                lambda: SparseTextEmbedding(DEFAULT_SPARSE_MODEL, **fastembed_kwargs()),
+            )
         return self._client, self._dense, self._sparse
 
     def query(

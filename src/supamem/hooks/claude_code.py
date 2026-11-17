@@ -37,10 +37,9 @@ import sys
 import time
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Optional
+from typing import TYPE_CHECKING, Any, Iterable, Iterator, Optional
 
 from supamem.config import ResolvedConfig
-from supamem.retrieval.tuned_hybrid import TunedHybridBackend
 from supamem.retrieval.types import RetrievedChunk
 from supamem.stats.injections import (
     ZERO_DROPPED,
@@ -52,6 +51,10 @@ from supamem.stats.injections import (
     save_seen,
     source_exists,
 )
+
+if TYPE_CHECKING:  # v0.4.0a6: importing tuned_hybrid pulls fastembed/onnx/qdrant into EVERY
+    # edit's process; the hook now normally talks to the shared daemon instead.
+    from supamem.retrieval.tuned_hybrid import TunedHybridBackend
 
 log = logging.getLogger("supamem.hooks.claude_code")
 
@@ -175,13 +178,76 @@ def derive_query(
 # ---- Backend cache, marker dir, counter (mockable for tests) -------------
 
 
-_BACKEND_CACHE: dict[int, TunedHybridBackend] = {}
+# v0.4.0a6 (ADR-0005): retrieval goes to the shared model daemon. Each hook process used to
+# load ~2.4 GB of models itself (one call peaked at 8.66 GB footprint with the shadow query,
+# 2026-11-17); N windows editing at once = N copies → swap exhaustion.
+_DAEMON_TIMEOUT_S = 60.0
+# In-process fallback (daemon unreachable / disabled) is serialized host-wide: at most ONE
+# hook process loads models at a time; the rest skip this edit's injection.
+_INPROC_LOCK_TIMEOUT_S = 3.0
+# The shadow query runs before the process exits and Claude Code waits for the exit, so a
+# late shadow could push the MAIN injection past the hook timeout — skip it past this point.
+_SHADOW_SKIP_AFTER_S = 20.0
 
 
-def _get_backend(config: ResolvedConfig) -> TunedHybridBackend:
+class _InprocBusy(RuntimeError):
+    """Another hook process holds the in-process model lock — skip, don't stack a copy."""
+
+
+class _HookBackend:
+    """Daemon-first retrieval for the edit hook (same ``query`` shape as the backend)."""
+
+    def __init__(self, config: ResolvedConfig) -> None:
+        self.config = config
+        self._local: TunedHybridBackend | None = None
+
+    def query(
+        self, text: str, k: int = 5, *, where: dict[str, Any] | None = None
+    ) -> list[RetrievedChunk]:
+        from supamem.daemon import DaemonUnavailable, daemon_enabled  # noqa: PLC0415
+
+        if daemon_enabled(self.config):
+            from supamem.daemon import client  # noqa: PLC0415
+
+            try:
+                return client.query(self.config, text, k, where, timeout=_DAEMON_TIMEOUT_S)
+            except DaemonUnavailable as exc:
+                # Only an UNREACHABLE daemon falls back. DaemonBusy / DaemonError propagate:
+                # loading models here while the daemon is merely slow recreates the spike.
+                log.warning("supamem hook: daemon unavailable (%s) — in-process fallback", exc)
+        return self._query_local(text, k, where)
+
+    def _query_local(
+        self, text: str, k: int, where: dict[str, Any] | None
+    ) -> list[RetrievedChunk]:
+        from filelock import FileLock, Timeout  # noqa: PLC0415
+
+        from supamem.daemon import run_dir  # noqa: PLC0415
+
+        lock = FileLock(str(run_dir() / "hook-inproc.lock"))
+        try:
+            lock.acquire(timeout=_INPROC_LOCK_TIMEOUT_S)
+        except Timeout as exc:
+            raise _InprocBusy("another hook process is loading models in-process") from exc
+        try:
+            if self._local is None:
+                from supamem.retrieval.tuned_hybrid import (  # noqa: PLC0415
+                    TunedHybridBackend,
+                )
+
+                self._local = TunedHybridBackend(config=self.config)
+            return self._local.query(text, k=k, where=where)
+        finally:
+            lock.release()
+
+
+_BACKEND_CACHE: dict[int, _HookBackend] = {}
+
+
+def _get_backend(config: ResolvedConfig) -> _HookBackend:
     key = id(config)
     if key not in _BACKEND_CACHE:
-        _BACKEND_CACHE[key] = TunedHybridBackend(config=config)
+        _BACKEND_CACHE[key] = _HookBackend(config)
     return _BACKEND_CACHE[key]
 
 
@@ -517,7 +583,7 @@ def _journal_row(
 
 
 def _shadow_result(
-    backend: TunedHybridBackend,
+    backend: _HookBackend | TunedHybridBackend,
     *,
     base_query: str,
     transcript_path: str,
@@ -633,7 +699,7 @@ def run(file_path: Path, config: ResolvedConfig, payload: dict[str, Any] | None 
         shadow_on = bool(_hook_setting(config, "shadow_task_query", _SHADOW_TASK_QUERY))
 
         try:
-            backend: TunedHybridBackend
+            backend: _HookBackend
             with _models_offline():
                 backend = _get_backend(
                     config
@@ -658,7 +724,11 @@ def run(file_path: Path, config: ResolvedConfig, payload: dict[str, Any] | None 
         final = kept[:inject_k]
 
         shadow = None
-        if shadow_on and transcript_path:
+        if (
+            shadow_on
+            and transcript_path
+            and (time.perf_counter() - t0) < _SHADOW_SKIP_AFTER_S
+        ):
             shadow = _shadow_result(
                 backend,
                 base_query=query,

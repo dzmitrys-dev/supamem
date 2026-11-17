@@ -253,6 +253,10 @@ def _rss_kb() -> Optional[int]:
         return None
 
 
+# v0.4.0a6 — a warm daemon answers in seconds; the budget covers a cold spawn + model load.
+_DAEMON_TIMEOUT_S = 120.0
+
+
 def sweep_idle_backends(config: ResolvedConfig) -> int:
     """Evict cached backends idle >= TTL and not busy. Returns count evicted.
 
@@ -275,6 +279,15 @@ def sweep_idle_backends(config: ResolvedConfig) -> int:
             if rec.busy == 0 and now - rec.last_use >= ttl:
                 evicted.append(key)
                 del _BACKEND_CACHE[key]
+        pool_cleared = 0
+        if evicted and not _BACKEND_CACHE:
+            # v0.4.0a6: models live in the process-wide pool, not on the backend — drop
+            # them too once no backend is cached, or eviction would free nothing.
+            from supamem.retrieval import model_pool  # noqa: PLC0415
+
+            pool_cleared = model_pool.clear()
+    if pool_cleared:
+        log.info("supamem mcp: model pool cleared (%d models)", pool_cleared)
     for key in evicted:
         before = _rss_kb()
         gc.collect()
@@ -332,19 +345,39 @@ async def dual_memory_search(
     effective_top_k = min(max(1, top_k), cap)
     clamped_to: Optional[int] = effective_top_k if top_k > cap else None
 
-    backend = _get_backend(cfg)
     t0 = time.perf_counter()
-    try:
-        hits: list[RetrievedChunk] = await asyncio.to_thread(
-            backend.query, q, effective_top_k, where=where
-        )
-    except Exception as exc:  # noqa: BLE001
-        elapsed_ms = (time.perf_counter() - t0) * 1000.0
-        log.exception("retrieval failed: %s", exc)
-        _bump("search_error", 0, elapsed_ms)
-        raise RuntimeError(_sanitize_error(exc)) from None
-    finally:
-        _release_backend(cfg, backend)
+    hits: list[RetrievedChunk] | None = None
+    from supamem.daemon import daemon_enabled  # noqa: PLC0415
+
+    if daemon_enabled(cfg):
+        # v0.4.0a6 (ADR-0005): one shared daemon holds the models for every window; this
+        # server stays ~130 MB. Only an UNREACHABLE daemon falls back to loading in-process.
+        from supamem.daemon import DaemonUnavailable  # noqa: PLC0415
+        from supamem.daemon import client as daemon_client  # noqa: PLC0415
+
+        try:
+            hits = await asyncio.to_thread(
+                daemon_client.query, cfg, q, effective_top_k, where,
+                timeout=_DAEMON_TIMEOUT_S,
+            )
+        except DaemonUnavailable as exc:
+            log.warning("supamem daemon unavailable (%s) — in-process retrieval", exc)
+        except Exception as exc:  # noqa: BLE001 — busy / query failure: surface, don't load
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            log.warning("daemon retrieval failed: %s: %s", type(exc).__name__, exc)
+            _bump("search_error", 0, elapsed_ms)
+            raise RuntimeError(_sanitize_error(exc)) from None
+    if hits is None:
+        backend = _get_backend(cfg)
+        try:
+            hits = await asyncio.to_thread(backend.query, q, effective_top_k, where=where)
+        except Exception as exc:  # noqa: BLE001
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            log.exception("retrieval failed: %s", exc)
+            _bump("search_error", 0, elapsed_ms)
+            raise RuntimeError(_sanitize_error(exc)) from None
+        finally:
+            _release_backend(cfg, backend)
 
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
     # Defensive: backend may return more than effective_top_k (e.g. mock

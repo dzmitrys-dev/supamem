@@ -667,6 +667,39 @@ def _human_bytes(n: int) -> str:
     return f"{n} B"
 
 
+def _render_daemon_panel(cfg: Any) -> None:
+    """Shared model daemon (v0.4.0a6, ADR-0005). Read-only, never flips rc, never spawns."""
+    console.print("[supamem.brand]Model daemon[/supamem.brand]")
+    try:
+        from supamem import __version__ as _ver  # noqa: PLC0415
+        from supamem.daemon import daemon_enabled, socket_path  # noqa: PLC0415
+        from supamem.daemon.client import ping  # noqa: PLC0415
+
+        if not daemon_enabled(cfg):
+            info("    disabled ([supamem.daemon] enabled = false or SUPAMEM_DAEMON=off) — "
+                 "every process loads its own models")
+            return
+        status = ping()
+        if status is None:
+            ok(f"    not running (spawned on demand; socket {socket_path()})")
+            return
+        rss = status.get("rss_kb")
+        ok(
+            f"    running pid={status.get('pid')} v{status.get('version')} "
+            f"uptime={status.get('uptime_s')}s rss={'?' if rss is None else f'{rss // 1024} MB'} "
+            f"served={status.get('served')} busy_rejected={status.get('busy_rejected')}"
+        )
+        if status.get("version") != _ver:
+            warn(f"    daemon runs v{status.get('version')} but this CLI is v{_ver} — it retires "
+                 "after the next newer client request (or: supamem daemon stop)")
+        for kind, ids in (status.get("models") or {}).items():
+            info(f"    {kind}: {', '.join(ids)}")
+        for key, dtype in (status.get("dtypes") or {}).items():
+            info(f"    dtype {key}: {dtype}")
+    except Exception as exc:  # noqa: BLE001 — a diagnostic panel must never crash doctor
+        warn(f"    daemon probe failed ({type(exc).__name__}: {exc})")
+
+
 def _render_index_freshness_panel(
     cfg: Any, chain: Any, *, client: Any
 ) -> None:
@@ -1202,6 +1235,9 @@ def run_doctor(*, redact_secrets: bool = True) -> int:
         chain,
         client=locals().get("client") if qdrant_up else None,
     )
+
+    # ── Section 2g3: Model daemon (v0.4.0a6) — read-only, never spawns ──
+    _render_daemon_panel(cfg)
 
     # ── Section 2h: Eval bench (Phase 10 D-DOCTOR-EVAL-01) ───────────────
     # Read-only panel — NEVER flips exit code (mirrors Plan 08.1

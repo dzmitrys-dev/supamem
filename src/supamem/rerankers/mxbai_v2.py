@@ -29,84 +29,10 @@ class MxbaiV2Reranker:
 
     def _ensure(self) -> Any:
         if self._model is None:
-            t0 = time.perf_counter()
-            # Heavy imports inside the function — cold CLI must not import
-            # torch / transformers / mxbai_rerank (D-CONTRACT-02).
-            from mxbai_rerank import MxbaiRerankV2  # noqa: PLC0415
+            from supamem.retrieval import model_pool  # noqa: PLC0415
 
-            self._model = MxbaiRerankV2(self.config.reranker_model_id)
-
-            # Compatibility shim: mxbai-rerank 0.1.6 calls
-            # `tokenizer.prepare_for_model(ids, pair_ids, ...)` unconditionally,
-            # but the slow Qwen2Tokenizer in transformers >=4.50 no longer
-            # exposes this method (and PreTrainedTokenizerBase no longer
-            # provides a fallback impl as of recent releases). Upstream
-            # mxbai-rerank is unmaintained (no fix released as of 2026-05-04).
-            # Implement the minimal call signature mxbai uses:
-            # add_special_tokens=False, padding=False, truncation="only_second".
-            try:
-                tok = getattr(self._model, "tokenizer", None)
-                if tok is not None and not hasattr(tok, "prepare_for_model"):
-                    def _shim_prepare_for_model(
-                        ids,
-                        pair_ids=None,
-                        *,
-                        truncation=None,
-                        max_length=None,
-                        padding=False,  # noqa: ARG001
-                        return_attention_mask=False,
-                        return_token_type_ids=False,
-                        add_special_tokens=False,  # noqa: ARG001
-                        **_kwargs,
-                    ):
-                        a = list(ids)
-                        b = list(pair_ids) if pair_ids is not None else []
-                        if max_length is not None:
-                            if truncation == "only_second":
-                                budget = max_length - len(a)
-                                if budget < 0:
-                                    a = a[:max_length]
-                                    b = []
-                                elif len(b) > budget:
-                                    b = b[:budget]
-                            elif truncation in (
-                                True,
-                                "longest_first",
-                                "only_first",
-                            ):
-                                while len(a) + len(b) > max_length:
-                                    if truncation == "only_first" or len(a) > len(b):
-                                        a.pop()
-                                    else:
-                                        b.pop()
-                        combined = a + b
-                        out: dict[str, Any] = {"input_ids": combined}
-                        if return_attention_mask:
-                            out["attention_mask"] = [1] * len(combined)
-                        if return_token_type_ids:
-                            out["token_type_ids"] = [0] * len(a) + [1] * len(b)
-                        return out
-
-                    tok.prepare_for_model = _shim_prepare_for_model
-            except Exception as _shim_exc:  # noqa: BLE001
-                err_console.print(
-                    "[supamem.warn]prepare_for_model shim failed "
-                    f"({type(_shim_exc).__name__}: {_shim_exc}); "
-                    "rerank may still raise"
-                )
-
-            elapsed_ms = (time.perf_counter() - t0) * 1000.0
-            try:
-                from supamem.stats.counter import bump  # noqa: PLC0415
-
-                bump(
-                    kind="rerank",
-                    source="load_latency_ms",
-                    tokens=0,
-                    latency_ms=elapsed_ms,
-                )
-            except Exception:  # noqa: BLE001 — non-essential probe
-                pass
+            model_id = self.config.reranker_model_id
+            self._model = model_pool.get("reranker", model_id, lambda: _load_model(model_id))
         return self._model
 
     def rerank(
@@ -158,3 +84,87 @@ class MxbaiV2Reranker:
                 )
             )
         return out
+
+
+def _load_model(model_id: str) -> Any:
+    """Load + shim one ``MxbaiRerankV2`` model. Pooled per model id by the caller (v0.4.0a6:
+    one copy per process instead of one per backend)."""
+    t0 = time.perf_counter()
+    # Heavy imports inside the function — cold CLI must not import
+    # torch / transformers / mxbai_rerank (D-CONTRACT-02).
+    from mxbai_rerank import MxbaiRerankV2  # noqa: PLC0415
+
+    model = MxbaiRerankV2(model_id)
+
+    # Compatibility shim: mxbai-rerank 0.1.6 calls
+    # `tokenizer.prepare_for_model(ids, pair_ids, ...)` unconditionally,
+    # but the slow Qwen2Tokenizer in transformers >=4.50 no longer
+    # exposes this method (and PreTrainedTokenizerBase no longer
+    # provides a fallback impl as of recent releases). Upstream
+    # mxbai-rerank is unmaintained (no fix released as of 2026-05-04).
+    # Implement the minimal call signature mxbai uses:
+    # add_special_tokens=False, padding=False, truncation="only_second".
+    try:
+        tok = getattr(model, "tokenizer", None)
+        if tok is not None and not hasattr(tok, "prepare_for_model"):
+            def _shim_prepare_for_model(
+                ids,
+                pair_ids=None,
+                *,
+                truncation=None,
+                max_length=None,
+                padding=False,  # noqa: ARG001
+                return_attention_mask=False,
+                return_token_type_ids=False,
+                add_special_tokens=False,  # noqa: ARG001
+                **_kwargs,
+            ):
+                a = list(ids)
+                b = list(pair_ids) if pair_ids is not None else []
+                if max_length is not None:
+                    if truncation == "only_second":
+                        budget = max_length - len(a)
+                        if budget < 0:
+                            a = a[:max_length]
+                            b = []
+                        elif len(b) > budget:
+                            b = b[:budget]
+                    elif truncation in (
+                        True,
+                        "longest_first",
+                        "only_first",
+                    ):
+                        while len(a) + len(b) > max_length:
+                            if truncation == "only_first" or len(a) > len(b):
+                                a.pop()
+                            else:
+                                b.pop()
+                combined = a + b
+                out: dict[str, Any] = {"input_ids": combined}
+                if return_attention_mask:
+                    out["attention_mask"] = [1] * len(combined)
+                if return_token_type_ids:
+                    out["token_type_ids"] = [0] * len(a) + [1] * len(b)
+                return out
+
+            tok.prepare_for_model = _shim_prepare_for_model
+    except Exception as _shim_exc:  # noqa: BLE001
+        err_console.print(
+            "[supamem.warn]prepare_for_model shim failed "
+            f"({type(_shim_exc).__name__}: {_shim_exc}); "
+            "rerank may still raise"
+        )
+
+    elapsed_ms = (time.perf_counter() - t0) * 1000.0
+    try:
+        from supamem.stats.counter import bump  # noqa: PLC0415
+
+        bump(
+            kind="rerank",
+            source="load_latency_ms",
+            tokens=0,
+            latency_ms=elapsed_ms,
+        )
+    except Exception:  # noqa: BLE001 — non-essential probe
+        pass
+    return model

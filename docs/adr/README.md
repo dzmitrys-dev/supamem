@@ -41,3 +41,4 @@ decision, its context, consequences, and the alternatives considered.
 | [0002](0002-coderag-eval-philosophy.md) | coderag eval philosophy         | accepted | 2026-05-07 |
 | [0003](0003-simplemem-evaluation.md) | SimpleMem evaluation — selective borrow under local-only | accepted | 2026-06-11 |
 | [0004](0004-multilingual-embedder.md) | Multilingual dense embedder (opt-in per project) | accepted | 2026-11-17 |
+| [0005](0005-shared-model-daemon.md) | Shared model daemon — one copy of the models per machine | accepted | 2026-11-17 |

@@ -2,6 +2,40 @@
 
 All notable changes to `supamem` will be documented in this file.
 
+## [0.4.0a6] — 2026-11-17 — Shared model daemon (one copy of the models per machine)
+
+On 2026-11-17 the owner's 24 GB Mac hit 27.4/28 GB swap: every process that ran a retrieval
+loaded ~2.4 GB of models itself (one stdio MCP server per window, one fresh hook process per
+Edit/Write — a single hook call peaked at 8.66 GB footprint and took 397 s). See ADR-0005.
+
+- **`supamem daemon`** (`serve` / `status [--json]` / `stop`) — a lazily spawned daemon on a
+  user-only Unix socket (`<cache>/run/daemon.sock`, 0600) holds ONE pooled copy of each model and
+  serves the edit hook and every MCP server; it exits by itself after
+  `[supamem.mcp] model_idle_minutes` idle (zero footprint at rest). One daemon per cache root
+  (process-lifetime pid `FileLock`); detached spawn never inherits the hook's / MCP server's
+  stdout; a newer client version makes the old daemon retire after draining; `kill -USR1 <pid>`
+  dumps thread stacks into `<cache>/run/daemon.log`. Kill switch: `[supamem.daemon] enabled =
+  false` or env `SUPAMEM_DAEMON=off`.
+- **Overload means skip, never load** — one query at a time, ≤ 8 waiters (`busy` beyond), requests
+  that out-waited their client's deadline are dropped (`expired`); only an UNREACHABLE daemon makes
+  a client load models in-process, and the hook serializes that fallback host-wide
+  (`hook-inproc.lock`).
+- **Process-wide model pool** (`retrieval/model_pool.py`) — dense / sparse / reranker models are
+  shared by model id across backends; before a6 one process serving K collections held K copies.
+  The MCP idle sweep clears the pool when its last backend is evicted.
+- **Edit hook is light** — `tuned_hybrid` imported lazily (no fastembed/onnx/qdrant in the hook
+  process); the shadow query is skipped past 20 s so it cannot push the main injection past the
+  hook timeout.
+- Measured (real hook / MCP processes on the maintainer machine): hook process ~32 MB (was
+  2.5–8.7 GB), MCP server 119 MB (was 2.47 GB), 3 concurrent windows → one daemon ~2.85 GB;
+  `kill -9` of the daemon mid-query → the hook retries, respawns and still injects (one JSON
+  line, exit 0). Warm query latency stays reranker-bound (20–45 s on a swap-saturated host; rerank
+  off = 0.3 s) — `ping` reports the reranker dtype (fp32: mxbai's `auto_device()` ignores MPS) as
+  the data for the deferred bf16/MPS decision (issue #5).
+- Doctor: read-only **Model daemon** panel (state, pid, version + stale flag, RSS, models/dtype).
+- Tests: the unit suite never spawns the daemon (autouse `SUPAMEM_DAEMON=off`) and pooled models
+  never leak between tests.
+
 ## [0.4.0a5] — 2026-11-17 — Multilingual embedder (opt-in), idle model unload, per-entry index epoch
 
 Closes the retrieval-quality gap the 2026-11-14 study left open after the a4 mechanical fixes

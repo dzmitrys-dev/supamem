@@ -126,7 +126,7 @@ CRM personal, no para retrieval consciente del código.
 
 ```bash
 # 1. Instalar (uv es la ruta más rápida)
-uv tool install 'supamem==0.4.0a5'
+uv tool install 'supamem==0.4.0a6'
 
 # 2. Iniciar Qdrant (una vez, ~30s)
 docker run -d -p 6333:6333 -p 6334:6334 -v $HOME/.qdrant:/qdrant/storage qdrant/qdrant:latest
@@ -255,13 +255,13 @@ y apunta `supamem` a la URL vía `supamem init`.
 
 ```bash
 # Recomendado: uv (más rápido, aislado)
-uv tool install 'supamem==0.4.0a5'
+uv tool install 'supamem==0.4.0a6'
 
 # Alternativa: pipx (también aislado)
-pipx install supamem==0.4.0a5
+pipx install supamem==0.4.0a6
 
 # pip plano (en un venv)
-pip install supamem==0.4.0a5
+pip install supamem==0.4.0a6
 ```
 
 > **El pin de versión es obligatorio.** `0.4.0a3` es una pre-release, y la versión *estable* más reciente (`0.2.0`) es anterior a toda la línea `0.3.x` / `0.4.x`, por lo que un `install supamem` sin pin resuelve **hacia atrás**, a una versión más antigua que las funciones documentadas aquí. Un pin exacto de pre-release resuelve sin flags adicionales y mantiene las dependencias en versiones estables; **no** uses `--prerelease allow` (se aplica a toda la resolución y arrastra dependencias pre-release).
@@ -342,6 +342,7 @@ y el recordatorio para que descubras este flujo de manera natural.
 | `supamem mcp-server` | Correr el servidor MCP (`--transport stdio` default; `--transport http` para HTTP) |
 | `supamem hook <client>` | Hooks de sesión/edición por cliente (llamados por el cliente) |
 | `supamem hook-stats` | 📈 Métricas de utilidad del hook de edición (v0.4.0a4+): `injection_rate`, `use_rate`, `repeat_rate`, `stale_rate`, `lang_mismatch_rate`, `useful_per_100_edits`, `shadow_use_rate` — correlaciona el diario de inyecciones (`<audit dir>/injections.jsonl`) con las transcripciones de sesión de Claude Code. `--days N` (7 por defecto), `--json` para salida legible por máquina. |
+| `supamem daemon` | 🧠 Daemon de modelos compartido (v0.4.0a6+): `serve` (normalmente se lanza bajo demanda), `status [--json]`, `stop`. Una copia de los modelos por máquina para el hook de edición y todos los servidores MCP. |
 | `supamem doctor` | 🩺 Probar Qdrant, imprimir cadena de config resuelta, reportar drift de versión |
 | `supamem stats` | Contadores Welford schema-v2 desde `.supamem/state/` |
 | `supamem live` | 👀 Dashboard en vivo siguiendo el audit JSONL — pipe-safe (JSONL plano cuando no hay TTY); maneja rotación, redimensionado, Ctrl-C |
@@ -382,6 +383,38 @@ Las cuatro claves numéricas/booleanas se validan fail-closed al cargar la confi
 La latencia explícitamente no es una preocupación (owner, 2026-11-14); el diario existe para hacer visible la **utilidad**.
 
 ---
+
+### Daemon de modelos compartido (v0.4.0a6+)
+
+**Una sola copia de los modelos por máquina.** Antes de a6 cada proceso que ejecutaba una
+recuperación cargaba ~2.4 GB de modelos por su cuenta: un servidor MCP stdio por ventana de
+Claude Code, más un proceso nuevo de `supamem hook claude-code` por cada Edit/Write. El
+2026-11-17 una sola llamada del hook alcanzó 8.66 GB de footprint y varias ventanas llevaron el
+equipo a 27.4/28 GB de swap. Ahora el hook de edición y los servidores MCP envían las consultas
+a **un** daemon que se lanza bajo demanda en un socket Unix solo para el usuario
+(`<cache>/run/daemon.sock`, modo 0600). Mantiene una copia de cada modelo y termina por sí
+mismo tras `[supamem.mcp] model_idle_minutes` de inactividad (cero memoria en reposo). Medido:
+el proceso del hook ~32 MB en lugar de 2.5–8.7 GB, un servidor MCP 119 MB en lugar de 2.47 GB,
+tres ventanas concurrentes → un daemon de ~2.85 GB.
+
+```bash
+supamem daemon status        # pid, version, RSS, loaded models (+dtype), served / busy_rejected / expired
+supamem daemon stop          # finish in-flight work and exit (the next client respawns it)
+```
+
+```toml
+[supamem.daemon]
+enabled = true               # false (or env SUPAMEM_DAEMON=off) = every process loads its own models
+```
+
+Reglas de seguridad: un daemon que solo está **ocupado o lento** nunca hace que un cliente
+cargue modelos por su cuenta (el hook omite la inyección de esa edición); solo un daemon
+**inalcanzable** recurre a la ruta en proceso, y el hook serializa ese respaldo en toda la
+máquina (una carga a la vez). Las peticiones que superaron el plazo de su cliente se descartan
+de la cola, un daemon matado con `kill -9` se relanza con la siguiente petición y un cliente de
+supamem más nuevo (tras `pipx upgrade`) retira el daemon antiguo. `kill -USR1 <pid>` vuelca las
+pilas de todos los hilos del daemon en `<cache>/run/daemon.log`. Diseño y alternativas:
+`docs/adr/0005`.
 
 ### Embedder multilingüe + descarga de modelos en reposo (v0.4.0a5+)
 

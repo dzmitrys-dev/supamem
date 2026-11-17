@@ -256,3 +256,16 @@ def _isolate_audit_log(tmp_path_factory: pytest.TempPathFactory, monkeypatch: py
     import supamem.stats.counter as counter
 
     monkeypatch.setattr(counter, "_LEGACY_CACHE_DIR", d / "legacy")
+
+
+@pytest.fixture(autouse=True)
+def _no_shared_daemon(monkeypatch: pytest.MonkeyPatch):
+    """v0.4.0a6: unit tests never spawn or reach the shared model daemon (tests that exercise
+    it opt back in with their own SUPAMEM_CACHE_DIR), and pooled models never leak between
+    tests (a fake TextEmbedding cached by one test would be served to the next)."""
+    monkeypatch.setenv("SUPAMEM_DAEMON", "off")
+    from supamem.retrieval import model_pool
+
+    model_pool.clear()
+    yield
+    model_pool.clear()

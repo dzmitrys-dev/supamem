@@ -120,7 +120,7 @@ Anthropic API 标价(2026 年 3 月):
 
 ```bash
 # 1. 安装(uv 是最快路径)
-uv tool install 'supamem==0.4.0a5'
+uv tool install 'supamem==0.4.0a6'
 
 # 2. 启动 Qdrant(一次性,~30 秒)
 docker run -d -p 6333:6333 -p 6334:6334 -v $HOME/.qdrant:/qdrant/storage qdrant/qdrant:latest
@@ -248,13 +248,13 @@ services:
 
 ```bash
 # 推荐:uv(最快、隔离)
-uv tool install 'supamem==0.4.0a5'
+uv tool install 'supamem==0.4.0a6'
 
 # 备选:pipx(也隔离)
-pipx install supamem==0.4.0a5
+pipx install supamem==0.4.0a6
 
 # 普通 pip(在 venv 中)
-pip install supamem==0.4.0a5
+pip install supamem==0.4.0a6
 ```
 
 > **必须固定版本。** `0.4.0a3` 是预发布版本,而最新的*稳定*版(`0.2.0`)早于整个 `0.3.x` / `0.4.x` 系列 —— 因此不带版本号的 `install supamem` 会**向后**解析到比本文档所述功能更旧的版本。精确的预发布版本固定无需任何额外标志即可解析,同时依赖仍停留在稳定版;请**不要**使用 `--prerelease allow`(它作用于整个解析过程,会拉入预发布依赖)。
@@ -328,6 +328,7 @@ pip uninstall supamem
 | `supamem mcp-server` | 运行 MCP 服务器(`--transport stdio` 默认;`http` 走 HTTP) |
 | `supamem hook <client>` | 每客户端会话/编辑钩子(由客户端自动调用) |
 | `supamem hook-stats` | 📈 编辑钩子有效性指标(v0.4.0a4+):`injection_rate`、`use_rate`、`repeat_rate`、`stale_rate`、`lang_mismatch_rate`、`useful_per_100_edits`、`shadow_use_rate` —— 将注入日志(`<audit dir>/injections.jsonl`)与 Claude Code 会话转录关联。`--days N`(默认 7),`--json` 输出机器可读结果。 |
+| `supamem daemon` | 🧠 共享模型守护进程(v0.4.0a6+):`serve`(通常按需自动启动)、`status [--json]`、`stop`。编辑钩子和所有 MCP 服务器整台机器共用一份模型。 |
 | `supamem doctor` | 🩺 探测 Qdrant、打印解析后的配置链、报告版本漂移 |
 | `supamem stats` | 来自 `.supamem/state/` 的 Welford schema-v2 使用计数 |
 | `supamem live` | 👀 跟踪 audit JSONL 的实时仪表盘 — 管道安全(非 TTY 时输出纯 JSONL);处理日志轮转、终端尺寸变化、Ctrl-C |
@@ -368,6 +369,33 @@ target_globs = []         # v0.4.0a5 — 用仓库相对 glob 替换 src/tests �
 延迟明确不是关注点(所有者,2026-11-14);日志的存在是为了让**有效性**可见。
 
 ---
+
+### 共享模型守护进程 (v0.4.0a6+)
+
+**整台机器只保留一份模型。** a6 之前,每个执行检索的进程都会自行加载 ~2.4 GB 模型:每个
+Claude Code 窗口一个 stdio MCP 服务器,外加每次 Edit/Write 新起的 `supamem hook claude-code`
+进程。2026-11-17 单次钩子调用的 footprint 峰值达到 8.66 GB,多个窗口把主机 swap 推到
+27.4/28 GB。现在编辑钩子和 MCP 服务器都把检索发送给 **一个** 按需启动的守护进程,通过仅当前
+用户可访问的 Unix socket(`<cache>/run/daemon.sock`,权限 0600)通信。它为每个模型只保留一份,
+并在 `[supamem.mcp] model_idle_minutes` 空闲后自行退出(空闲时内存为零)。实测:钩子进程约
+32 MB(原先 2.5–8.7 GB),MCP 服务器 119 MB(原先 2.47 GB),三个并发窗口 → 一个约 2.85 GB
+的守护进程。
+
+```bash
+supamem daemon status        # pid, version, RSS, loaded models (+dtype), served / busy_rejected / expired
+supamem daemon stop          # finish in-flight work and exit (the next client respawns it)
+```
+
+```toml
+[supamem.daemon]
+enabled = true               # false (or env SUPAMEM_DAEMON=off) = every process loads its own models
+```
+
+安全规则:守护进程只是 **繁忙或缓慢** 时,客户端绝不会自行加载模型(钩子跳过这次编辑的注入);
+只有守护进程 **不可达** 时才回退到进程内路径,并且钩子在整台机器上串行化这种回退(一次只加载一份)。
+等待超过客户端截止时间的请求会被移出队列,被 `kill -9` 的守护进程会由下一个请求重新拉起,
+更新的 supamem 客户端(`pipx upgrade` 之后)会让旧守护进程退役。`kill -USR1 <pid>` 会把守护进程
+所有线程的栈输出到 `<cache>/run/daemon.log`。设计与备选方案:`docs/adr/0005`。
 
 ### 多语言嵌入器 + 空闲模型卸载 (v0.4.0a5+)
 

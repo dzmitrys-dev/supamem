@@ -25,7 +25,9 @@ def _run(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedP
     )
 
 
-SUBCOMMANDS = ["index", "mcp-server", "hook", "hook-stats", "stats", "eval", "install", "doctor"]
+SUBCOMMANDS = [
+    "index", "mcp-server", "hook", "hook-stats", "stats", "eval", "install", "doctor", "daemon",
+]
 
 
 def test_help_lists_all_subcommands() -> None:
@@ -768,3 +770,16 @@ def test_claude_code_hook_degrades_on_any_config_error(tmp_path, config_text) ->
     assert "Traceback" not in r.stderr
     rows = (audit / "injections.jsonl").read_text().splitlines()
     assert len(rows) == 1 and json.loads(rows[0])["empty"] is True
+
+
+def test_daemon_help_and_status_when_not_running(tmp_path) -> None:
+    """v0.4.0a6: `daemon --help` lists serve/status/stop; `status` never spawns."""
+    result = _run("daemon", "--help")
+    assert result.returncode == 0, result.stderr
+    for sub in ("serve", "status", "stop"):
+        assert sub in result.stdout
+    env = {"SUPAMEM_CACHE_DIR": str(tmp_path), "SUPAMEM_DAEMON": "on"}
+    status = _run("daemon", "status", env=env)
+    assert status.returncode == 0, status.stderr
+    assert "not running" in status.stdout
+    assert "not running" in _run("daemon", "status", env=env).stdout  # status did not spawn one
