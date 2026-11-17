@@ -126,7 +126,7 @@ CRM personal, no para retrieval consciente del código.
 
 ```bash
 # 1. Instalar (uv es la ruta más rápida)
-uv tool install 'supamem==0.4.0a4'
+uv tool install 'supamem==0.4.0a5'
 
 # 2. Iniciar Qdrant (una vez, ~30s)
 docker run -d -p 6333:6333 -p 6334:6334 -v $HOME/.qdrant:/qdrant/storage qdrant/qdrant:latest
@@ -255,13 +255,13 @@ y apunta `supamem` a la URL vía `supamem init`.
 
 ```bash
 # Recomendado: uv (más rápido, aislado)
-uv tool install 'supamem==0.4.0a4'
+uv tool install 'supamem==0.4.0a5'
 
 # Alternativa: pipx (también aislado)
-pipx install supamem==0.4.0a4
+pipx install supamem==0.4.0a5
 
 # pip plano (en un venv)
-pip install supamem==0.4.0a4
+pip install supamem==0.4.0a5
 ```
 
 > **El pin de versión es obligatorio.** `0.4.0a3` es una pre-release, y la versión *estable* más reciente (`0.2.0`) es anterior a toda la línea `0.3.x` / `0.4.x`, por lo que un `install supamem` sin pin resuelve **hacia atrás**, a una versión más antigua que las funciones documentadas aquí. Un pin exacto de pre-release resuelve sin flags adicionales y mantiene las dependencias en versiones estables; **no** uses `--prerelease allow` (se aplica a toda la resolución y arrastra dependencias pre-release).
@@ -372,6 +372,8 @@ inject_k = 5              # int >= 1, <= fetch_k — chunks máximos inyectados 
 min_score = 2.5           # número finito >= 0 — suelo de puntaje rerankeado; 0 desactiva
 shadow_task_query = true  # bool TOML — registra (nunca emite) una consulta de texto de tarea desde la transcripción
 drop_tokens = []          # tokens extra eliminados de la consulta derivada de la ruta
+target_globs = []         # v0.4.0a5 — sustituye la heurística src/tests por globs relativos al repo
+                          # (p. ej. ["packages/*", "bench-ab/*"]) para repos cuyo código vive fuera de src/
 ```
 
 Las cuatro claves numéricas/booleanas se validan fail-closed al cargar la config (un valor inválido nombra la clave y sale con código 2 — una cadena como `shadow_task_query = "false"` se rechaza en lugar de tratarse en silencio como verdadera). El hook de edición de Claude Code es la excepción: el código 2 bloquearía la edición, así que imprime el error en stderr, no inyecta nada y sale con 0.
@@ -381,6 +383,40 @@ La latencia explícitamente no es una preocupación (owner, 2026-11-14); el diar
 
 ---
 
+### Embedder multilingüe + descarga de modelos en reposo (v0.4.0a5+)
+
+**Embedder denso multilingüe (opt-in).** Los corpus llegan al 86% de ruso mientras que el
+`all-MiniLM-L6-v2` por defecto es solo inglés: el estudio del 2026-11-14 midió un 78.8% de
+inyecciones con idioma desajustado (63.7% tras los filtros de v0.4.0a4). Activación por proyecto:
+
+```toml
+[supamem]
+embedder = "multilingual_minilm"      # paraphrase-multilingual-MiniLM-L12-v2 (384-dim, 0.22 GB)
+collection = "supamem-<project>-ml"   # NUEVO nombre de colección — otro espacio vectorial, nunca mezclar
+```
+
+luego un `supamem index --target tuned` normal — el nuevo guardia index-epoch detecta el cambio
+de objetivo y re-embede todo una vez (sin `--force`; volver atrás también re-embede, la trampa
+de colección obsoleta queda cerrada en ambos sentidos). Conserva la colección anterior como
+rollback. Los nombres de `embedder` desconocidos se rechazan al cargar la config. `bge-m3` no
+existe en fastembed 0.8.0 y `e5-large` cuesta 2.24 GB por proceso — la decisión y la ruta de
+mejora (tras el demonio compartido de modelos) están en `docs/adr/0004`.
+
+**Descarga de modelos en reposo.** Un servidor MCP consultado retiene ~2.4 GB de pesos del
+reranker de por vida. `[supamem.mcp] model_idle_minutes` (por defecto 30, `0` desactiva) hace
+que el servidor suelte los backends inactivos — la siguiente consulta los recarga de forma
+perezosa (~9 s). Las entradas ocupadas nunca se expulsan; cada descarga registra el RSS medido
+antes/después (los pesos del modelo vuelven al SO; las páginas de las librerías runtime, no).
+
+**Métricas.** Las búsquedas MCP ahora añaden filas `kind:"mcp"` al diario de inyecciones y
+`supamem hook-stats` las reporta por separado (`mcp.searches`, `mcp.with_chunks`,
+`mcp.chunks_total`, `mcp.ru_chunk_share`) sin diluir los denominadores del hook de edición.
+`supamem doctor` gana un panel read-only **Index freshness** (avisa pasados 7 días — un índice
+con 4 meses de retraso era invisible antes). La guía operativa completa — cada métrica, los
+baselines de producción, reglas de interpretación y el backlog de investigación — está en
+[`docs/usefulness-metrics.md`](docs/usefulness-metrics.md).
+
+---
 ## 📜 Ingesta de transcripciones (v0.2.2a1+)
 
 supamem puede indexar tu **historial de sesiones de Claude Code** como chunks tipo cajón de Q+A junto al corpus Markdown de tu proyecto, exponiendo decisiones pasadas y trazas de uso de herramientas en `dual_memory_search`. Desactivado por defecto — actívalo con `--transcripts`.

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "supamem"
-version = "0.4.0a4"
+version = "0.4.0a5"
 description = "Project-agnostic dual-memory tooling for Claude Code, Cursor, and opencode"
 readme = "README.md"
 license = "MIT"
@@ -53,6 +53,7 @@ tuned_hybrid_hyde = "supamem.retrieval.tuned_hybrid_hyde:TunedHybridHyDEBackend"
 
 [project.entry-points."supamem.embedder"]
 minilm = "supamem.embedders.minilm:MiniLMEmbedder"
+multilingual_minilm = "supamem.embedders.multilingual_minilm:MultilingualMiniLMEmbedder"
 bm25 = "supamem.embedders.bm25:BM25Embedder"
 
 [project.entry-points."supamem.chunker"]

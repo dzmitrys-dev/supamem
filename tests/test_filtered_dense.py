@@ -200,7 +200,10 @@ def test_pitfall_7_mcp_server_anti_edit() -> None:
 
     src_path = Path(ms.__file__)
     lines = src_path.read_text(encoding="utf-8").splitlines()
-    zone = "\n".join(lines[217:238])  # 0-indexed slice for lines 218-238
+    # Anchor on the truncation loop instead of fixed line numbers (the zone was
+    # lines 218-238 when this lock was written; later edits above it shift it).
+    start = next(i for i, ln in enumerate(lines) if ln.strip() == "for h in hits:")
+    zone = "\n".join(lines[start : start + 21])
 
     assert "h.text" in zone, (
         "Pitfall 7 anti-regression: mcp_server.py:218-238 must read h.text "

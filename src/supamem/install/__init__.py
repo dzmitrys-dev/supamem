@@ -48,8 +48,22 @@ def _maybe_prepare_models(skip_models: bool) -> None:
     try:
         from supamem.embedders.cache import prepare_embedders  # noqa: PLC0415
 
-        prepare_embedders()
-        ok("embedder models cached (persistent cache, not the OS temp dir)")
+        extra: list[str] = []
+        try:
+            from supamem.config import load_config  # noqa: PLC0415
+
+            _cfg, _ = load_config()
+            from supamem.embedders import dense_model_id_for  # noqa: PLC0415
+
+            extra.append(dense_model_id_for(_cfg))
+        except (Exception, SystemExit):  # noqa: BLE001 — config problems (incl. fail-closed
+            # gate exits, dad90fe lesson) must not block the default model fetch
+            pass
+        cached = prepare_embedders(extra_dense=extra)
+        ok(
+            "embedder models cached (persistent cache, not the OS temp dir): "
+            + ", ".join(cached)
+        )
     except Exception as exc:  # noqa: BLE001 — offline install must still wire the client
         from supamem.console import warn as _warn  # noqa: PLC0415
 

@@ -667,6 +667,78 @@ def _human_bytes(n: int) -> str:
     return f"{n} B"
 
 
+def _render_index_freshness_panel(
+    cfg: Any, chain: Any, *, client: Any
+) -> None:
+    """How fresh is the configured collection + manifest? Read-only, never flips rc.
+
+    Two signals: (1) newest ``valid_from`` among points (the last time indexing
+    actually wrote); (2) manifest file mtime. Both warn past 7 days — a stale index
+    makes every retrieval channel quietly worse (or pointer-only downstream).
+    """
+    from datetime import datetime, timezone  # noqa: PLC0415
+
+    console.print("[supamem.brand]Index freshness[/supamem.brand]")
+    if client is None:
+        info("    qdrant unreachable — freshness not checked")
+        return
+    try:
+        try:
+            from qdrant_client.http import models as qmodels  # noqa: PLC0415
+        except ImportError:
+            qmodels = None
+        newest: str = "—"
+        if qmodels is not None:
+            pts, _ = client.scroll(
+                collection_name=cfg.collection,
+                limit=1,
+                with_payload=True,
+                with_vectors=False,
+                order_by=qmodels.OrderBy(key="valid_from", direction=qmodels.Direction.DESC),
+            )
+            if pts and pts[0].payload:
+                newest = str(pts[0].payload.get("valid_from") or "—")
+        try:
+            newest_dt = datetime.fromisoformat(newest.replace("Z", "+00:00"))
+        except ValueError:
+            newest_dt = None
+        if newest_dt is not None:
+            age_days = (datetime.now(timezone.utc) - newest_dt).total_seconds() / 86400.0
+            label = f"newest_valid_from = {newest}  (age {age_days:.1f} d)"
+            if age_days > 7:
+                warn(f"    {label} — STALE: re-run `supamem index --target tuned`")
+            else:
+                ok(f"    {label}")
+        else:
+            info(f"    newest_valid_from = {newest} (unparseable/empty collection)")
+    except Exception as exc:  # noqa: BLE001 — non-essential probe
+        if "range index" in str(exc).lower() or "order_by" in str(exc).lower():
+            info(
+                "    newest_valid_from unavailable — collection lacks the valid_from range "
+                "index; one `supamem index --target tuned` run (v0.4.0a5+) creates it"
+            )
+        else:
+            info(f"    freshness probe failed ({type(exc).__name__})")
+
+    try:
+        from supamem.indexer import _manifest_path  # noqa: PLC0415
+
+        mp = _manifest_path(cfg)
+        if mp.exists():
+            age_days = (datetime.now().timestamp() - mp.stat().st_mtime) / 86400.0
+            label = f"manifest mtime age  = {age_days:.1f} d  ({mp})"
+            if age_days > 7:
+                warn(f"    {label} — STALE manifest")
+            else:
+                ok(f"    {label}")
+        else:
+            info("    manifest absent — nothing indexed yet")
+    except Exception as exc:  # noqa: BLE001 — non-essential probe
+        info(f"    manifest probe failed ({type(exc).__name__})")
+    return None
+
+
+
 def _render_temporal_validity_panel(
     cfg: ResolvedConfig,
     chain: ConfigChain,
@@ -1115,6 +1187,17 @@ def run_doctor(*, redact_secrets: bool = True) -> int:
     # Subagent reachability invariant). Surfaces drift (future-dated chunks,
     # awaiting_gc backlog) as informational signal only.
     _render_temporal_validity_panel(
+        cfg,
+        chain,
+        client=locals().get("client") if qdrant_up else None,
+    )
+
+    # ── Section 2g2: Index freshness (v0.4.0a5) ──────────────────────────
+    # Read-only panel — NEVER flips exit code. The 2026-11-14 effectiveness study
+    # found softchat's index 4 months stale and NOTHING surfaced it; cl-context
+    # demotes >24 h-old manifests to pointer-only, so staleness silently degrades
+    # every downstream channel. Warn at > 7 days.
+    _render_index_freshness_panel(
         cfg,
         chain,
         client=locals().get("client") if qdrant_up else None,

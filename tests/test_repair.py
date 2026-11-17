@@ -7,6 +7,14 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _no_model_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests pin config migration, not model download. With HOME redirected
+    the model cache is empty, so the real pre-fetch would pull ~1 GB of reranker
+    weights from HuggingFace per test (and hang the suite on a stalled transfer)."""
+    monkeypatch.setattr("supamem.install._maybe_prepare_models", lambda skip_models: None)
+
+
 @pytest.fixture
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("HOME", str(tmp_path))

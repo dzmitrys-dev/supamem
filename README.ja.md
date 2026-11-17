@@ -121,7 +121,7 @@ env-var 名、ファイルパス)を捉えます。Dense は BM25 が見逃す *
 
 ```bash
 # 1. インストール(uv が最速)
-uv tool install 'supamem==0.4.0a4'
+uv tool install 'supamem==0.4.0a5'
 
 # 2. Qdrant を起動(初回のみ、~30s)
 docker run -d -p 6333:6333 -p 6334:6334 -v $HOME/.qdrant:/qdrant/storage qdrant/qdrant:latest
@@ -249,13 +249,13 @@ Docker がない?[Qdrant Cloud](https://cloud.qdrant.io/) でマネージドク�
 
 ```bash
 # 推奨:uv(最速、隔離)
-uv tool install 'supamem==0.4.0a4'
+uv tool install 'supamem==0.4.0a5'
 
 # 代替:pipx(これも隔離)
-pipx install supamem==0.4.0a4
+pipx install supamem==0.4.0a5
 
 # プレーン pip(venv 内で)
-pip install supamem==0.4.0a4
+pip install supamem==0.4.0a5
 ```
 
 > **バージョン固定は必須です。** `0.4.0a3` はプレリリースであり、最新の*安定版*(`0.2.0`)は `0.3.x` / `0.4.x` 系列全体より古いため、固定なしの `install supamem` は本ドキュメントが説明する機能よりも古いバージョンへ**逆方向に**解決されます。厳密なプレリリース固定は追加フラグなしで解決でき、依存関係は安定版のままです。`--prerelease allow` は**使用しないでください**(解決全体に適用され、プレリリース依存を引き込みます)。
@@ -364,6 +364,8 @@ inject_k = 5              # int >= 1、<= fetch_k — 編集ごとに注入す�
 min_score = 2.5           # 有限の数値 >= 0 — rerank スコアの下限。0 で無効
 shadow_task_query = true  # TOML bool — トランスクリプトのタスクテキストクエリを記録(出力はしない)
 drop_tokens = []          # パス由来クエリから除外する追加トークン
+target_globs = []         # v0.4.0a5 — src/tests ヒューリスティックをリポジトリ相対グロブに置換
+                          # （例: ["packages/*", "bench-ab/*"]）src/ 外にコードがあるリポジトリ用
 ```
 
 4 つの数値/真偽値キーはすべて設定読み込み時に fail-closed で検証されます(不正な値はキー名を示してコード 2 で終了 — `shadow_task_query = "false"` のような文字列は黙って真として扱われず拒否されます)。例外は Claude Code 編集フックです:コード 2 は編集をブロックしてしまうため、エラーを stderr に出し、何も注入せずコード 0 で終了します。
@@ -373,6 +375,39 @@ drop_tokens = []          # パス由来クエリから除外する追加トー�
 
 ---
 
+### 多言語エンベッダー + アイドル時モデル解放 (v0.4.0a5+)
+
+**多言語 dense エンベッダー（オプトイン）。** コーパスは最大 86% がロシア語なのに、デフォルトの
+`all-MiniLM-L6-v2` は英語専用です — 2026-11-14 の調査では 78.8% の注入が言語ミスマッチ
+（v0.4.0a4 フィルタ後も 63.7%）。プロジェクト単位で有効化:
+
+```toml
+[supamem]
+embedder = "multilingual_minilm"      # paraphrase-multilingual-MiniLM-L12-v2 (384-dim, 0.22 GB)
+collection = "supamem-<project>-ml"   # 新しいコレクション名 — 別のベクトル空間、混ぜないこと
+```
+
+その後は通常の `supamem index --target tuned` を実行 — 新しい index-epoch ガードが対象の変更を
+検出し、全件を一度だけ再エンベッドします（`--force` 不要。戻る場合も再エンベッドされ、古い
+コレクションの罠は双方向で閉じます）。旧コレクションはロールバック用に保持してください。
+不明な `embedder` 名は設定読み込み時に fail-closed で拒否されます。`bge-m3` は fastembed 0.8.0 に
+存在せず、`e5-large` はプロセスあたり 2.24 GB — 判断と共有モデルデーモン後のアップグレード経路は
+`docs/adr/0004` にあります。
+
+**アイドル時のモデル解放。** 検索済みの MCP サーバーは reranker の重み ~2.4 GB を生存中ずっと
+保持します。`[supamem.mcp] model_idle_minutes`（デフォルト 30、`0` で無効）により、アイドル状態の
+バックエンドを解放します — 次のクエリで遅延ロード（〜9 秒）。ビジー中のエントリは決して解放
+されず、解放のたびに実測 RSS の前後をログに出します（モデルの重みは OS に戻りますが、ランタイム
+ライブラリのページは戻りません）。
+
+**メトリクス。** MCP 検索は `kind:"mcp"` 行を注入ジャーナルに追記し、`supamem hook-stats` は
+それらを別枠で報告します（`mcp.searches`、`mcp.with_chunks`、`mcp.chunks_total`、
+`mcp.ru_chunk_share`）。編集フックの分母を希釈しません。`supamem doctor` に読み取り専用の
+**Index freshness** パネルが加わりました（7 日超で警告 — 4 か月古いインデックスは以前は
+不可視でした）。完全な運用ガイド（全メトリクス、本番ベースライン、解釈ルール、研究バックログ）は
+[`docs/usefulness-metrics.md`](docs/usefulness-metrics.md) にあります。
+
+---
 ## 📜 トランスクリプトの取り込み(v0.2.2a1+)
 
 supamem は **Claude Code のセッション履歴**を Q+A 形式のドロワーチャンクとしてプロジェクトの Markdown コーパスと並べてインデックスでき、過去の決定やツール呼び出しの軌跡を `dual_memory_search` に登場させられます。既定はオフ —— `--transcripts` で明示的に有効化してください。

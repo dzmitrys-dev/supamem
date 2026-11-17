@@ -503,6 +503,12 @@ def compute_stats(
             continue
         rows.append(r)
 
+    # v0.4.0a5 — the journal also carries MCP-channel rows (kind="mcp"). They have no
+    # session/target and must not dilute the edit-hook denominators: every metric below
+    # runs on hook rows only; the mcp channel gets its own volume/language summary.
+    mcp_rows = [r for r in rows if r.get("kind") == "mcp"]
+    rows = [r for r in rows if r.get("kind") != "mcp"]
+
     roots = transcript_roots if transcript_roots is not None else default_transcript_roots()
     events_by_session: dict[str, list[dict[str, Any]]] = {}
     for r in rows:
@@ -584,6 +590,20 @@ def compute_stats(
         "baselines": {"repeat_rate": 0.656, "stale_rate": 0.085},
         "shadow_rows": len(shadow_rows),
         "shadow_use_rate": rate(shadow_used, len(shadow_rows)),
+        "mcp": {
+            "searches": len(mcp_rows),
+            "with_chunks": sum(1 for r in mcp_rows if r.get("chunks")),
+            "chunks_total": sum(len(r.get("chunks") or []) for r in mcp_rows),
+            "ru_chunk_share": rate(
+                sum(
+                    1
+                    for r in mcp_rows
+                    for c in r.get("chunks") or []
+                    if isinstance(c, dict) and c.get("lang") == "ru"
+                ),
+                sum(len(r.get("chunks") or []) for r in mcp_rows),
+            ),
+        },
     }
 
 

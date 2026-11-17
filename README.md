@@ -120,7 +120,7 @@ not for code-aware retrieval.
 
 ```bash
 # 1. Install (uv is the fastest path)
-uv tool install 'supamem==0.4.0a4'
+uv tool install 'supamem==0.4.0a5'
 
 # 2. Start Qdrant (one-time, ~30s)
 docker run -d -p 6333:6333 -p 6334:6334 -v $HOME/.qdrant:/qdrant/storage qdrant/qdrant:latest
@@ -249,16 +249,16 @@ available) and point `supamem` at the URL via `supamem init`.
 
 ```bash
 # Recommended: uv (fastest, isolated)
-uv tool install 'supamem==0.4.0a4'
+uv tool install 'supamem==0.4.0a5'
 
 # Alternative: pipx (also isolated)
-pipx install supamem==0.4.0a4
+pipx install supamem==0.4.0a5
 
 # Plain pip (in a venv)
-pip install supamem==0.4.0a4
+pip install supamem==0.4.0a5
 ```
 
-> **The version pin is required.** `0.4.0a4` is a pre-release, and the newest *stable* release (`0.2.0`) predates the entire `0.3.x` / `0.4.x` line — so an unpinned `install supamem` resolves **backwards**, to a version older than the features documented here. An exact pre-release pin resolves with no extra flags while dependencies stay on stable versions; do **not** use `--prerelease allow` (it applies to the whole resolution and drags in pre-release dependencies).
+> **The version pin is required.** `0.4.0a5` is a pre-release, and the newest *stable* release (`0.2.0`) predates the entire `0.3.x` / `0.4.x` line — so an unpinned `install supamem` resolves **backwards**, to a version older than the features documented here. An exact pre-release pin resolves with no extra flags while dependencies stay on stable versions; do **not** use `--prerelease allow` (it applies to the whole resolution and drags in pre-release dependencies).
 
 Verify:
 
@@ -398,6 +398,8 @@ inject_k = 5              # int >= 1, <= fetch_k — max chunks injected per edi
 min_score = 2.5           # finite number >= 0 — reranked-score floor; 0 disables
 shadow_task_query = true  # TOML bool — journal (never emit) a task-text query from the transcript
 drop_tokens = []          # extra tokens stripped from the path-derived query
+target_globs = []         # v0.4.0a5 — replace the src/tests heuristic with repo-relative globs
+                          # (e.g. ["packages/*", "bench-ab/*"]) for repos whose code lives outside src/
 ```
 
 All four numeric/bool keys are validated fail-closed at config load (an invalid value names the key and exits
@@ -409,6 +411,41 @@ the numbers to compare against the research baselines (repeats 65.6%, stale 8.5%
 the legacy `repeat_rate` / `stale_rate` keys remain, labeled emitted-rows-only / emitted-chunks-only.
 
 Latency is explicitly not a concern (owner, 2026-11-14); the journal exists to make **usefulness** visible.
+
+---
+
+### Multilingual embedder + idle model unload (v0.4.0a5+)
+
+**Multilingual dense embedder (opt-in).** The corpora are up to 86% Russian while the default
+`all-MiniLM-L6-v2` is English-only — the 2026-11-14 study measured 78.8% language-mismatched
+injections (63.7% after the v0.4.0a4 filters). Opt a project in:
+
+```toml
+[supamem]
+embedder = "multilingual_minilm"      # paraphrase-multilingual-MiniLM-L12-v2 (384-dim, 0.22 GB)
+collection = "supamem-<project>-ml"   # NEW collection name — different vector space, never mix
+```
+
+then run plain `supamem index --target tuned` — the new per-file index epoch notices the
+target changed and re-embeds everything once (no `--force` needed; switching back re-embeds again, so
+stale-collection traps are gone in both directions). Keep the old collection as a rollback.
+Unknown `embedder` names fail closed at config load. `bge-m3` is absent from fastembed 0.8.0
+and `e5-large` costs 2.24 GB per process — see `docs/adr/0004` for the decision and the
+upgrade path once the shared model daemon lands.
+
+**Idle model unload.** A queried MCP server pins ~2.4 GB of reranker weights for its whole
+lifetime. `[supamem.mcp] model_idle_minutes` (default 30, `0` disables) makes the server drop
+idle backends — the next query re-loads lazily (~9 s). Busy entries are never evicted; every
+unload logs the measured RSS before/after (model weights return to the OS; runtime library
+pages do not).
+
+**Metrics.** MCP searches now append `kind:"mcp"` rows to the injection journal, and
+`supamem hook-stats` reports them separately (`mcp.searches`, `mcp.with_chunks`,
+`mcp.chunks_total`, `mcp.ru_chunk_share`) without diluting the edit-hook denominators.
+`supamem doctor` gained a read-only **Index freshness** panel (warns past 7 days — a
+4-month-stale index was invisible before). The full operating guide — every metric, the
+production baselines, interpretation rules, and the research backlog — is
+[`docs/usefulness-metrics.md`](docs/usefulness-metrics.md).
 
 ---
 

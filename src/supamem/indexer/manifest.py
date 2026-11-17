@@ -35,6 +35,17 @@ VALIDITY_MIGRATION_KEY = "__validity_migration__"
 # Mirrors :data:`VALIDITY_MIGRATION_KEY` precedent (byte-stable rollback when
 # the field is None — the key is omitted from the JSON dump entirely).
 PATH_PREFIXES_MIGRATION_KEY = "__path_prefixes_migration__"
+# v0.4.0a5 — per-entry index epoch. The manifest is ONE file shared by every
+# project and keyed by path only, so a file indexed into collection A looked
+# "already indexed" when the same path was later indexed into collection B (or
+# with another embedder) — B silently stayed empty/stale. Each file entry now
+# records ``<target>_epoch = "<collection>|<dense model id>"`` and each
+# transcript message record an ``epoch``; ``needs_index`` treats an epoch
+# mismatch as dirty. Per-entry (not one global key) so alternating runs of
+# DIFFERENT projects never invalidate each other. Entries written before a5
+# carry no epoch → one full re-embed on the first a5 run (by design: their
+# target collection is unknown). Old readers drop the extra key (rollback-safe).
+EPOCH_SUFFIX = "_epoch"
 
 
 @dataclass
@@ -58,6 +69,10 @@ class Manifest:
     # loads as None which trips the gate exactly once on first post-upgrade
     # run (mirrors validity_migration gate). Byte-stable rollback: the key is
     # NOT emitted to JSON when the field is None.
+    active_epoch: Optional[str] = field(default=None, compare=False, repr=False)
+    # v0.4.0a5: the epoch of the CURRENT run (``run_index`` sets it); never
+    # persisted itself — it is stamped into entries by ``update`` /
+    # ``transcript_update``. None (non-index callers) keeps pre-a5 semantics.
 
     @classmethod
     def load(cls, path: Path) -> Manifest:
@@ -104,6 +119,8 @@ class Manifest:
                             "content_hash": str(rec.get("content_hash") or ""),
                             "indexed_at": str(rec.get("indexed_at") or ""),
                         }
+                        if isinstance(rec.get("epoch"), str):
+                            inner[msg_uuid]["epoch"] = rec["epoch"]
                 transcripts[session_uuid] = inner
 
         out: dict[str, EntryDict] = {}
@@ -115,10 +132,14 @@ class Manifest:
             if isinstance(v, str):
                 out[k] = {"prod": v, "tuned": ""}
             elif isinstance(v, dict):
-                out[k] = {
+                entry = {
                     "prod": str(v.get("prod") or ""),
                     "tuned": str(v.get("tuned") or ""),
                 }
+                for ek, ev in v.items():
+                    if isinstance(ek, str) and ek.endswith(EPOCH_SUFFIX) and isinstance(ev, str):
+                        entry[ek] = ev
+                out[k] = entry
         return cls(
             entries=out,
             transcripts=transcripts,
@@ -152,14 +173,35 @@ class Manifest:
         )
 
     def needs_index(self, doc_path: str, current_hash: str, target: str) -> bool:
-        """True if the per-target hash differs (or doc unknown)."""
+        """True if the per-target hash differs (or doc unknown), or — when the run has
+        an ``active_epoch`` — the entry was last indexed into another collection/model."""
         if doc_path not in self.entries:
             return True
-        return self.entries[doc_path].get(target, "") != current_hash
+        entry = self.entries[doc_path]
+        if entry.get(target, "") != current_hash:
+            return True
+        if self.active_epoch is not None and entry.get(target + EPOCH_SUFFIX) != self.active_epoch:
+            return True
+        return False
+
+    def prune_missing(self) -> int:
+        """Drop file entries whose path no longer exists on disk; return how many.
+
+        v0.4.0a5 hygiene: leaked temp checkouts (e.g. ``/private/tmp/<spike>``)
+        stayed in the manifest forever. Reserved ``__x__`` keys never reach
+        ``entries`` (``load`` separates them), so they are untouched. Relative
+        keys are left alone — they cannot be checked without a base.
+        """
+        dead = [p for p in self.entries if Path(p).is_absolute() and not Path(p).exists()]
+        for p in dead:
+            del self.entries[p]
+        return len(dead)
 
     def update(self, doc_path: str, target: str, sha: str) -> None:
         entry = self.entries.setdefault(doc_path, {"prod": "", "tuned": ""})
         entry[target] = sha
+        if self.active_epoch is not None:
+            entry[target + EPOCH_SUFFIX] = self.active_epoch
 
     # ───── Transcript per-message dedupe (Plan 06-03, R-04, D-25, D-27) ────
 
@@ -169,13 +211,18 @@ class Manifest:
         """True if (session, message) is unseen or its content_hash changed."""
         bucket = self.transcripts.get(session_uuid, {})
         rec = bucket.get(message_uuid)
-        return rec is None or rec.get("content_hash") != content_hash
+        if rec is None or rec.get("content_hash") != content_hash:
+            return True
+        return self.active_epoch is not None and rec.get("epoch") != self.active_epoch
 
     def transcript_update(
         self, session_uuid: str, message_uuid: str, content_hash: str
     ) -> None:
         """Record (session, message, hash) with an ISO-8601 UTC timestamp."""
-        self.transcripts.setdefault(session_uuid, {})[message_uuid] = {
+        rec = {
             "content_hash": content_hash,
             "indexed_at": datetime.now(timezone.utc).isoformat(),
         }
+        if self.active_epoch is not None:
+            rec["epoch"] = self.active_epoch
+        self.transcripts.setdefault(session_uuid, {})[message_uuid] = rec

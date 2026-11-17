@@ -173,7 +173,11 @@ def _index_single_doc(
     )
     validate_writable_collection(cfg)
     ensure_collection(client, cfg.collection)
-    dense = build_dense_embedder()
+    # v0.4.0a5: write in the collection's vector space (cfg.embedder) — a hardcoded default
+    # here would poison a multilingual collection with English-space vectors.
+    from supamem.embedders import dense_model_id_for  # noqa: PLC0415
+
+    dense = build_dense_embedder(dense_model_id_for(cfg))
     sparse = build_sparse_embedder()
 
     sha = hashlib.sha256(body.encode("utf-8")).hexdigest()

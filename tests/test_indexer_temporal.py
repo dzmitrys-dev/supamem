@@ -407,6 +407,22 @@ def test_ensure_indexes_creates_chunker_keyword():
     ), "D-INDEX-02: must create_payload_index(field_name='chunker', field_schema=KEYWORD)"
 
 
+def test_ensure_indexes_creates_valid_from_datetime():
+    """v0.4.0a5: ``order_by=valid_from`` (doctor temporal + freshness panels) needs a
+    range index — without it Qdrant rejects the scroll and the panels printed "—"."""
+    fn = _import_ensure_payload_indexes()
+    client = MagicMock()
+    cfg = _cfg_with_temporal()
+    fn(client, cfg)
+    calls = client.create_payload_index.call_args_list
+    assert any(
+        c.kwargs.get("field_name") == "valid_from"
+        and c.kwargs.get("field_schema") == qmodels.PayloadSchemaType.DATETIME
+        and c.kwargs.get("wait") is True
+        for c in calls
+    ), "a5: must create_payload_index(field_name='valid_from', field_schema=DATETIME)"
+
+
 def test_ensure_indexes_idempotent_on_failure_surfaces_error(capsys):
     """D-INDEX failure mode: surface via err_console; never crash run_index.
 

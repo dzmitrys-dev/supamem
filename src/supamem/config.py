@@ -169,6 +169,17 @@ class ResolvedConfig:
     hook_inject_k: int = 5
     hook_min_score: float = 2.5
     hook_shadow_task_query: bool = True
+    # v0.4.0a5 — optional code-target globs ([supamem.hook] target_globs). Empty keeps
+    # the default heuristic (paths under src/ or tests/); non-empty replaces it with an
+    # any-match fnmatch over the repo-relative posix path (e.g. ["packages/**"]) — revives
+    # the hook channel in repos whose code lives outside src/ (cl-harness). Reject-suffixes
+    # still apply: docs/config edits never trigger a search.
+    hook_target_globs: list[str] = field(default_factory=list)
+    # v0.4.0a5 — MCP-server idle model unload ([supamem.mcp] model_idle_minutes). A
+    # queried server pins ~2.4 GB (reranker fp32) for its lifetime; after this many idle
+    # minutes the sweeper thread drops the cached backend (models re-load lazily on the
+    # next query, ~9 s). 0 disables. Negative values fail closed below.
+    mcp_model_idle_minutes: int = 30
 
 
 @dataclass
@@ -228,6 +239,8 @@ class ConfigChain:
     hook_inject_k: Source = "default"
     hook_min_score: Source = "default"
     hook_shadow_task_query: Source = "default"
+    hook_target_globs: Source = "default"
+    mcp_model_idle_minutes: Source = "default"
 
 
 _LEGACY_ENV: dict[str, str] = {
@@ -246,6 +259,7 @@ _NESTED_TABLES: list[tuple[str, dict[str, str]]] = [
             "inject_k": "hook_inject_k",
             "min_score": "hook_min_score",
             "shadow_task_query": "hook_shadow_task_query",
+            "target_globs": "hook_target_globs",
         },
     ),
     (
@@ -348,6 +362,7 @@ _NESTED_TABLES: list[tuple[str, dict[str, str]]] = [
         {
             "response_format": "mcp_response_format",
             "cache_ttl_ms": "mcp_cache_ttl_ms",
+            "model_idle_minutes": "mcp_model_idle_minutes",
         },
     ),
 ]
@@ -728,6 +743,26 @@ def load_config(cwd: Path | None = None) -> tuple[ResolvedConfig, ConfigChain]:
             err_console.print(f"[supamem.err]{escape(detail)}")
             raise SystemExit(2)
 
+    # ── v0.4.0a5 — embedder validation gate (mirrors the reranker gate) ───
+    # cfg.embedder was accepted-but-ignored before a5; now that the funnels consume it,
+    # a typo'd plugin name must fail closed instead of resolving to a LookupError mid-index.
+    if cfg.embedder != "minilm":
+        from importlib.metadata import entry_points as _eps  # noqa: PLC0415
+
+        from rich.markup import escape as _escape  # noqa: PLC0415
+
+        _known_embedders = {ep.name for ep in _eps(group="supamem.embedder")}
+        if cfg.embedder not in _known_embedders:
+            err_console.print(
+                "[supamem.err]"
+                + _escape(
+                    f"config: embedder={cfg.embedder!r} is not a registered "
+                    f"supamem.embedder entry-point (known: {sorted(_known_embedders) or '[]'}). "
+                    "Set [supamem] embedder = 'minilm' for the default."
+                )
+            )
+            raise SystemExit(2)
+
     # ── Phase 9 D-CONFIG-02 — Pydantic-style fail-closed validation ──────
     # Boot-time fail-closed: out-of-range numeric config never reaches the
     # decay math or GC sweep. Mitigates T-09-02-01 (tampering via TOML).
@@ -798,6 +833,29 @@ def load_config(cwd: Path | None = None) -> tuple[ResolvedConfig, ConfigChain]:
             f"{cfg.mcp_cache_ttl_ms} must be >= 0 (0 disables cache hints)"
         )
         raise SystemExit(2)
+    # v0.4.0a5 — model_idle_minutes must be a non-negative int (0 = off).
+    if isinstance(cfg.mcp_model_idle_minutes, bool) or not isinstance(cfg.mcp_model_idle_minutes, int):
+        err_console.print(
+            f"[supamem.err]config: mcp.model_idle_minutes={cfg.mcp_model_idle_minutes!r} "
+            "must be an integer >= 0 (0 disables idle unload)"
+        )
+        raise SystemExit(2)
+    if cfg.mcp_model_idle_minutes < 0:
+        err_console.print(
+            f"[supamem.err]config: mcp.model_idle_minutes={cfg.mcp_model_idle_minutes} "
+            "must be >= 0 (0 disables idle unload)"
+        )
+        raise SystemExit(2)
+    # v0.4.0a5 — target_globs must be a list of non-empty strings.
+    if not isinstance(cfg.hook_target_globs, list) or not all(
+        isinstance(g, str) and g.strip() for g in cfg.hook_target_globs
+    ):
+        err_console.print(
+            f"[supamem.err]config: hook.target_globs={cfg.hook_target_globs!r} "
+            "must be a list of non-empty glob strings"
+        )
+        raise SystemExit(2)
+
     # ── v0.4.0a4 review round — [supamem.hook] fail-closed validation ─────
     # The hook coerces these LATE (int()/float()/bool() in hooks.claude_code.run), so a
     # raw bad value reached the pipeline silently: fetch_k="abc" muted the hook entirely

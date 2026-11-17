@@ -105,8 +105,14 @@ def test_run_index_skips_unchanged_docs(
     cache_dir = tmp_path / "cache"
     cache_dir.mkdir()
     manifest_path = cache_dir / "manifest.json"
+    # v0.4.0a5: an entry is clean only when its sha AND its index epoch
+    # (``collection|dense model``) match the run — pre-a5 entries re-embed once.
+    from supamem.embedders import DEFAULT_DENSE_MODEL
+
+    epoch = f"{ResolvedConfig().collection}|{DEFAULT_DENSE_MODEL}"
     manifest_path.write_text(
-        json.dumps({abs_path: {"prod": sha, "tuned": sha}}), encoding="utf-8"
+        json.dumps({abs_path: {"prod": sha, "tuned": sha, "tuned_epoch": epoch}}),
+        encoding="utf-8",
     )
 
     fake_client = MagicMock()

@@ -2,6 +2,66 @@
 
 All notable changes to `supamem` will be documented in this file.
 
+## [0.4.0a5] — 2026-11-17 — Multilingual embedder (opt-in), idle model unload, per-entry index epoch
+
+Closes the retrieval-quality gap the 2026-11-14 study left open after the a4 mechanical fixes
+(production 3-day numbers: use 0.6%→3.4%, useful/100 edits ×12, worktree rows 71/500 non-empty —
+but lang_mismatch still 63.7%). Owner decisions 2026-11-17: multilingual embedder on all
+RU-heavy projects, idle-unload now / shared daemon next (issue #5), no emit flip to task queries
+(shadow_use 1.6% < main 3.4%). See docs/adr/0004 and docs/usefulness-metrics.md.
+
+- **Multilingual embedder plugin `multilingual_minilm`** — `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`
+  (384-dim, 0.22 GB, no prefixes), opt-in via `[supamem] embedder = "multilingual_minilm"`; the
+  default stays `minilm` (byte-identical). bge-m3 is absent from fastembed 0.8.0; e5-large was
+  rejected for now (2.24 GB + schema/prefix changes — ADR-0004 records the upgrade path).
+- **`cfg.embedder` is no longer dead config** — `dense_model_id_for(cfg)` is resolved at ALL
+  THREE funnels (query backend, `run_index`, `dual_memory_write`); before a5 a configured plugin
+  was silently ignored and the collection filled with wrong-space vectors. Fail-closed gate at
+  `load_config` rejects unknown embedder names (mirrors the reranker gate).
+- **Per-entry index epoch** — every manifest file entry (and transcript-message record) is
+  stamped `<target>_epoch = "collection|dense model"`; an entry stamped for another
+  collection/model counts as dirty. The manifest is ONE file shared by every project and keyed by
+  path only, so switching collection/embedder (and back) used to silently skip every unchanged
+  file — the new collection stayed empty. Per-entry (not one global key — a global epoch was
+  caught in review: alternating runs of two projects would re-embed everything every time,
+  pinned by `test_alternating_projects_never_thrash`). Entries written before a5 carry no epoch →
+  one full re-embed per project on its first a5 index run (expected, one-time). Rollout needs no
+  `--force`; old readers drop the extra key (rollback-safe).
+- **Manifest GC** — `run_index` prunes entries whose files no longer exist (201 dead entries on
+  the maintainer machine, 195 from a leaked `/private/tmp` spike checkout); reserved `__x__`
+  keys untouched. Manifest-only: no Qdrant point is deleted.
+- **MCP-server idle model unload** — `[supamem.mcp] model_idle_minutes` (default 30, 0 = off; env
+  override `SUPAMEM_MCP_IDLE_TTL_SECONDS` for tests). A daemon sweeper pops idle, non-busy
+  backends from the cache (models re-load lazily on the next query, ~9 s); busy entries never
+  evict (module lock + busy/last_use records; teardown drops the whole entry so in-flight
+  queries on an orphaned backend finish safely). Weight tensors and mmap'd onnx/safetensors
+  return to the OS; dylib text pages do not — each unload logs measured RSS before/after.
+  First query after idle pays the reload; `rerank load_latency_ms` telemetry already observes it.
+- **`[supamem.hook] target_globs`** — optional code-target globs replacing the src/tests
+  heuristic (fnmatch over the repo-relative path, reject-suffixes still apply). Revives the hook
+  channel in repos whose code lives outside `src/` (cl-harness: `packages/*`, `bench-ab/*`) —
+  previously 100% of those invocations could never search.
+- **MCP channel journaling** — one `kind:"mcp"` journal row per MCP search (query, chunk
+  sources/scores/lang); `hook-stats` splits channels (hook metrics no longer dilutable) and
+  reports `mcp.searches / with_chunks / chunks_total / ru_chunk_share`. No session id exists in
+  MCP payloads, so a use-rate stays transcript-mined (documented gap).
+- **Doctor "Index freshness" panel** — newest `valid_from` age + manifest mtime age per
+  collection, warns past 7 days (would have caught a 4-month-stale index invisible until the
+  study). Read-only, never flips the exit code.
+- **`valid_from` range index** — `run_index` now creates a DATETIME payload index on
+  `valid_from`. Qdrant's `order_by` requires one: without it the doctor's newest/oldest
+  `valid_from` probes (Temporal validity panel since Phase 9, the new freshness panel) were
+  rejected ("No range index for order_by key") and silently printed "—". One index run per
+  collection creates it; until then the freshness panel says so instead of failing opaquely.
+- **`docs/usefulness-metrics.md`** — the operating guide for the usefulness metrics: every
+  signal, baselines vs current production numbers, interpretation rules (rate pairs, Goodhart
+  guards), and the research backlog (MCP use-rate, correction-after-injection, coverage proxy,
+  golden set, lessons.jsonl ingest, per-project hook opt-out).
+- **`prepare_embedders(extra_dense=[...])`** — install/repair also pre-fetch the configured
+  non-default embedder so a converted project's hook path (HF_HUB_OFFLINE) never needs to
+  download; a config-gate error during install degrades to the default fetch (SystemExit is
+  caught — dad90fe lesson).
+
 ## [0.4.0a4] — 2026-11-14 — Edit-hook usefulness: measured, deduped, worktree-aware
 
 Implements stage 1 of the owner-approved plan from the 2026-11-14 effectiveness study

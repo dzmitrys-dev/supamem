@@ -15,9 +15,12 @@ fd 1 to stderr while serving.
 from __future__ import annotations
 
 import asyncio
+import gc
 import logging
 import os
+import subprocess
 import sys
+import threading
 import time
 from typing import Annotated, Any, Optional, Union
 
@@ -156,8 +159,24 @@ def _bump(kind: str, tokens: int, latency_ms: float) -> None:
 
 
 # ---- Backend cache (one TunedHybridBackend per config) -------------------
+# v0.4.0a5: entries are _CachedBackend records (last_use/busy) so the idle sweeper
+# can evict a backend whose models have been pinned unused — a queried server held
+# ~2.4 GB of reranker weights for its whole lifetime (issue #5, mitigation 1 of 2;
+# the shared daemon is the follow-up release).
 
-_BACKEND_CACHE: dict[tuple, TunedHybridBackend] = {}
+_BACKEND_CACHE: dict[tuple, "_CachedBackend"] = {}
+_CACHE_LOCK = threading.RLock()
+
+
+class _CachedBackend:
+    """Cache record: the backend plus sweeper bookkeeping (monotonic clock)."""
+
+    __slots__ = ("backend", "last_use", "busy")
+
+    def __init__(self, backend: TunedHybridBackend) -> None:
+        self.backend = backend
+        self.last_use = time.monotonic()
+        self.busy = 0
 
 
 def _backend_key(cfg: ResolvedConfig) -> tuple:
@@ -178,10 +197,116 @@ def _backend_key(cfg: ResolvedConfig) -> tuple:
 
 
 def _get_backend(config: ResolvedConfig) -> TunedHybridBackend:
+    """Create-or-fetch the backend for this config and mark it busy.
+
+    Busy/last_use update atomically under ``_CACHE_LOCK`` BEFORE the caller's
+    query starts, so the sweeper can never evict an entry between stamp and
+    query. Paired with :func:`_release_backend` in a ``finally``.
+    """
     key = _backend_key(config)
-    if key not in _BACKEND_CACHE:
-        _BACKEND_CACHE[key] = TunedHybridBackend(config=config)
-    return _BACKEND_CACHE[key]
+    with _CACHE_LOCK:
+        rec = _BACKEND_CACHE.get(key)
+        if rec is None:
+            rec = _CachedBackend(TunedHybridBackend(config=config))
+            _BACKEND_CACHE[key] = rec
+        rec.busy += 1
+        rec.last_use = time.monotonic()
+        return rec.backend
+
+
+def _release_backend(config: ResolvedConfig, backend: TunedHybridBackend) -> None:
+    """Mark the backend idle again. Identity-checked: a monkeypatched/test
+    ``_get_backend`` that never acquired must not decrement a real record."""
+    key = _backend_key(config)
+    with _CACHE_LOCK:
+        rec = _BACKEND_CACHE.get(key)
+        if rec is not None and rec.backend is backend and rec.busy > 0:
+            rec.busy -= 1
+
+
+def _idle_ttl_seconds(config: ResolvedConfig) -> float:
+    """Idle TTL in seconds; ``SUPAMEM_MCP_IDLE_TTL_SECONDS`` overrides (tests)."""
+    env = os.environ.get("SUPAMEM_MCP_IDLE_TTL_SECONDS")
+    if env:
+        try:
+            return max(0.0, float(env))
+        except ValueError:
+            pass
+    minutes = getattr(config, "mcp_model_idle_minutes", 30)
+    try:
+        return max(0.0, float(minutes) * 60.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _rss_kb() -> Optional[int]:
+    try:
+        out = subprocess.run(
+            ["ps", "-o", "rss=", "-p", str(os.getpid())],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        return int(out.stdout.strip()) if out.stdout.strip() else None
+    except Exception:  # noqa: BLE001 — telemetry only
+        return None
+
+
+def sweep_idle_backends(config: ResolvedConfig) -> int:
+    """Evict cached backends idle >= TTL and not busy. Returns count evicted.
+
+    Teardown is dropping the whole cache entry (NOT clearing model fields on a
+    live backend): an in-flight query holds its model refs in locals, the
+    orphaned backend finishes correctly, construction is attribute-only, and
+    ``_ensure()`` rebuilds everything on the next query. ``gc.collect()`` runs
+    twice — torch finalizers/ref-cycles commonly need a second pass. Weight
+    tensors and mmap'd onnx/safetensors DO return to the OS; dylib text pages
+    and heap fragmentation do not (claim only what the log measures).
+    """
+    ttl = _idle_ttl_seconds(config)
+    if ttl <= 0:
+        return 0
+    now = time.monotonic()
+    evicted: list[tuple] = []
+    with _CACHE_LOCK:
+        for key in list(_BACKEND_CACHE):
+            rec = _BACKEND_CACHE[key]
+            if rec.busy == 0 and now - rec.last_use >= ttl:
+                evicted.append(key)
+                del _BACKEND_CACHE[key]
+    for key in evicted:
+        before = _rss_kb()
+        gc.collect()
+        gc.collect()
+        after = _rss_kb()
+        log.info(
+            "supamem mcp: idle backend unloaded (collection=%s, ttl=%ss) rss %s->%s kB",
+            key[2] if len(key) > 2 else "?",
+            ttl,
+            before,
+            after,
+        )
+    return len(evicted)
+
+
+def _start_idle_sweeper(config: ResolvedConfig) -> None:
+    """Daemon thread sweeping the cache every <=60 s (skipped when disabled)."""
+    ttl = _idle_ttl_seconds(config)
+    if ttl <= 0:
+        return
+    interval = min(60.0, max(1.0, ttl / 2.0))
+
+    def _loop() -> None:
+        while True:
+            time.sleep(interval)
+            try:
+                sweep_idle_backends(config)
+            except Exception:  # noqa: BLE001 — the sweeper must never die
+                log.debug("idle sweep failed", exc_info=True)
+
+    t = threading.Thread(target=_loop, name="supamem-idle-sweeper", daemon=True)
+    t.start()
 
 
 # ---- Tool implementation -------------------------------------------------
@@ -208,7 +333,6 @@ async def dual_memory_search(
     clamped_to: Optional[int] = effective_top_k if top_k > cap else None
 
     backend = _get_backend(cfg)
-
     t0 = time.perf_counter()
     try:
         hits: list[RetrievedChunk] = await asyncio.to_thread(
@@ -219,6 +343,8 @@ async def dual_memory_search(
         log.exception("retrieval failed: %s", exc)
         _bump("search_error", 0, elapsed_ms)
         raise RuntimeError(_sanitize_error(exc)) from None
+    finally:
+        _release_backend(cfg, backend)
 
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
     # Defensive: backend may return more than effective_top_k (e.g. mock
@@ -258,6 +384,39 @@ async def dual_memory_search(
         )
     total_tokens = sum(max(1, len(c.text) // 4) for c in chunks)
     _bump("search", total_tokens, elapsed_ms)
+    # v0.4.0a5 — MCP channel journal row (kind="mcp"). No session_id exists in the
+    # MCP tool-call context, so use-rate for this channel stays transcript-mined
+    # (docs/usefulness-metrics.md); the row still powers volume / score / language
+    # mix analytics that the audit log's one-line counters cannot answer.
+    try:
+        from datetime import datetime, timezone  # noqa: PLC0415
+
+        from supamem.stats.injections import append_row, chunk_lang  # noqa: PLC0415
+
+        append_row(
+            {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "kind": "mcp",
+                "session": "",
+                "target": "",
+                "query": q[:250],
+                "chunks": [
+                    {
+                        "source": c.source or c.file_path or "?",
+                        "score": round(float(c.score or 0.0), 4),
+                        "lang": chunk_lang(c.text or ""),
+                    }
+                    for c in chunks
+                ],
+                "empty": not chunks,
+                "deduped": 0,
+                "dropped": {"stale": 0, "floor": 0, "foreign": 0},
+                "ms": round(elapsed_ms, 1),
+                "shadow": None,
+            }
+        )
+    except Exception:  # noqa: BLE001 — journaling must never break the tool
+        log.debug("mcp journal row failed", exc_info=True)
     return SearchResult(
         summary_md=_build_summary_md(
             len(chunks),
@@ -534,6 +693,7 @@ def build_app(config: ResolvedConfig) -> Any:
 
 def run_stdio(config: ResolvedConfig) -> None:
     log.info("starting supamem MCP server (stdio)")
+    _start_idle_sweeper(config)
     app = build_app(config)
     app.run(transport="stdio")
 
@@ -548,6 +708,7 @@ def run_http(
     from mcp.server.mcpserver import MCPServer
 
     log.info("starting supamem MCP server (streamable-http) on %s:%d", host, port)
+    _start_idle_sweeper(config)
     app = MCPServer("supamem", cache_hints=_cache_hints_for(config))
     _register_dual_memory_tool(app, config)
     app.run(transport="streamable-http", host=host, port=port)

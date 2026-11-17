@@ -7,6 +7,9 @@ from typing import Any, Iterable
 class MiniLMEmbedder:
     """Default dense embedder. Uses ``sentence-transformers/all-MiniLM-L6-v2`` (384-dim)."""
 
+    name = "minilm"
+    model_id = "sentence-transformers/all-MiniLM-L6-v2"
+
     def __init__(self, model: str = "sentence-transformers/all-MiniLM-L6-v2") -> None:
         self.model = model
         self._impl: Any | None = None

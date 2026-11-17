@@ -176,3 +176,59 @@ def test_run_calls_counter_bump(
     assert bump_calls, "expected counter.bump to be invoked"
     assert bump_calls[0]["kind"] == "search"
     assert bump_calls[0]["source"] == "hook_claude_code"
+
+
+# ---- v0.4.0a5: [supamem.hook] target_globs ---------------------------------
+
+
+def test_is_code_target_with_globs() -> None:
+    globs = ("packages/*", "bench-ab/*")
+    assert is_code_target(Path("packages/hx/src/x.mts"), globs=globs) is True
+    assert is_code_target(Path("bench-ab/run.py"), globs=globs) is True
+    assert is_code_target(Path("docs/research.md"), globs=globs) is False  # reject-suffix
+    assert is_code_target(Path("packages/api/notes.json"), globs=globs) is False  # reject-suffix
+    assert is_code_target(Path("tools/x.py"), globs=globs) is False  # no glob matches
+
+
+def test_is_code_target_empty_globs_keeps_heuristic() -> None:
+    # Regression lock: globs unset → src/tests heuristic unchanged.
+    assert is_code_target(Path("src/foo.py"), globs=()) is True
+    assert is_code_target(Path("packages/hx/x.mts"), globs=()) is False
+
+
+def test_run_searches_for_glob_target(monkeypatch, tmp_path):
+    """A repo whose code is NOT under src/ (cl-harness layout) gets hook coverage."""
+    from supamem.retrieval.types import RetrievedChunk
+
+    called = {}
+
+    class FakeBackend:
+        def query(self, q, k):
+            called["q"] = q
+            called["k"] = k
+            return [RetrievedChunk(id="1", text="body", score=3.0, source_path=str(tmp_path / "packages/x.md"))]
+
+    import supamem.hooks.claude_code as mod
+
+    monkeypatch.setattr(mod, "_get_backend", lambda cfg: FakeBackend())
+    monkeypatch.setattr(mod, "_marker_dir", lambda: tmp_path)
+    monkeypatch.setattr(mod, "_bump", lambda **kw: None)
+    (tmp_path / "packages").mkdir()
+    (tmp_path / "packages" / "x.md").write_text("# X\n")
+
+    cap = io.StringIO()
+    real = sys.stdout
+    sys.stdout = cap
+    try:
+        rc = run(
+            tmp_path / "packages" / "hx_tool.py",
+            _cfg(cache_dir=str(tmp_path), hook_target_globs=["packages/*"]),
+            payload={"session_id": "s-glob", "cwd": str(tmp_path)},
+        )
+    finally:
+        sys.stdout = real
+
+    assert rc == 0
+    assert called.get("q")  # a search HAPPENED (default heuristic would skip it)
+    out = json.loads(cap.getvalue())
+    assert "Memory context" in out["hookSpecificOutput"]["additionalContext"]

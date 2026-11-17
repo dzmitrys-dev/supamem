@@ -42,11 +42,13 @@ def fastembed_kwargs() -> dict[str, object]:
     return {"cache_dir": fastembed_cache_dir(), "local_files_only": models_offline()}
 
 
-def prepare_embedders() -> list[str]:
+def prepare_embedders(extra_dense: list[str] | None = None) -> list[str]:
     """Fetch the retrieval embedders into the persistent cache (install / repair — never inside a hook).
 
     Instantiating a fastembed model downloads it when absent; ``local_files_only=False`` here on purpose: this is
-    the one place that is allowed to go to the network. Returns the model names that are now cached."""
+    the one place that is allowed to go to the network. ``extra_dense`` (v0.4.0a5) adds non-default
+    dense models (e.g. the multilingual opt-in) so a converted project's hook/MCP path never needs
+    to download (the hook runs HF_HUB_OFFLINE). Returns the model names that are now cached."""
     from fastembed import SparseTextEmbedding, TextEmbedding
 
     from supamem.retrieval.tuned_hybrid import DEFAULT_DENSE_MODEL, DEFAULT_SPARSE_MODEL
@@ -54,4 +56,10 @@ def prepare_embedders() -> list[str]:
     cache = fastembed_cache_dir()
     TextEmbedding(DEFAULT_DENSE_MODEL, cache_dir=cache, local_files_only=False)
     SparseTextEmbedding(DEFAULT_SPARSE_MODEL, cache_dir=cache, local_files_only=False)
-    return [DEFAULT_DENSE_MODEL, DEFAULT_SPARSE_MODEL]
+    cached = [DEFAULT_DENSE_MODEL, DEFAULT_SPARSE_MODEL]
+    for model in dict.fromkeys(extra_dense or []):
+        if model == DEFAULT_DENSE_MODEL:
+            continue
+        TextEmbedding(model, cache_dir=cache, local_files_only=False)
+        cached.append(model)
+    return cached

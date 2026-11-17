@@ -470,6 +470,23 @@ def _ensure_payload_indexes(client: Any, cfg: ResolvedConfig) -> None:
     except Exception as exc:  # noqa: BLE001 — fail-soft + SURFACE per CLAUDE.md
         err_console.print(f"[red]temporal index creation failed: {type(exc).__name__}: {exc}[/red]")
 
+    # v0.4.0a5 — valid_from DATETIME index. Qdrant's ``order_by`` REQUIRES a range
+    # index on the key; without it the doctor's newest/oldest-valid_from probes
+    # (temporal + index-freshness panels) failed with "No range index for
+    # order_by key" and printed "—" silently. Own try/except: a failure here must
+    # not affect the query-path indexes above.
+    try:
+        client.create_payload_index(
+            collection_name=cfg.collection,
+            field_name="valid_from",
+            field_schema=qmodels.PayloadSchemaType.DATETIME,
+            wait=True,
+        )
+    except Exception as exc:  # noqa: BLE001 — fail-soft + SURFACE per CLAUDE.md
+        err_console.print(
+            f"[red]valid_from index creation failed: {type(exc).__name__}: {exc}[/red]"
+        )
+
     # Phase 11 D-PFX-04 — path_prefixes keyword index (on_disk for cardinality
     # cost). Verbose ``KeywordIndexParams`` form rather than
     # ``PayloadSchemaType.KEYWORD`` so we can pin ``on_disk=True``. Wrapped in
@@ -873,13 +890,36 @@ def run_index(
         return 0
 
     try:
-        dense = build_dense_embedder()
+        # v0.4.0a5: the dense model follows cfg.embedder (was always the default — a
+        # configured plugin silently indexed English-space vectors).
+        from supamem.embedders import dense_model_id_for  # noqa: PLC0415
+
+        dense_model_id = dense_model_id_for(cfg)
+        dense = build_dense_embedder(dense_model_id)
         sparse = build_sparse_embedder()
-    except Exception:  # noqa: BLE001 — embedders may pull heavy deps
+    except Exception as exc:  # noqa: BLE001 — embedders may pull heavy deps; fail-soft but SURFACE
+        err_console.print(
+            f"[supamem.warn]⚠ index: embedder setup failed ({type(exc).__name__}: {exc}) — "
+            f"nothing indexed[/supamem.warn]"
+        )
         return 0
 
     manifest_path = _manifest_path(cfg)
     manifest = Manifest.load(manifest_path)
+
+    # v0.4.0a5 — manifest hygiene: entries for files gone from disk (leaked temp
+    # checkouts) are dropped. Manifest-only: no Qdrant point is touched here.
+    pruned = manifest.prune_missing()
+    if pruned:
+        err_console.print(f"  manifest: pruned {pruned} entries for files no longer on disk")
+
+    # v0.4.0a5 — per-entry index epoch: every file/transcript-message entry
+    # this run writes is stamped with "<collection>|<dense model>", and an entry
+    # stamped for another collection/model counts as dirty. Fixes the shared-
+    # manifest trap (switching collection or embedder used to skip every
+    # unchanged file) without letting alternating runs of different projects
+    # invalidate each other (the epoch lives on the entry, not globally).
+    manifest.active_epoch = f"{cfg.collection}|{dense_model_id}"
 
     # ── Phase 9 + Phase 11 — strict ordering at run_index boot (Pitfall 7) ──
     # 1. _ensure_payload_indexes        — idempotent payload-index creation

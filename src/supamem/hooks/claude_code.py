@@ -114,14 +114,35 @@ _REJECT_SUFFIXES: frozenset[str] = frozenset(
 )
 
 
-def is_code_target(file_path: Path) -> bool:
-    text = file_path.as_posix()
-    in_src = (
-        "/src/" in text or "/tests/" in text or text.startswith("src/") or text.startswith("tests/")
-    )
-    if not in_src:
+def is_code_target(file_path: Path, *, globs: Iterable[str] = ()) -> bool:
+    """Should this edit trigger a memory search?
+
+    Default heuristic: the path lives under ``src/`` or ``tests/``. With
+    ``[supamem.hook] target_globs`` set (v0.4.0a5), the heuristic is replaced by an
+    any-match ``fnmatch`` over the repo-relative posix path — for repos whose code
+    lives elsewhere (cl-harness: ``packages/**``, ``bench-ab/**``). ``fnmatch`` has no
+    path semantics: ``*`` crosses ``/`` boundaries, so ``packages/*`` matches
+    ``packages/hx/src/x.mts``. Reject-suffixes always apply — docs/config edits never
+    trigger a search.
+    """
+    if file_path.suffix in _REJECT_SUFFIXES:
         return False
-    return file_path.suffix not in _REJECT_SUFFIXES
+    text = file_path.as_posix()
+    if not globs:
+        in_src = (
+            "/src/" in text or "/tests/" in text or text.startswith("src/") or text.startswith("tests/")
+        )
+        return in_src
+    from fnmatch import fnmatch  # noqa: PLC0415 — stdlib, micro-import
+
+    return any(fnmatch(text, g) for g in globs)
+
+
+def _target_globs(config: ResolvedConfig) -> list[str]:
+    raw = _hook_setting(config, "target_globs", [])
+    if not isinstance(raw, (list, tuple)):
+        return []
+    return [str(g) for g in raw if isinstance(g, str) and g.strip()]
 
 
 def derive_query(
@@ -581,7 +602,14 @@ def run(file_path: Path, config: ResolvedConfig, payload: dict[str, Any] | None 
             log.warning("supamem hook claude_code: journal failed: %s", exc)
 
     try:
-        if not is_code_target(file_path):
+        # target_globs match the REPO-RELATIVE path ("packages/hx/src/x.mts"), not the
+        # absolute one — the heuristic fallback works on either form.
+        target_for_globs = file_path
+        try:
+            target_for_globs = file_path.resolve().relative_to(root.resolve())
+        except (OSError, ValueError):
+            pass
+        if not is_code_target(target_for_globs, globs=_target_globs(config)):
             journal(
                 query="", chunks=[], empty=True, deduped=0, dropped=dict(ZERO_DROPPED), shadow=None
             )

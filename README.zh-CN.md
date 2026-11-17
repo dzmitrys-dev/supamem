@@ -120,7 +120,7 @@ Anthropic API 标价(2026 年 3 月):
 
 ```bash
 # 1. 安装(uv 是最快路径)
-uv tool install 'supamem==0.4.0a4'
+uv tool install 'supamem==0.4.0a5'
 
 # 2. 启动 Qdrant(一次性,~30 秒)
 docker run -d -p 6333:6333 -p 6334:6334 -v $HOME/.qdrant:/qdrant/storage qdrant/qdrant:latest
@@ -248,13 +248,13 @@ services:
 
 ```bash
 # 推荐:uv(最快、隔离)
-uv tool install 'supamem==0.4.0a4'
+uv tool install 'supamem==0.4.0a5'
 
 # 备选:pipx(也隔离)
-pipx install supamem==0.4.0a4
+pipx install supamem==0.4.0a5
 
 # 普通 pip(在 venv 中)
-pip install supamem==0.4.0a4
+pip install supamem==0.4.0a5
 ```
 
 > **必须固定版本。** `0.4.0a3` 是预发布版本,而最新的*稳定*版(`0.2.0`)早于整个 `0.3.x` / `0.4.x` 系列 —— 因此不带版本号的 `install supamem` 会**向后**解析到比本文档所述功能更旧的版本。精确的预发布版本固定无需任何额外标志即可解析,同时依赖仍停留在稳定版;请**不要**使用 `--prerelease allow`(它作用于整个解析过程,会拉入预发布依赖)。
@@ -358,6 +358,8 @@ inject_k = 5              # int >= 1,<= fetch_k —— 每次编辑最多注入�
 min_score = 2.5           # 有限数值 >= 0 —— rerank 分数下限;0 禁用
 shadow_task_query = true  # TOML bool —— 记录(绝不输出)来自转录的任务文本查询
 drop_tokens = []          # 从路径派生查询中剔除的额外 token
+target_globs = []         # v0.4.0a5 — 用仓库相对 glob 替换 src/tests 启发式
+                          # （如 ["packages/*", "bench-ab/*"]），适用于代码不在 src/ 下的仓库
 ```
 
 四个数值/布尔键在加载配置时均以 fail-closed 方式校验(无效值会指出键名并以代码 2 退出 —— 像 `shadow_task_query = "false"` 这样的字符串会被拒绝,而不是被悄悄当作 true)。Claude Code 编辑钩子是例外:代码 2 会阻止编辑,所以它把错误打印到 stderr,不注入任何内容,并以 0 退出。
@@ -367,6 +369,36 @@ drop_tokens = []          # 从路径派生查询中剔除的额外 token
 
 ---
 
+### 多语言嵌入器 + 空闲模型卸载 (v0.4.0a5+)
+
+**多语言 dense 嵌入器（按项目启用）。** 语料库最高 86% 是俄语，而默认的
+`all-MiniLM-L6-v2` 只支持英语 —— 2026-11-14 的研究测得 78.8% 的注入存在语言错配
+（v0.4.0a4 过滤后仍有 63.7%）。按项目启用：
+
+```toml
+[supamem]
+embedder = "multilingual_minilm"      # paraphrase-multilingual-MiniLM-L12-v2（384 维，0.22 GB）
+collection = "supamem-<project>-ml"   # 新集合名 —— 不同的向量空间，切勿混用
+```
+
+然后运行普通的 `supamem index --target tuned` —— 新的 index-epoch 守卫检测到目标变更后
+会一次性重新嵌入全部内容（无需 `--force`；切回去也会重新嵌入，过时集合的陷阱在两个方向上
+都被堵住了）。保留旧集合作为回滚。未知的 `embedder` 名称在配置加载时即被拒绝。
+`bge-m3` 不在 fastembed 0.8.0 中，`e5-large` 每进程要 2.24 GB —— 决策与升级路径
+（共享模型守护进程落地后）见 `docs/adr/0004`。
+
+**空闲模型卸载。** 被查询过的 MCP 服务器会终身持有约 2.4 GB 的重排序器权重。
+`[supamem.mcp] model_idle_minutes`（默认 30，`0` 关闭）让服务器卸载空闲的后端 ——
+下一次查询会惰性重载（约 9 秒）。忙碌中的条目绝不会被卸载；每次卸载都会记录实测的
+前后 RSS（模型权重会归还给操作系统；运行时库的页面不会）。
+
+**指标。** MCP 搜索现在会向注入日志追加 `kind:"mcp"` 行，`supamem hook-stats` 单独
+报告它们（`mcp.searches`、`mcp.with_chunks`、`mcp.chunks_total`、`mcp.ru_chunk_share`），
+不会稀释编辑钩子的分母。`supamem doctor` 新增只读的 **Index freshness** 面板（超过
+7 天告警 —— 此前一个落后 4 个月的索引是不可见的）。完整的操作指南 —— 每项指标、生产
+基线、解读规则与研究积压 —— 见 [`docs/usefulness-metrics.md`](docs/usefulness-metrics.md)。
+
+---
 ## 📜 转录(Transcript)摄取(v0.2.2a1+)
 
 supamem 可以把你的 **Claude Code 会话历史**作为问答抽屉式 chunk 索引到项目的 Markdown 语料中,让历史决策与工具调用轨迹出现在 `dual_memory_search` 结果里。默认关闭 —— 通过 `--transcripts` 显式启用。

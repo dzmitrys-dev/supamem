@@ -689,7 +689,7 @@ def test_run_index_warns_when_sources_fail(
     monkeypatch.chdir(tmp_path)  # relative "docs" resolves HERE, not against the repo cwd
     monkeypatch.setattr(idx, "QdrantClient", lambda **kw: MagicMock())
     monkeypatch.setattr(idx, "ensure_collection", lambda *a, **k: None)
-    monkeypatch.setattr(idx, "build_dense_embedder", lambda: MagicMock())
+    monkeypatch.setattr(idx, "build_dense_embedder", lambda *a, **k: MagicMock())
     monkeypatch.setattr(idx, "build_sparse_embedder", lambda: MagicMock())
     monkeypatch.setattr(idx, "_ensure_payload_indexes", lambda *a, **k: None)
     monkeypatch.setattr(idx, "_gc_sweep", lambda *a, **k: 0)
@@ -699,6 +699,9 @@ def test_run_index_warns_when_sources_fail(
         validity_migration="x",
         path_prefixes_migration="x",
         classifier_hash=idx._classifier_hash(ResolvedConfig().classifier_rooms),
+        entries={},
+        prune_missing=lambda: 0,
+        active_epoch=None,
         save=lambda *_a, **_k: None,
     )
     monkeypatch.setattr(idx.Manifest, "load", classmethod(lambda cls, path: fake_manifest))
@@ -1210,3 +1213,43 @@ def test_marker_sweep_only_deletes_supamem_markers(tmp_path: Path) -> None:
     assert not marker.exists() and not own_tmp.exists()
     assert foreign_json.exists(), "a non-marker dedup-*.json must survive"
     assert foreign_tmp.exists(), "a foreign *.tmp must survive"
+
+
+# ---- v0.4.0a5: hook-stats splits the MCP channel out of hook denominators ----
+
+
+def test_compute_stats_splits_mcp_channel(tmp_path: Path) -> None:
+    """kind="mcp" rows must not dilute edit-hook metrics; they get their own summary."""
+    import json
+
+    from supamem.stats.injections import compute_stats, journal_path
+
+    jp = journal_path(tmp_path)
+    jp.parent.mkdir(parents=True, exist_ok=True)
+    now = datetime.now(timezone.utc).isoformat()
+    hook_row = {
+        "ts": now, "session": "s1", "target": "/x/src/a.py", "query": "a",
+        "chunks": [{"source": "a.md", "score": 3.0, "exists": True, "lang": "en"}],
+        "empty": False, "deduped": 0, "dropped": {"stale": 0, "floor": 0, "foreign": 0},
+        "ms": 1.0, "shadow": None,
+    }
+    mcp_row = {
+        "ts": now, "kind": "mcp", "session": "", "target": "", "query": "q",
+        "chunks": [
+            {"source": "ru.md", "score": 4.0, "lang": "ru"},
+            {"source": "en.md", "score": 2.0, "lang": "en"},
+        ],
+        "empty": False, "deduped": 0, "dropped": {"stale": 0, "floor": 0, "foreign": 0},
+        "ms": 5.0, "shadow": None,
+    }
+    jp.write_text(json.dumps(hook_row) + "\n" + json.dumps(mcp_row) + "\n", encoding="utf-8")
+
+    stats = compute_stats(days=1, journal_path=jp, transcript_roots=[tmp_path / "none"])
+    # Hook denominators: exactly the 1 hook row.
+    assert stats["invocations"] == 1
+    assert stats["non_empty"] == 1
+    # MCP channel summary present and separate.
+    assert stats["mcp"]["searches"] == 1
+    assert stats["mcp"]["with_chunks"] == 1
+    assert stats["mcp"]["chunks_total"] == 2
+    assert stats["mcp"]["ru_chunk_share"] == 0.5

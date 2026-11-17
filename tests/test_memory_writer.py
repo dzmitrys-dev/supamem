@@ -185,7 +185,7 @@ def test_index_single_doc_dedup_off_writes_all_chunks(
     monkeypatch.setattr("qdrant_client.QdrantClient", lambda *a, **k: fake_client)
     monkeypatch.setattr(
         "supamem.embedders.build_dense_embedder",
-        lambda: MagicMock(embed=lambda batch: iter([[0.1] * 384 for _ in batch])),
+        lambda *a, **k: MagicMock(embed=lambda batch: iter([[0.1] * 384 for _ in batch])),
     )
     monkeypatch.setattr(
         "supamem.embedders.build_sparse_embedder",
@@ -227,7 +227,7 @@ def test_index_single_doc_ensures_collection_before_upsert(
     monkeypatch.setattr("qdrant_client.QdrantClient", lambda *a, **k: fake_client)
     monkeypatch.setattr(
         "supamem.embedders.build_dense_embedder",
-        lambda: MagicMock(embed=lambda batch: iter([[0.1] * 384 for _ in batch])),
+        lambda *a, **k: MagicMock(embed=lambda batch: iter([[0.1] * 384 for _ in batch])),
     )
     monkeypatch.setattr(
         "supamem.embedders.build_sparse_embedder",

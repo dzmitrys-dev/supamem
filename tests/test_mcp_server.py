@@ -213,3 +213,34 @@ def test_run_http_uses_streamable_http_transport(monkeypatch: pytest.MonkeyPatch
     assert captured.get("transport") == "streamable-http"
     assert captured.get("host") == "127.0.0.1"
     assert captured.get("port") == 8765
+
+
+# ---- v0.4.0a5: MCP channel journal row --------------------------------------
+
+def test_dual_memory_search_journals_mcp_row(monkeypatch, tmp_path):
+    """Every MCP search appends one kind="mcp" journal row (volume/score/lang analytics)."""
+    import asyncio
+    import json
+
+    import supamem.mcp_server as mod
+    import supamem.stats.injections as inj
+    from supamem.retrieval.types import RetrievedChunk
+
+    monkeypatch.setenv("SUPAMEM_AUDIT_DIR", str(tmp_path))
+    fake = MagicMock()
+    fake.query.return_value = [
+        RetrievedChunk(id="1", text="привет мир", score=0.9, source_path="ru.md"),
+        RetrievedChunk(id="2", text="hello world", score=0.8, source_path="en.md"),
+    ]
+    monkeypatch.setattr(mod, "_get_backend", lambda cfg: fake)
+
+    out = asyncio.run(mod.dual_memory_search(query="привет", top_k=2, config=_cfg()))
+    assert len(out.chunks) == 2
+    rows = [json.loads(line) for line in inj.journal_path(tmp_path).read_text().splitlines()]
+    mcp_rows = [r for r in rows if r.get("kind") == "mcp"]
+    assert len(mcp_rows) == 1
+    row = mcp_rows[0]
+    assert row["query"] == "привет"
+    assert row["session"] == ""
+    assert [c["lang"] for c in row["chunks"]] == ["ru", "en"]
+    assert row["chunks"][0]["score"] == pytest.approx(0.9)

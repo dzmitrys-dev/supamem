@@ -135,7 +135,7 @@ def test_write_dedup_skips_duplicate_hash_in_batch(
     monkeypatch.setattr("qdrant_client.QdrantClient", lambda *a, **k: fake_client)
     monkeypatch.setattr(
         "supamem.embedders.build_dense_embedder",
-        lambda: MagicMock(embed=lambda batch: iter([[0.1] * 384 for _ in batch])),
+        lambda *a, **k: MagicMock(embed=lambda batch: iter([[0.1] * 384 for _ in batch])),
     )
     monkeypatch.setattr(
         "supamem.embedders.build_sparse_embedder",

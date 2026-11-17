@@ -290,7 +290,11 @@ class TunedHybridBackend:
                 timeout=60,
             )
         if self._dense is None:
-            self._dense = TextEmbedding(DEFAULT_DENSE_MODEL, **fastembed_kwargs())
+            # v0.4.0a5: the dense model follows cfg.embedder (was hardcoded — a configured
+            # plugin was silently ignored and queries ran in the wrong vector space).
+            from supamem.embedders import dense_model_id_for  # noqa: PLC0415
+
+            self._dense = TextEmbedding(dense_model_id_for(self.config), **fastembed_kwargs())
         if self._sparse is None:
             self._sparse = SparseTextEmbedding(DEFAULT_SPARSE_MODEL, **fastembed_kwargs())
         return self._client, self._dense, self._sparse
