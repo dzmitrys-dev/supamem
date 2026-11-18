@@ -120,7 +120,7 @@ not for code-aware retrieval.
 
 ```bash
 # 1. Install (uv is the fastest path)
-uv tool install 'supamem==0.4.0a6'
+uv tool install 'supamem==0.4.0a7'
 
 # 2. Start Qdrant (one-time, ~30s)
 docker run -d -p 6333:6333 -p 6334:6334 -v $HOME/.qdrant:/qdrant/storage qdrant/qdrant:latest
@@ -249,16 +249,16 @@ available) and point `supamem` at the URL via `supamem init`.
 
 ```bash
 # Recommended: uv (fastest, isolated)
-uv tool install 'supamem==0.4.0a6'
+uv tool install 'supamem==0.4.0a7'
 
 # Alternative: pipx (also isolated)
-pipx install supamem==0.4.0a6
+pipx install supamem==0.4.0a7
 
 # Plain pip (in a venv)
-pip install supamem==0.4.0a6
+pip install supamem==0.4.0a7
 ```
 
-> **The version pin is required.** `0.4.0a6` is a pre-release, and the newest *stable* release (`0.2.0`) predates the entire `0.3.x` / `0.4.x` line — so an unpinned `install supamem` resolves **backwards**, to a version older than the features documented here. An exact pre-release pin resolves with no extra flags while dependencies stay on stable versions; do **not** use `--prerelease allow` (it applies to the whole resolution and drags in pre-release dependencies).
+> **The version pin is required.** `0.4.0a7` is a pre-release, and the newest *stable* release (`0.2.0`) predates the entire `0.3.x` / `0.4.x` line — so an unpinned `install supamem` resolves **backwards**, to a version older than the features documented here. An exact pre-release pin resolves with no extra flags while dependencies stay on stable versions; do **not** use `--prerelease allow` (it applies to the whole resolution and drags in pre-release dependencies).
 
 Verify:
 
@@ -330,7 +330,7 @@ discover this flow naturally.
 | `supamem repair` | 🩹 Migrate from legacy global install to per-workspace files. Strips stale `mcpServers.supamem` from globals and re-installs at project scope from the current cwd. v0.2.5+: re-applies subagent reachability patches. Idempotent. Supports `--skip-patch-agents`. |
 | `supamem index` | Embed dev memories into Qdrant using the locked tuned-hybrid pipeline (D-25) |
 | `supamem mcp-server` | Run the MCP server (`--transport stdio` default; `--transport http` for HTTP) |
-| `supamem hook <client>` | Per-client session/edit hooks (called by the client itself) |
+| `supamem hook <client>` | Per-client session/edit hooks (called by the client itself). v0.4.0a7+: the edit hook can rerank remotely — opt-in `[supamem.reranker] name = "openrouter"` |
 | `supamem hook-stats` | 📈 Edit-hook usefulness metrics (v0.4.0a4+): `injection_rate`, `use_rate`, `repeat_rate`, `stale_rate`, `lang_mismatch_rate`, `useful_per_100_edits`, `shadow_use_rate` — correlates the injection journal (`<audit dir>/injections.jsonl`) with the Claude Code session transcripts. `--days N` (default 7), `--json` for machine output. |
 | `supamem daemon` | 🧠 Shared model daemon (v0.4.0a6+): `serve` (normally spawned on demand), `status [--json]`, `stop`. One copy of the models per machine for the edit hook and every MCP server. |
 | `supamem doctor` | 🩺 Probe Qdrant, print resolved config chain, report version drift |
@@ -414,6 +414,31 @@ the legacy `repeat_rate` / `stale_rate` keys remain, labeled emitted-rows-only /
 Latency is explicitly not a concern (owner, 2026-11-14); the journal exists to make **usefulness** visible.
 
 ---
+
+### Remote reranker (v0.4.0a7+, opt-in per project)
+
+**Rerank on OpenRouter instead of the local CPU model.** The local reranker is fp32-on-CPU and
+dominates warm latency (p50 ~24 s; rerank off → 0.3 s). The opt-in `openrouter` reranker plugin
+sends candidates to the OpenRouter rerank API — measured `cohere/rerank-5-fast` at 0.6–0.8 s per
+call (~$0.0001/call), delivering an injection **end-to-end in 0.9 s**; the reranker model never
+loads locally (the daemon holds dense+sparse only). Chunks leave your machine **only** when a
+project opts in — the default stays the fully local `mxbai_v2` (ADR-0006).
+
+```toml
+[supamem.reranker]
+name = "openrouter"
+model_id = "cohere/rerank-5-fast"
+remote_api_key_env = "OPENROUTER_API_KEY"   # env var NAME (never the value); set it in the
+                                           # environment that spawns the daemon
+[supamem.hook]
+min_score = 0.0    # remote scores are 0–1: the 2.5 default would drop EVERY chunk
+```
+
+Failure policy: one retry on 429/5xx/timeout, then the query proceeds on hybrid order (no
+rerank scores, score floor not applied) — a network outage never blocks injections and never
+triggers a local model load. `supamem doctor` shows the transport config, key presence and the
+`remote_failed` counter; journal rows carry a `rerank` provider tag. Also available:
+`remote_base_url` (default `https://openrouter.ai/api/v1`), `remote_timeout_ms` (default 8000).
 
 ### Shared model daemon (v0.4.0a6+)
 

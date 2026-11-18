@@ -82,6 +82,9 @@ def empty_row(*, session: str = "", target: str = "", query: str = "") -> dict[s
         "dropped": dict(ZERO_DROPPED),
         "ms": 0.0,
         "shadow": None,
+        # v0.4.0a7: provider tag for shape parity with _journal_row (None — the
+        # search path never ran, so no reranker was active for this row).
+        "rerank": None,
     }
 
 

@@ -9,7 +9,11 @@ import sys
 import pytest
 
 
-def _run(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+def _run(
+    *args: str,
+    env: dict[str, str] | None = None,
+    cwd: str | None = None,
+) -> subprocess.CompletedProcess[str]:
     # Force plain output: capture_output makes stdout non-TTY, but CI may also set
     # FORCE_COLOR or COLUMNS; pin a deterministic env so Rich disables ANSI escapes
     # and uses a wide width — keeps "subcommand" / "--flag" tokens unwrapped in --help.
@@ -22,6 +26,7 @@ def _run(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedP
         capture_output=True,
         text=True,
         env=base_env,
+        cwd=cwd,
     )
 
 
@@ -71,6 +76,28 @@ def test_index_runs_failsoft_with_no_sources() -> None:
     assert result.returncode == 0, (
         f"expected fail-soft exit 0, got {result.returncode}: stderr={result.stderr!r}"
     )
+
+
+def test_doctor_remote_reranker_panel(tmp_path) -> None:
+    """v0.4.0a7: with [supamem.reranker] name = "openrouter" the doctor panel shows
+    the transport config, flags a missing key env, warns on an unreachable score
+    floor, and does NOT probe the local model cache (there is none to repair)."""
+    (tmp_path / ".supamem").mkdir()
+    (tmp_path / ".supamem" / "config.toml").write_text(
+        '[supamem.reranker]\nname = "openrouter"\nmodel_id = "cohere/rerank-5-fast"\n'
+    )
+    result = _run(
+        "doctor",
+        cwd=str(tmp_path),
+        env={"OPENROUTER_API_KEY": "", "SUPAMEM_NO_UPDATE_CHECK": "1"},
+    )
+    out = result.stdout
+    assert "name           = openrouter" in out
+    assert "cohere/rerank-5-fast" in out
+    assert "NOT SET" in out  # key env warn (empty string counts as unset)
+    # 2.5 default floor on a 0–1 scale → drop-everything warn
+    assert "0–1 score scale" in out
+    assert "snapshot not found" not in out  # no local cache probe for remote
 
 
 def test_doctor_shows_caps() -> None:

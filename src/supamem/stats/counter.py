@@ -100,6 +100,22 @@ def get_latency_samples(kind: str, source: str) -> list[float]:
     return list(_LATENCY_DEQUES[key])
 
 
+def get_aggregate(kind: str, source: str) -> dict[str, float] | None:
+    """Persisted Welford aggregate {count, sum, min, max} for ``(kind, source)``, or None.
+
+    Read-only counterpart of :func:`bump` (v0.4.0a7 — doctor shows the remote
+    reranker's failure count from here). Fail-soft: unreadable/missing → None.
+    """
+    try:
+        path = _resolve_cache_dir(None) / "aggregates.json"
+        if not path.exists():
+            return None
+        agg = _load_aggregates(path).get(f"{kind}:{source}")
+        return agg if isinstance(agg, dict) else None
+    except Exception:  # noqa: BLE001 — read-only probe
+        return None
+
+
 def _resolve_cache_dir(cache_dir: Path | None) -> Path:
     target = Path(cache_dir) if cache_dir else default_cache_dir()
     target.mkdir(parents=True, exist_ok=True)

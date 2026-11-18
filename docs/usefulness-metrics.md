@@ -11,7 +11,7 @@ movement, and the gaps that remain.
 
 | Source | Written by | Cadence | Contents |
 |---|---|---|---|
-| `<audit dir>/injections.jsonl` | edit hook (one row per invocation) + MCP server (one row per search, `kind:"mcp"`) | per event | ts, session, target, query, chunks (source/score/exists/lang), empty, deduped, dropped (stale/floor/foreign), ms, shadow |
+| `<audit dir>/injections.jsonl` | edit hook (one row per invocation) + MCP server (one row per search, `kind:"mcp"`) | per event | ts, session, target, query, chunks (source/score/exists/lang), empty, deduped, dropped (stale/floor/foreign), ms, shadow, rerank (provider tag, v0.4.0a7) |
 | `<audit dir>/audit.jsonl` | `stats.counter.bump` | per search/rerank/error | kind, source (`hook_claude_code` / `mcp`), tokens, latency_ms |
 | `<audit dir>/dedup-<session>.json` | edit hook | per session (24 h TTL) | already-injected chunk keys |
 | `supamem hook-stats [--days N] [--json]` | analyzer | on demand | all derived metrics below |
@@ -86,6 +86,13 @@ for MCP cannot be computed from the journal; the study measured it by transcript
      should raise both without any change in retrieval quality.
    - Expected new empty-row causes in a6: daemon `busy` / `expired` skips. Read them in
      `supamem daemon status` (`busy_rejected`, `expired`).
+8. **Remote-reranker era split (v0.4.0a7)** — rows now carry a `rerank` provider tag
+   (`"openrouter/cohere/rerank-5-fast"` / `"mxbai_v2/…"` / null). Remote relevance scores are
+   0–1 vs mxbai's raw scale: never compare `score` across providers, and split any
+   `injection_rate` / `use_rate` comparison on `rerank` (plus the `min_score` flip that
+   ships with it). Remote network failures land in the `rerank:remote_failed` counter and
+   degrade to hybrid order without `rerank_score` (floor not applied) — read them with
+   `supamem doctor`.
 
 ## Baseline table for future comparisons
 
@@ -93,5 +100,6 @@ for MCP cannot be computed from the journal; the study measured it by transcript
 |---|---|---|---|---|---|---|---|
 | 2026-11-14 (study, pre-a4) | hook | 4.2% | 0.6% | ~0.023 | 0 (no dedup) | 0 (no drop) | 78.8% |
 | 2026-11-17 (a4, 3 d) | hook | 8.0% | 3.4% | 0.27 | 89.9% | 1.6% | 63.7% |
+| 2026-11-18 (2 d, a5+a6 mix, mxbai_v2) | hook | 10.0% | 2.9% (n=6, noise) | 0.29 | 92.3% | 0.4% | 47.4% |
 
 Append a row per release or config flip, with the window length.

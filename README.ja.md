@@ -121,7 +121,7 @@ env-var 名、ファイルパス)を捉えます。Dense は BM25 が見逃す *
 
 ```bash
 # 1. インストール(uv が最速)
-uv tool install 'supamem==0.4.0a6'
+uv tool install 'supamem==0.4.0a7'
 
 # 2. Qdrant を起動(初回のみ、~30s)
 docker run -d -p 6333:6333 -p 6334:6334 -v $HOME/.qdrant:/qdrant/storage qdrant/qdrant:latest
@@ -249,13 +249,13 @@ Docker がない?[Qdrant Cloud](https://cloud.qdrant.io/) でマネージドク�
 
 ```bash
 # 推奨:uv(最速、隔離)
-uv tool install 'supamem==0.4.0a6'
+uv tool install 'supamem==0.4.0a7'
 
 # 代替:pipx(これも隔離)
-pipx install supamem==0.4.0a6
+pipx install supamem==0.4.0a7
 
 # プレーン pip(venv 内で)
-pip install supamem==0.4.0a6
+pip install supamem==0.4.0a7
 ```
 
 > **バージョン固定は必須です。** `0.4.0a3` はプレリリースであり、最新の*安定版*(`0.2.0`)は `0.3.x` / `0.4.x` 系列全体より古いため、固定なしの `install supamem` は本ドキュメントが説明する機能よりも古いバージョンへ**逆方向に**解決されます。厳密なプレリリース固定は追加フラグなしで解決でき、依存関係は安定版のままです。`--prerelease allow` は**使用しないでください**(解決全体に適用され、プレリリース依存を引き込みます)。
@@ -332,7 +332,7 @@ pip uninstall supamem
 | `supamem install --client <name>` | クライアント設定にパッチ(`claude-code`、`cursor`、`opencode`)— アトミック+バックアップ。v0.2.5+:`~/.claude/agents/` と `<project>/.claude/agents/` の制限的な `tools:` ホワイトリストに `mcp__supamem__*` を自動追加;`--skip-patch-agents` でオプトアウト。 |
 | `supamem index` | ロックされた tuned-hybrid パイプラインで dev メモリを Qdrant に embed(D-25) |
 | `supamem mcp-server` | MCP サーバー実行(`--transport stdio` デフォルト;`http` で HTTP) |
-| `supamem hook <client>` | クライアント別セッション/編集フック(クライアント自身が呼び出す) |
+| `supamem hook <client>` | クライアントごとのセッション/編集フック（クライアント自身が呼び出し）。v0.4.0a7+：編集フックはリモートリランクが可能 — オプトイン `[supamem.reranker] name = "openrouter"` |
 | `supamem hook-stats` | 📈 編集フックの有用性メトリクス(v0.4.0a4+):`injection_rate`、`use_rate`、`repeat_rate`、`stale_rate`、`lang_mismatch_rate`、`useful_per_100_edits`、`shadow_use_rate` — インジェクションジャーナル(`<audit dir>/injections.jsonl`)と Claude Code セッションのトランスクリプトを突き合わせます。`--days N`(デフォルト 7)、`--json` で機械可読出力。 |
 | `supamem daemon` | 🧠 共有モデルデーモン(v0.4.0a6+):`serve`(通常は必要時に自動起動)、`status [--json]`、`stop`。編集フックとすべての MCP サーバーでモデルはマシン全体で1コピー。 |
 | `supamem doctor` | 🩺 Qdrant をプローブ、解決済み設定チェーンを出力、バージョンドリフトを報告 |
@@ -375,6 +375,23 @@ target_globs = []         # v0.4.0a5 — src/tests ヒューリスティック�
 レイテンシは明示的に非関心事です(オーナー、2026-11-14)。ジャーナルは**有用性**を見える化するために存在します。
 
 ---
+
+### リモートリランカー（v0.4.0a7+、プロジェクト単位のオプトイン）
+
+**ローカルのCPUモデルの代わりにOpenRouterでリランク。** ローカルのリランカーはCPU上でfp32で動作し、ウォームレイテンシの大半を占めます（p50 約24秒、リランクなしでは0.3秒）。オプトインの `openrouter` リランカープラグインは候補をOpenRouterのrerank APIへ送ります — `cohere/rerank-5-fast` の実測は呼び出しあたり0.6〜0.8秒（約$0.0001）、注入が**エンドツーエンドで0.9秒**。リランカーモデルはローカルに一切ロードされません（デーモンはdense+sparseのみ保持）。チャンクがマシン外へ出るのはプロジェクトが明示的に有効化した場合のみ — デフォルトは完全ローカルの `mxbai_v2` のままです（ADR-0006）。
+
+```toml
+[supamem.reranker]
+name = "openrouter"
+model_id = "cohere/rerank-5-fast"
+remote_api_key_env = "OPENROUTER_API_KEY"   # NAME of the env var (never the value); set it
+                                           # in the environment that spawns the daemon
+
+[supamem.hook]
+min_score = 0.0    # remote scores are 0–1: the 2.5 default would drop EVERY chunk
+```
+
+障害ポリシー：429/5xx/タイムアウトで1回だけリトライし、その後はハイブリッド順位でクエリを続行（リランクスコアなし、スコア下限も適用なし）— ネットワーク断は注入をブロックせず、ローカルモデルのロードも引き起こしません。`supamem doctor` はトランスポート設定・キーの有無・`remote_failed` カウンターを表示し、ジャーナル行には `rerank` プロバイダータグが付きます。その他：`remote_base_url`（デフォルト `https://openrouter.ai/api/v1`）、`remote_timeout_ms`（8000）。
 
 ### 共有モデルデーモン (v0.4.0a6+)
 

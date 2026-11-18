@@ -120,7 +120,7 @@ Anthropic API 标价(2026 年 3 月):
 
 ```bash
 # 1. 安装(uv 是最快路径)
-uv tool install 'supamem==0.4.0a6'
+uv tool install 'supamem==0.4.0a7'
 
 # 2. 启动 Qdrant(一次性,~30 秒)
 docker run -d -p 6333:6333 -p 6334:6334 -v $HOME/.qdrant:/qdrant/storage qdrant/qdrant:latest
@@ -248,13 +248,13 @@ services:
 
 ```bash
 # 推荐:uv(最快、隔离)
-uv tool install 'supamem==0.4.0a6'
+uv tool install 'supamem==0.4.0a7'
 
 # 备选:pipx(也隔离)
-pipx install supamem==0.4.0a6
+pipx install supamem==0.4.0a7
 
 # 普通 pip(在 venv 中)
-pip install supamem==0.4.0a6
+pip install supamem==0.4.0a7
 ```
 
 > **必须固定版本。** `0.4.0a3` 是预发布版本,而最新的*稳定*版(`0.2.0`)早于整个 `0.3.x` / `0.4.x` 系列 —— 因此不带版本号的 `install supamem` 会**向后**解析到比本文档所述功能更旧的版本。精确的预发布版本固定无需任何额外标志即可解析,同时依赖仍停留在稳定版;请**不要**使用 `--prerelease allow`(它作用于整个解析过程,会拉入预发布依赖)。
@@ -326,7 +326,7 @@ pip uninstall supamem
 | `supamem install --client <name>` | 给客户端打配置补丁(`claude-code`、`cursor`、`opencode`)— 原子带备份。v0.2.5+:自动为 `~/.claude/agents/` 与 `<project>/.claude/agents/` 的受限 `tools:` 白名单追加 `mcp__supamem__*`;用 `--skip-patch-agents` 关闭。 |
 | `supamem index` | 用锁定的 tuned-hybrid 管线把开发记忆嵌入 Qdrant(D-25) |
 | `supamem mcp-server` | 运行 MCP 服务器(`--transport stdio` 默认;`http` 走 HTTP) |
-| `supamem hook <client>` | 每客户端会话/编辑钩子(由客户端自动调用) |
+| `supamem hook <client>` | 各客户端的会话/编辑钩子（由客户端自身调用）。v0.4.0a7+：编辑钩子可远程重排序 —— 可选 `[supamem.reranker] name = "openrouter"` |
 | `supamem hook-stats` | 📈 编辑钩子有效性指标(v0.4.0a4+):`injection_rate`、`use_rate`、`repeat_rate`、`stale_rate`、`lang_mismatch_rate`、`useful_per_100_edits`、`shadow_use_rate` —— 将注入日志(`<audit dir>/injections.jsonl`)与 Claude Code 会话转录关联。`--days N`(默认 7),`--json` 输出机器可读结果。 |
 | `supamem daemon` | 🧠 共享模型守护进程(v0.4.0a6+):`serve`(通常按需自动启动)、`status [--json]`、`stop`。编辑钩子和所有 MCP 服务器整台机器共用一份模型。 |
 | `supamem doctor` | 🩺 探测 Qdrant、打印解析后的配置链、报告版本漂移 |
@@ -369,6 +369,23 @@ target_globs = []         # v0.4.0a5 — 用仓库相对 glob 替换 src/tests �
 延迟明确不是关注点(所有者,2026-11-14);日志的存在是为了让**有效性**可见。
 
 ---
+
+### 远程重排序器（v0.4.0a7+，按项目可选）
+
+**用 OpenRouter 重排序替代本地 CPU 模型。** 本地重排序器以 fp32 在 CPU 上运行，主导了热查询延迟（p50 约 24 秒；关闭重排序为 0.3 秒）。可选的 `openrouter` 重排序插件将候选项发送到 OpenRouter 的 rerank API —— 实测 `cohere/rerank-5-fast` 每次调用 0.6–0.8 秒（约 $0.0001），端到端注入 **0.9 秒**；重排序模型完全不在本地加载（守护进程只保留 dense+sparse）。只有当项目显式开启时，分块才会离开你的机器 —— 默认保持完全本地的 `mxbai_v2`（ADR-0006）。
+
+```toml
+[supamem.reranker]
+name = "openrouter"
+model_id = "cohere/rerank-5-fast"
+remote_api_key_env = "OPENROUTER_API_KEY"   # NAME of the env var (never the value); set it
+                                           # in the environment that spawns the daemon
+
+[supamem.hook]
+min_score = 0.0    # remote scores are 0–1: the 2.5 default would drop EVERY chunk
+```
+
+失败策略：429/5xx/超时重试一次，随后按混合排序继续查询（无重排序分数、不应用分数下限）—— 网络中断绝不阻塞注入，也绝不触发本地模型加载。`supamem doctor` 显示传输配置、密钥是否存在以及 `remote_failed` 计数器；日志行携带 `rerank` 提供商标签。另有：`remote_base_url`（默认 `https://openrouter.ai/api/v1`）、`remote_timeout_ms`（默认 8000）。
 
 ### 共享模型守护进程 (v0.4.0a6+)
 

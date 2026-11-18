@@ -104,6 +104,11 @@ class ResolvedConfig:
     reranker_top_n: int = 50
     reranker_prefetch_per_arm: int = 50
     reranker_batch_size: int = 16
+    # v0.4.0a7 — remote reranker transport (only read by the openrouter plugin;
+    # [supamem.reranker] name = "openrouter" opts a project in, ADR-0006).
+    reranker_remote_base_url: str = "https://openrouter.ai/api/v1"
+    reranker_remote_api_key_env: str = "OPENROUTER_API_KEY"
+    reranker_remote_timeout_ms: int = 8000
     # ── Phase 9 D-CONFIG-01 / D-GC-DEFAULT-01 ─────────────────────────────
     # Per-source recency decay (transcript-only opt-in) + auto-GC retention.
     # Code/ADR/doc rankings invariant under decay flag flips (TEMP-03 lock).
@@ -219,6 +224,9 @@ class ConfigChain:
     reranker_top_n: Source = "default"
     reranker_prefetch_per_arm: Source = "default"
     reranker_batch_size: Source = "default"
+    reranker_remote_base_url: Source = "default"
+    reranker_remote_api_key_env: Source = "default"
+    reranker_remote_timeout_ms: Source = "default"
     # Phase 9 D-CONFIG-01 / D-GC-DEFAULT-01.
     recency_per_source_transcript_enabled: Source = "default"
     recency_per_source_transcript_half_life_days: Source = "default"
@@ -315,6 +323,9 @@ _NESTED_TABLES: list[tuple[str, dict[str, str]]] = [
             "top_n": "reranker_top_n",
             "prefetch_per_arm": "reranker_prefetch_per_arm",
             "batch_size": "reranker_batch_size",
+            "remote_base_url": "reranker_remote_base_url",
+            "remote_api_key_env": "reranker_remote_api_key_env",
+            "remote_timeout_ms": "reranker_remote_timeout_ms",
         },
     ),
     # ── Phase 9 D-CONFIG-01 — [supamem.recency.per_source.transcript] ────
@@ -863,6 +874,15 @@ def load_config(cwd: Path | None = None) -> tuple[ResolvedConfig, ConfigChain]:
     if not isinstance(cfg.daemon_enabled, bool):
         err_console.print(
             f"[supamem.err]config: daemon.enabled={cfg.daemon_enabled!r} must be true or false"
+        )
+        raise SystemExit(2)
+    # v0.4.0a7 — remote rerank transport timeout must be positive (0 would hang the
+    # off-branch fallback semantics: a zero timeout fails every call instantly, which
+    # is indistinguishable from "disabled" only by accident — fail closed instead).
+    if cfg.reranker_remote_timeout_ms <= 0:
+        err_console.print(
+            f"[supamem.err]config: reranker.remote_timeout_ms="
+            f"{cfg.reranker_remote_timeout_ms!r} must be > 0"
         )
         raise SystemExit(2)
     # v0.4.0a5 — target_globs must be a list of non-empty strings.

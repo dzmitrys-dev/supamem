@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "supamem"
-version = "0.4.0a6"
+version = "0.4.0a7"
 description = "Project-agnostic dual-memory tooling for Claude Code, Cursor, and opencode"
 readme = "README.md"
 license = "MIT"
@@ -67,6 +67,8 @@ tree_sitter_code = "supamem.indexer.chunker_tree_sitter:chunk_tree_sitter_python
 # the registered class).
 [project.entry-points."supamem.reranker"]
 mxbai_v2 = "supamem.rerankers.mxbai_v2:MxbaiV2Reranker"
+# v0.4.0a7 — remote rerank via OpenRouter (opt-in; privacy policy in ADR-0006).
+openrouter = "supamem.rerankers.openrouter:OpenRouterReranker"
 
 [project.entry-points."supamem.eval"]
 coderag = "supamem.eval.coderag:CodeRAGSuite"

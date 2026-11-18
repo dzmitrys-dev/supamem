@@ -55,6 +55,42 @@ _FORBIDDEN_COLLECTIONS = {"dev_memory", "dev_memory_tuned"}
 DEFAULT_DENSE_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 DEFAULT_SPARSE_MODEL = "Qdrant/bm25"
 
+# v0.4.0a7 — remote-rerank warn bookkeeping (once per process, per kind).
+_FLOOR_WARNED = False
+
+
+def _warn_remote_failure(reranker_name: str, exc: Exception) -> None:
+    """One-line warn for a routine remote-rerank failure (no traceback — the
+    off-branch fallback keeps retrieval alive; full detail lands in the
+    ``rerank/remote_failed`` counter and daemon.log)."""
+    from supamem.console import err_console  # noqa: PLC0415
+
+    err_console.print(
+        f"[supamem.warn]reranker {reranker_name!r} unreachable "
+        f"({exc}) — keeping hybrid order for this query"
+    )
+
+
+def _warn_floor_unreachable(config: ResolvedConfig, reranker: Any) -> None:
+    """Warn once per process when the hook score floor cannot pass on the active
+    reranker's score scale (e.g. the shipped ``hook_min_score = 2.5`` against a
+    0–1 remote reranker would drop EVERY chunk — silent injection death)."""
+    global _FLOOR_WARNED  # noqa: PLW0603
+    if _FLOOR_WARNED or reranker is None:
+        return
+    scale_max = getattr(reranker, "score_scale_max", None)
+    floor = getattr(config, "hook_min_score", 0.0)
+    if scale_max is not None and floor > 0 and floor >= scale_max:
+        from supamem.console import err_console  # noqa: PLC0415
+
+        err_console.print(
+            f"[supamem.warn]hook.min_score={floor} >= reranker "
+            f"{getattr(reranker, 'name', '?')!r} score scale max {scale_max} "
+            "— every reranked chunk will be dropped; lower hook.min_score "
+            "(0 disables the floor)"
+        )
+        _FLOOR_WARNED = True
+
 
 def _cosine(a: list[float] | None, b: list[float] | None) -> float:
     if not a or not b:
@@ -347,6 +383,9 @@ class TunedHybridBackend:
                 reranker = None
             self._reranker = reranker
             self._reranker_name = reranker_name
+        if reranker is not None:
+            # v0.4.0a7: score-scale footgun guard (warn once per process).
+            _warn_floor_unreachable(self.config, reranker)
 
         # D-POOL-01: widen prefetch only when reranker is on.
         prefetch_limit = (
@@ -433,22 +472,31 @@ class TunedHybridBackend:
             try:
                 reranked = reranker.rerank(text, pre_rerank)
             except Exception as _rerank_exc:
-                # Plugin failure → fall through to off-path semantics
-                # (T-RERANK-INVAR mitigation: never silently drop hits).
-                # Surface exception class+message so plugin authors and
-                # bench runs can see WHY rerank failed, not just that it did.
-                import traceback as _tb  # noqa: PLC0415
+                from supamem.rerankers.openrouter import RemoteRerankerError  # noqa: PLC0415
 
-                from supamem.console import err_console  # noqa: PLC0415
+                if isinstance(_rerank_exc, RemoteRerankerError):
+                    # v0.4.0a7: network blips are routine — one short line, no
+                    # traceback noise per failed call; same off-branch fallback.
+                    _warn_remote_failure(getattr(reranker, "name", "remote"), _rerank_exc)
+                    reranker = None
+                    reranked = []
+                else:
+                    # Plugin failure → fall through to off-path semantics
+                    # (T-RERANK-INVAR mitigation: never silently drop hits).
+                    # Surface exception class+message so plugin authors and
+                    # bench runs can see WHY rerank failed, not just that it did.
+                    import traceback as _tb  # noqa: PLC0415
 
-                err_console.print(
-                    f"[supamem.warn]reranker raised "
-                    f"({type(_rerank_exc).__name__}: {_rerank_exc}) "
-                    "— falling back to off-branch"
-                )
-                err_console.print(_tb.format_exc())
-                reranker = None
-                reranked = []
+                    from supamem.console import err_console  # noqa: PLC0415
+
+                    err_console.print(
+                        f"[supamem.warn]reranker raised "
+                        f"({type(_rerank_exc).__name__}: {_rerank_exc}) "
+                        "— falling back to off-branch"
+                    )
+                    err_console.print(_tb.format_exc())
+                    reranker = None
+                    reranked = []
             elapsed_ms = (_time.perf_counter() - t0) * 1000.0
 
             # T-RERANK-INVAR: list MUST NOT grow.

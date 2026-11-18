@@ -545,6 +545,16 @@ def _safe_float(value: Any) -> float:
     return f if f == f and f not in (float("inf"), float("-inf")) else 0.0
 
 
+def _rerank_provider(config: ResolvedConfig) -> str | None:
+    """v0.4.0a7: journal tag of the active reranker ("openrouter/cohere/rerank-5-fast",
+    "mxbai_v2/…"); None when off. Score scales differ per provider — hook-stats
+    readers must split by this field before comparing scores across eras."""
+    name = getattr(config, "reranker_name", "off")
+    if name == "off":
+        return None
+    return f"{name}/{getattr(config, 'reranker_model_id', '')}"
+
+
 def _journal_row(
     *,
     session: str,
@@ -557,12 +567,14 @@ def _journal_row(
     dropped: dict[str, int],
     ms: float,
     shadow: dict[str, Any] | None,
+    rerank: str | None = None,
 ) -> dict[str, Any]:
     return {
         "ts": datetime.now(timezone.utc).isoformat(),
         "session": session,
         "target": target,
         "query": query,
+        "rerank": rerank,
         "chunks": [
             {
                 "source": c.source_path or c.file_path or "?",
@@ -656,6 +668,7 @@ def run(file_path: Path, config: ResolvedConfig, payload: dict[str, Any] | None 
 
     def journal(**kw: Any) -> None:
         try:
+            kw.setdefault("rerank", _rerank_provider(config))
             row = _journal_row(
                 session=session,
                 target=str(file_path),

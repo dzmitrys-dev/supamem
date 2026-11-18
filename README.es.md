@@ -126,7 +126,7 @@ CRM personal, no para retrieval consciente del código.
 
 ```bash
 # 1. Instalar (uv es la ruta más rápida)
-uv tool install 'supamem==0.4.0a6'
+uv tool install 'supamem==0.4.0a7'
 
 # 2. Iniciar Qdrant (una vez, ~30s)
 docker run -d -p 6333:6333 -p 6334:6334 -v $HOME/.qdrant:/qdrant/storage qdrant/qdrant:latest
@@ -255,13 +255,13 @@ y apunta `supamem` a la URL vía `supamem init`.
 
 ```bash
 # Recomendado: uv (más rápido, aislado)
-uv tool install 'supamem==0.4.0a6'
+uv tool install 'supamem==0.4.0a7'
 
 # Alternativa: pipx (también aislado)
-pipx install supamem==0.4.0a6
+pipx install supamem==0.4.0a7
 
 # pip plano (en un venv)
-pip install supamem==0.4.0a6
+pip install supamem==0.4.0a7
 ```
 
 > **El pin de versión es obligatorio.** `0.4.0a3` es una pre-release, y la versión *estable* más reciente (`0.2.0`) es anterior a toda la línea `0.3.x` / `0.4.x`, por lo que un `install supamem` sin pin resuelve **hacia atrás**, a una versión más antigua que las funciones documentadas aquí. Un pin exacto de pre-release resuelve sin flags adicionales y mantiene las dependencias en versiones estables; **no** uses `--prerelease allow` (se aplica a toda la resolución y arrastra dependencias pre-release).
@@ -340,7 +340,7 @@ y el recordatorio para que descubras este flujo de manera natural.
 | `supamem install --client <name>` | Patchear config de cliente (`claude-code`, `cursor`, `opencode`) — atómico con backup. v0.2.5+: auto-parchea `~/.claude/agents/` y `<project>/.claude/agents/` para añadir `mcp__supamem__*` a las whitelists `tools:` restrictivas; opta por no con `--skip-patch-agents`. |
 | `supamem index` | Embeber memorias de dev en Qdrant usando el pipeline tuned-hybrid fijo (D-25) |
 | `supamem mcp-server` | Correr el servidor MCP (`--transport stdio` default; `--transport http` para HTTP) |
-| `supamem hook <client>` | Hooks de sesión/edición por cliente (llamados por el cliente) |
+| `supamem hook <client>` | Hooks de sesión/edición por cliente (los invoca el propio cliente). v0.4.0a7+: el hook de edición puede rerankear en remoto — opcional `[supamem.reranker] name = "openrouter"` |
 | `supamem hook-stats` | 📈 Métricas de utilidad del hook de edición (v0.4.0a4+): `injection_rate`, `use_rate`, `repeat_rate`, `stale_rate`, `lang_mismatch_rate`, `useful_per_100_edits`, `shadow_use_rate` — correlaciona el diario de inyecciones (`<audit dir>/injections.jsonl`) con las transcripciones de sesión de Claude Code. `--days N` (7 por defecto), `--json` para salida legible por máquina. |
 | `supamem daemon` | 🧠 Daemon de modelos compartido (v0.4.0a6+): `serve` (normalmente se lanza bajo demanda), `status [--json]`, `stop`. Una copia de los modelos por máquina para el hook de edición y todos los servidores MCP. |
 | `supamem doctor` | 🩺 Probar Qdrant, imprimir cadena de config resuelta, reportar drift de versión |
@@ -383,6 +383,23 @@ Las cuatro claves numéricas/booleanas se validan fail-closed al cargar la confi
 La latencia explícitamente no es una preocupación (owner, 2026-11-14); el diario existe para hacer visible la **utilidad**.
 
 ---
+
+### Reranker remoto (v0.4.0a7+, opcional por proyecto)
+
+**Rerank en OpenRouter en lugar del modelo local en CPU.** El reranker local corre en fp32 sobre CPU y domina la latencia en caliente (p50 ~24 s; sin rerank, 0.3 s). El plugin opcional `openrouter` envía los candidatos a la API de rerank de OpenRouter — medido `cohere/rerank-5-fast` a 0.6–0.8 s por llamada (~$0.0001), entregando una inyección **de extremo a extremo en 0.9 s**; el modelo del reranker nunca se carga localmente (el daemon conserva solo dense+sparse). Los chunks salen de tu máquina **solo** cuando un proyecto lo activa — el valor por defecto sigue siendo el `mxbai_v2` totalmente local (ADR-0006).
+
+```toml
+[supamem.reranker]
+name = "openrouter"
+model_id = "cohere/rerank-5-fast"
+remote_api_key_env = "OPENROUTER_API_KEY"   # NAME of the env var (never the value); set it
+                                           # in the environment that spawns the daemon
+
+[supamem.hook]
+min_score = 0.0    # remote scores are 0–1: the 2.5 default would drop EVERY chunk
+```
+
+Política de fallos: un reintento en 429/5xx/timeout, y luego la consulta continúa con el orden híbrido (sin scores de rerank, sin aplicar el umbral) — un corte de red nunca bloquea inyecciones ni provoca una carga de modelo local. `supamem doctor` muestra la configuración de transporte, la presencia de la clave y el contador `remote_failed`; las filas del diario llevan la etiqueta de proveedor `rerank`. También disponible: `remote_base_url` (por defecto `https://openrouter.ai/api/v1`), `remote_timeout_ms` (8000).
 
 ### Daemon de modelos compartido (v0.4.0a6+)
 

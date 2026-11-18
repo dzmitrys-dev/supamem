@@ -126,7 +126,7 @@ insights / rules (≈ как у SoftChat). YMMV — но *соотношение
 
 ```bash
 # 1. Установка (uv — самый быстрый путь)
-uv tool install 'supamem==0.4.0a6'
+uv tool install 'supamem==0.4.0a7'
 
 # 2. Запустить Qdrant (один раз, ~30с)
 docker run -d -p 6333:6333 -p 6334:6334 -v $HOME/.qdrant:/qdrant/storage qdrant/qdrant:latest
@@ -254,13 +254,13 @@ services:
 
 ```bash
 # Рекомендуется: uv (быстрее всего, изолированно)
-uv tool install 'supamem==0.4.0a6'
+uv tool install 'supamem==0.4.0a7'
 
 # Альтернатива: pipx (тоже изолированно)
-pipx install supamem==0.4.0a6
+pipx install supamem==0.4.0a7
 
 # Обычный pip (в venv)
-pip install supamem==0.4.0a6
+pip install supamem==0.4.0a7
 ```
 
 > **Пин версии обязателен.** `0.4.0a3` — это пре-релиз, а самый новый *стабильный* выпуск (`0.2.0`) вышел раньше всей линии `0.3.x` / `0.4.x`, поэтому `install supamem` без пина разрешается **назад**, в версию старее описанных здесь возможностей. Точный пин пре-релиза разрешается без дополнительных флагов, а зависимости остаются стабильными; **не** используйте `--prerelease allow` (он применяется ко всему разрешению и затягивает пре-релизные зависимости).
@@ -338,7 +338,7 @@ pip uninstall supamem
 | `supamem install --client <name>` | Патч конфига клиента (`claude-code`, `cursor`, `opencode`) — атомарно с бэкапом. v0.2.5+: автоматически патчит `~/.claude/agents/` и `<project>/.claude/agents/`, добавляя `mcp__supamem__*` к ограниченным `tools:`-вайтлистам; отключается через `--skip-patch-agents`. |
 | `supamem index` | Embed dev-памяти в Qdrant зафиксированным tuned-hybrid пайплайном (D-25) |
 | `supamem mcp-server` | Запуск MCP-сервера (`--transport stdio` по умолчанию; `--transport http` для HTTP) |
-| `supamem hook <client>` | Хуки сессии/редактирования на клиента (вызываются самим клиентом) |
+| `supamem hook <client>` | Сессионные/едит-хуки на клиента (вызываются самим клиентом). v0.4.0a7+: едит-хук умеет реранк удалённо — opt-in `[supamem.reranker] name = "openrouter"` |
 | `supamem hook-stats` | 📈 Метрики полезности edit-хука (v0.4.0a4+): `injection_rate`, `use_rate`, `repeat_rate`, `stale_rate`, `lang_mismatch_rate`, `useful_per_100_edits`, `shadow_use_rate` — сопоставляет журнал инъекций (`<audit dir>/injections.jsonl`) с транскриптами сессий Claude Code. `--days N` (по умолчанию 7), `--json` для машиночитаемого вывода. |
 | `supamem daemon` | 🧠 Общий демон моделей (v0.4.0a6+): `serve` (обычно запускается по требованию), `status [--json]`, `stop`. Одна копия моделей на машину для edit-хука и всех MCP-серверов. |
 | `supamem doctor` | 🩺 Пинг Qdrant, печать разрешённой цепочки конфига, отчёт о дрейфе версий |
@@ -381,6 +381,23 @@ target_globs = []         # v0.4.0a5 — заменить эвристику src
 Латенция — явно не предмет заботы (владелец, 2026-11-14); журнал существует, чтобы сделать видимой **полезность**.
 
 ---
+
+### Удалённый реранкер (v0.4.0a7+, опционально для каждого проекта)
+
+**Реранк через OpenRouter вместо локальной модели на CPU.** Локальный реранкер работает в fp32 на CPU и доминирует в тёплой латентности (p50 ~24 с; без реранка — 0.3 с). Опциональный плагин `openrouter` отправляет кандидатов в rerank-API OpenRouter — замер `cohere/rerank-5-fast`: 0.6–0.8 с на вызов (~$0.0001), инъекция **целиком за 0.9 с**; модель реранкера локально не грузится вовсе (в демоне остаются только dense+sparse). Чанки покидают вашу машину **только** если проект явно включил опцию — по умолчанию остаётся полностью локальный `mxbai_v2` (ADR-0006).
+
+```toml
+[supamem.reranker]
+name = "openrouter"
+model_id = "cohere/rerank-5-fast"
+remote_api_key_env = "OPENROUTER_API_KEY"   # NAME of the env var (never the value); set it
+                                           # in the environment that spawns the daemon
+
+[supamem.hook]
+min_score = 0.0    # remote scores are 0–1: the 2.5 default would drop EVERY chunk
+```
+
+Политика отказов: один повтор на 429/5xx/таймаут, затем запрос идёт по гибридному порядку (без скоров реранка, порог не применяется) — обрыв сети никогда не блокирует инъекции и никогда не заставляет грузить локальную модель. `supamem doctor` показывает конфигурацию транспорта, наличие ключа и счётчик `remote_failed`; строки журнала несут тег провайдера `rerank`. Доступно также: `remote_base_url` (по умолчанию `https://openrouter.ai/api/v1`), `remote_timeout_ms` (8000).
 
 ### Общий демон моделей (v0.4.0a6+)
 

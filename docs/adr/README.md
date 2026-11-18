@@ -42,3 +42,4 @@ decision, its context, consequences, and the alternatives considered.
 | [0003](0003-simplemem-evaluation.md) | SimpleMem evaluation — selective borrow under local-only | accepted | 2026-06-11 |
 | [0004](0004-multilingual-embedder.md) | Multilingual dense embedder (opt-in per project) | accepted | 2026-11-17 |
 | [0005](0005-shared-model-daemon.md) | Shared model daemon — one copy of the models per machine | accepted | 2026-11-17 |
+| [0006](0006-remote-reranker-openrouter.md) | Remote reranker via OpenRouter (opt-in per project) | accepted | 2026-11-18 |

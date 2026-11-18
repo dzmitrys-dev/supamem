@@ -446,6 +446,12 @@ async def dual_memory_search(
                 "dropped": {"stale": 0, "floor": 0, "foreign": 0},
                 "ms": round(elapsed_ms, 1),
                 "shadow": None,
+                # v0.4.0a7: provider tag (score scales differ per reranker).
+                "rerank": (
+                    None
+                    if cfg.reranker_name == "off"
+                    else f"{cfg.reranker_name}/{cfg.reranker_model_id}"
+                ),
             }
         )
     except Exception:  # noqa: BLE001 — journaling must never break the tool

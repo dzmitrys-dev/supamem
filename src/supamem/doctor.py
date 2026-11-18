@@ -1125,53 +1125,88 @@ def run_doctor(*, redact_secrets: bool = True) -> int:
     if rname != "off":
         rmodel = getattr(cfg, "reranker_model_id", "(unset)")
         ok(f"model_id       = {rmodel}")
-        try:
-            from supamem.rerankers import _model_cache_dir  # noqa: PLC0415
+        if rname == "openrouter":
+            # v0.4.0a7 — remote provider: no local cache/model; probe the
+            # transport config, key presence and failure counter instead.
+            import os as _os  # noqa: PLC0415
 
-            cache_root = _model_cache_dir()
-            ok(f"cache_path     = {cache_root}")
-
-            slug = rmodel.replace("/", "--")
-            snap_candidates = list(
-                cache_root.glob(f"models--{slug}/snapshots/*")
-            ) or list(cache_root.glob(f"{slug}/*"))
-            if not snap_candidates:
-                warn("snapshot not found — run `supamem repair`")
-                reranker_drift = True
+            key_env = getattr(cfg, "reranker_remote_api_key_env", "OPENROUTER_API_KEY")
+            ok(f"base_url       = {getattr(cfg, 'reranker_remote_base_url', '')}")
+            ok(f"timeout_ms     = {getattr(cfg, 'reranker_remote_timeout_ms', 0)}")
+            if _os.environ.get(key_env, ""):
+                ok(f"api key        = {key_env} (set)")
             else:
-                snap = snap_candidates[0]
-                manifest_path = snap / "_expected_manifest.json"
-                try:
-                    import json as _json  # noqa: PLC0415
+                warn(
+                    f"api key        = {key_env} NOT SET — remote rerank will fail "
+                    "soft to the hybrid order; set it in the environment that "
+                    "spawns the daemon (`supamem daemon stop` to respawn)"
+                )
+            try:
+                from supamem.stats.counter import get_aggregate  # noqa: PLC0415
 
-                    m = _json.loads(manifest_path.read_text())
-                    expected_total = int(m.get("total_bytes", 0))
-                    expected_files = m.get("files", {})
-                    actual_files = {
-                        str(p.relative_to(snap)): p.stat().st_size
-                        for p in snap.rglob("*")
-                        if p.is_file() and p.name != "_expected_manifest.json"
-                    }
-                    actual_total = sum(actual_files.values())
-                    pct = (actual_total / expected_total) if expected_total else 0.0
-                    missing = set(expected_files) - set(actual_files)
-                    if missing or pct < 0.9:
-                        warn(
-                            f"size           = {actual_total} / {expected_total} bytes "
-                            f"({pct:.0%}); missing {len(missing)} files — run `supamem repair`"
-                        )
-                        reranker_drift = True
-                    else:
-                        ok(
-                            f"size           = {actual_total} bytes "
-                            f"({len(actual_files)} files)"
-                        )
-                except Exception:  # noqa: BLE001 — non-essential probe (T-INTEGRITY-01)
-                    warn("manifest unreadable — run `supamem repair`")
+                fail_agg = get_aggregate("rerank", "remote_failed")
+                n_fail = int((fail_agg or {}).get("count", 0))
+                if n_fail:
+                    warn(f"remote_failed  = {n_fail} (network errors fell back to hybrid order)")
+                else:
+                    ok("remote_failed  = 0")
+            except Exception:  # noqa: BLE001 — read-only probe
+                pass
+            if getattr(cfg, "hook_min_score", 0.0) >= 1.0:
+                warn(
+                    f"hook.min_score = {cfg.hook_min_score} on a 0–1 score scale "
+                    "— every reranked chunk will be dropped; lower it "
+                    "(0 disables the floor)"
+                )
+            info("(remote rerank is opt-in per project; ADR-0006)")
+        else:
+            try:
+                from supamem.rerankers import _model_cache_dir  # noqa: PLC0415
+
+                cache_root = _model_cache_dir()
+                ok(f"cache_path     = {cache_root}")
+
+                slug = rmodel.replace("/", "--")
+                snap_candidates = list(
+                    cache_root.glob(f"models--{slug}/snapshots/*")
+                ) or list(cache_root.glob(f"{slug}/*"))
+                if not snap_candidates:
+                    warn("snapshot not found — run `supamem repair`")
                     reranker_drift = True
-        except Exception:  # noqa: BLE001
-            warn("reranker cache probe failed — run `supamem repair`")
-            reranker_drift = True
+                else:
+                    snap = snap_candidates[0]
+                    manifest_path = snap / "_expected_manifest.json"
+                    try:
+                        import json as _json  # noqa: PLC0415
+
+                        m = _json.loads(manifest_path.read_text())
+                        expected_total = int(m.get("total_bytes", 0))
+                        expected_files = m.get("files", {})
+                        actual_files = {
+                            str(p.relative_to(snap)): p.stat().st_size
+                            for p in snap.rglob("*")
+                            if p.is_file() and p.name != "_expected_manifest.json"
+                        }
+                        actual_total = sum(actual_files.values())
+                        pct = (actual_total / expected_total) if expected_total else 0.0
+                        missing = set(expected_files) - set(actual_files)
+                        if missing or pct < 0.9:
+                            warn(
+                                f"size           = {actual_total} / {expected_total} bytes "
+                                f"({pct:.0%}); missing {len(missing)} files — run `supamem repair`"
+                            )
+                            reranker_drift = True
+                        else:
+                            ok(
+                                f"size           = {actual_total} bytes "
+                                f"({len(actual_files)} files)"
+                            )
+                    except Exception:  # noqa: BLE001 — non-essential probe (T-INTEGRITY-01)
+                        warn("manifest unreadable — run `supamem repair`")
+                        reranker_drift = True
+            except Exception:  # noqa: BLE001
+                warn("reranker cache probe failed — run `supamem repair`")
+                reranker_drift = True
 
         # Latency telemetry — DEQUE path (D-CPU-02 / W3 verifiable percentiles).
         try:

@@ -2,6 +2,37 @@
 
 All notable changes to `supamem` will be documented in this file.
 
+## [0.4.0a7] — 2026-11-18 — Remote reranker via OpenRouter (opt-in per project)
+
+Warm retrieval latency was dominated by the local reranker (fp32 on CPU, p50 hook ~24 s;
+rerank off → 0.3 s). A real-API spike (2026-11-18) measured `cohere/rerank-5-fast` at
+0.6–0.8 s / ~$0.0001 per call → ~$2.7/month at ~900 calls/day; the GREEN run delivered an
+injection end-to-end in **0.9 s**. See ADR-0006.
+
+- **New reranker plugin `openrouter`** (`[supamem.reranker] name = "openrouter"`,
+  `model_id = "cohere/rerank-5-fast"`) — `POST {remote_base_url}/rerank` via stdlib HTTP,
+  no new dependencies; the reranker model never loads locally (daemon holds dense+sparse
+  only). Opt-in per project; the default stays the local `mxbai_v2`.
+- **New config keys** (`[supamem.reranker]`): `remote_base_url`
+  (default `https://openrouter.ai/api/v1`), `remote_api_key_env` (default
+  `OPENROUTER_API_KEY` — only the env var NAME is configured, never the key value),
+  `remote_timeout_ms` (default 8000; ≤ 0 fails closed at load).
+- **Failure = skip, never hang, never a local model load**: one retry on 429/5xx/timeout,
+  then a one-line warn (no traceback) and the pre-existing off-branch — hybrid order, no
+  `rerank_score`, so the score floor does not apply. Counted in `rerank/remote_failed`
+  (shown by `supamem doctor`).
+- **Score-scale guard**: remote relevance scores are 0–1, so the shipped
+  `hook_min_score = 2.5` would drop EVERY chunk. Plugins now declare `score_scale_max`;
+  retrieval warns once per process and `doctor` flags an unreachable floor. Lower
+  `hook_min_score` (0 disables) when switching to a remote reranker until the golden set
+  calibrates a real floor.
+- **Journal rows carry a `rerank` provider tag** (hook, MCP and `empty_row`) — score
+  comparisons across providers/eras must split on it (`docs/usefulness-metrics.md`).
+- **`supamem doctor`** reranker panel shows transport config, key presence, `remote_failed`
+  count and the floor warning for remote providers (no local cache probe).
+- Daemon note: the daemon inherits the key env from the client that spawned it —
+  `supamem daemon stop` respawns with the current environment.
+
 ## [0.4.0a6] — 2026-11-17 — Shared model daemon (one copy of the models per machine)
 
 On 2026-11-17 the owner's 24 GB Mac hit 27.4/28 GB swap: every process that ran a retrieval

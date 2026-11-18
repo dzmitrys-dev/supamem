@@ -70,12 +70,18 @@ def _maybe_prepare_models(skip_models: bool) -> None:
         _warn(f"embedder model fetch failed — run `supamem repair` online later ({type(exc).__name__})")
     try:
         from supamem.config import load_config  # noqa: PLC0415
-        from supamem.rerankers import prepare  # noqa: PLC0415
+        from supamem.rerankers import load_reranker, prepare  # noqa: PLC0415
 
         cfg, _ = load_config()
         if getattr(cfg, "reranker_name", "off") != "off":
-            prepare(cfg.reranker_model_id)
-            ok("reranker model cached")
+            # v0.4.0a7: remote reranker plugins (openrouter) have NO local model —
+            # fetching their model_id from HuggingFace would always fail.
+            reranker = load_reranker(cfg.reranker_name, cfg)
+            if getattr(reranker, "requires_local_model", True):
+                prepare(cfg.reranker_model_id)
+                ok("reranker model cached")
+            else:
+                ok(f"reranker {cfg.reranker_name!r} is remote — no local model to cache")
     except RuntimeError:
         # err_console already surfaced the actionable error; do not abort.
         from supamem.console import warn as _warn  # noqa: PLC0415
