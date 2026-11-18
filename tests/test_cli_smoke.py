@@ -684,11 +684,14 @@ def test_skip_patch_agents_help_names_both_agent_scopes() -> None:
     """SM-7d: --skip-patch-agents help (install/repair/init) and the
     unpatch-agents docstring name BOTH agent scopes — the patcher scans
     ~/.claude/agents/ AND <project>/.claude/agents/."""
-    needle = "~/.claude/agents/ and <project>/.claude/agents/"
+    # Rich wraps help differently on Linux TERM=dumb (80 cols) than on macOS —
+    # compare both scope tokens with whitespace collapsed, not one literal line.
+    scopes = ("~/.claude/agents/", "<project>/.claude/agents/")
     for sub in ("install", "repair", "init", "unpatch-agents"):
         r = _run(sub, "--help")
         assert r.returncode == 0, f"stderr: {r.stderr}"
-        assert needle in r.stdout, f"{sub} --help missing dual-scope text:\n{r.stdout}"
+        text = " ".join(r.stdout.split())
+        assert all(s in text for s in scopes), f"{sub} --help missing dual-scope text:\n{r.stdout}"
 
 
 # ---- v0.4.0a4 — `supamem hook-stats` (edit-hook usefulness metrics) ----------------------
