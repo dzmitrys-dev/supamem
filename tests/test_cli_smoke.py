@@ -684,14 +684,25 @@ def test_skip_patch_agents_help_names_both_agent_scopes() -> None:
     """SM-7d: --skip-patch-agents help (install/repair/init) and the
     unpatch-agents docstring name BOTH agent scopes — the patcher scans
     ~/.claude/agents/ AND <project>/.claude/agents/."""
-    # Rich wraps help differently on Linux TERM=dumb (80 cols) than on macOS —
-    # compare both scope tokens with whitespace collapsed, not one literal line.
+    # Assert on the OPTION HELP TEXT via the Click command object — rendering
+    # wraps/truncates per-platform (Rich on Linux TERM=dumb truncates with "…"),
+    # but the declared text is what the requirement (SM-7d) is about.
     scopes = ("~/.claude/agents/", "<project>/.claude/agents/")
-    for sub in ("install", "repair", "init", "unpatch-agents"):
-        r = _run(sub, "--help")
-        assert r.returncode == 0, f"stderr: {r.stderr}"
-        text = " ".join(r.stdout.split())
-        assert all(s in text for s in scopes), f"{sub} --help missing dual-scope text:\n{r.stdout}"
+    import typer.main  # noqa: PLC0415
+
+    from supamem.cli import app  # noqa: PLC0415
+
+    root = typer.main.get_command(app)
+    subs = ("install", "repair", "init", "unpatch-agents")
+    for sub in subs:
+        cmd = root.commands.get(sub)
+        assert cmd is not None, f"{sub} command missing"
+        helps = " ".join(
+            (p.help or "") for p in cmd.params if "skip" in (p.name or "") or "agents" in (p.name or "")
+        ) or (cmd.help or "")
+        assert all(s in helps for s in scopes), (
+            f"{sub} names only one agent scope:\n{helps!r}"
+        )
 
 
 # ---- v0.4.0a4 — `supamem hook-stats` (edit-hook usefulness metrics) ----------------------
