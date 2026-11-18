@@ -86,7 +86,17 @@ for MCP cannot be computed from the journal; the study measured it by transcript
      should raise both without any change in retrieval quality.
    - Expected new empty-row causes in a6: daemon `busy` / `expired` skips. Read them in
      `supamem daemon status` (`busy_rejected`, `expired`).
-8. **Remote-reranker era split (v0.4.0a7)** — rows now carry a `rerank` provider tag
+8. **Golden set (first cut, 2026-11-18)** — `scripts/hook_golden.py` + frozen dataset
+   `docs/eval/hook-golden-2026-11-18.jsonl` (34 queries / 119 positives mined from
+   used-injections, all ferrohex — the busiest hook consumer; therapy excluded by policy;
+   supamem/cl-harness yielded no used-events yet). Local mxbai vs cohere/rerank-5-fast:
+   recall@5 0.471 vs 0.500, MRR 0.391 vs 0.344 — a wash on n=34 — while remote ran 4.6×
+   faster (p50 1.0 s vs 4.7 s). Calibrated remote floor `min_score = 0.25` (keeps ≥90% of
+   positive rerank scores; positive distribution min 0.073 / p10 0.269 / median 0.447).
+   Re-run the eval after any ranking/embedder/provider change; grow the set as
+   used-events accumulate (cl-harness and supamem rows become available once their hooks
+   have produced used injections).
+9. **Remote-reranker era split (v0.4.0a7)** — rows now carry a `rerank` provider tag
    (`"openrouter/cohere/rerank-5-fast"` / `"mxbai_v2/…"` / null). Remote relevance scores are
    0–1 vs mxbai's raw scale: never compare `score` across providers, and split any
    `injection_rate` / `use_rate` comparison on `rerank` (plus the `min_score` flip that
