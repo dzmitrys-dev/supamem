@@ -13,6 +13,9 @@ jobs:
         # - "3.13"  # add when GH runners stable
     steps:
       - uses: actions/checkout@v4
+        with:
+          # README synced-with guard resolves "last commit touching README.md".
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -23,7 +26,11 @@ jobs:
           CFLAGS: -std=gnu17
         run: |
           python -m pip install --upgrade pip
-          pip install -e '.[dev,eval]' "ruff==0.15.12"
+          # Pin the versions from uv.lock: pip's fresh resolution drifts help-text
+          # wrapping (rich/typer/click) and MCP error strings (mcp SDK).
+          pip install -e '.[dev,eval]' \
+            "ruff==0.15.12" "mcp==2.0.0" "rich==14.3.4" \
+            "typer==0.25.0" "click==8.3.3"
       - name: Lint
         run: ruff check src/supamem
       - name: Test
